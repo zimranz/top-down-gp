@@ -1,0 +1,753 @@
+/* Car physics, collisions, AI drivers and session logic (practice / qualifying / race).
+   Runs on the server (authoritative online races) and in the browser (practice + prediction). */
+(function (root) {
+  'use strict';
+  const F1 = (root.F1 = root.F1 || {});
+
+  // ---------------------------------------------------------------- constants
+  const CAR = (F1.CAR = { length: 5.4, width: 1.9, HL: 2.7, HW: 0.95, WB: 3.4, MASS: 800, INERTIA: 1950 });
+  const P = (F1.PHYS = {
+    POWER: 746000,        // ~1000 hp
+    DRAG: 0.87,           // 0.5 * rho * CdA  -> ~342 km/h top speed
+    ROLL: 0.15,
+    ENGINE_BRAKE: 1.2,
+    TRACT0: 11, TRACT_K: 0.0022, TRACT_MAX: 16,
+    BRAKE0: 20, BRAKE_K: 0.0045, BRAKE_MAX: 52,
+    LAT0: 20, LAT_K: 0.0062, LAT_MAX: 55,  // grip grows with downforce (speed squared)
+    STEER_MAX: 0.38,
+    REV_MAX: 7, REV_ACC: 4,
+    DRS_DRAG: 0.86
+  });
+  const SURFS = [
+    { grip: 1.0, traction: 1.0, roll: 0, drag2: 0 },          // asphalt
+    { grip: 0.93, traction: 0.95, roll: 0.3, drag2: 0 },      // kerb
+    { grip: 0.5, traction: 0.5, roll: 4.2, drag2: 0.0016 },   // grass
+    { grip: 0.4, traction: 0.35, roll: 3.0, drag2: 0.005 }    // gravel
+  ];
+  F1.DT = 1 / 60;
+  F1.SUBSTEPS = 2;
+  F1.NEUTRAL = { throttle: 0, brake: 0, steer: 0, drs: false, reset: false };
+
+  function clamp(v, a, b) { return v < a ? a : v > b ? b : v; }
+  F1.clamp = clamp;
+
+  function mulberry32(a) {
+    return function () {
+      a |= 0; a = (a + 0x6d2b79f5) | 0;
+      let t = Math.imul(a ^ (a >>> 15), 1 | a);
+      t = (t + Math.imul(t ^ (t >>> 7), 61 | t)) ^ t;
+      return ((t ^ (t >>> 14)) >>> 0) / 4294967296;
+    };
+  }
+  F1.rng = mulberry32;
+
+  F1.fmtLap = function (t) {
+    if (t === null || t === undefined || !isFinite(t)) return '--:--.---';
+    const m = Math.floor(t / 60);
+    const s = t - m * 60;
+    return m + ':' + (s < 10 ? '0' : '') + s.toFixed(3);
+  };
+
+  // ---------------------------------------------------------------- cars
+  const Q = {}, Q2 = {};
+
+  F1.createCar = function (id, driverId, T, slot, isAI) {
+    const g = F1.gridSlot(T, slot);
+    const c = {
+      id: id, driverId: driverId, isAI: !!isAI, slot: slot,
+      x: g.x, y: g.y, a: g.h, vx: 0, vy: 0, w: 0, delta: 0,
+      seg: -1, s: 0, d: 0, dist: 0, surf: 0,
+      slide: false, drsOpen: false, drsAllowed: false, locked: false,
+      resetCd: 0, wallHit: 0, out: false,
+      px: g.x, py: g.y, pa: g.h
+    };
+    F1.queryTrack(T, c.x, c.y, -1, Q);
+    c.seg = Q.idx; c.s = Q.s; c.d = Q.d; c.dist = Q.dist;
+    return c;
+  };
+
+  F1.resetCar = function (c, T) {
+    F1.queryTrack(T, c.x, c.y, c.seg, Q);
+    const p = F1.trackPoint(T, Q.s, clamp(Q.d, -T.hw + 2, T.hw - 2));
+    c.x = p.x; c.y = p.y; c.a = p.h;
+    c.vx = 0; c.vy = 0; c.w = 0; c.delta = 0; c.slide = false; c.drsOpen = false;
+    F1.queryTrack(T, c.x, c.y, Q.idx, Q);
+    c.seg = Q.idx; c.s = Q.s; c.d = Q.d; c.dist = Q.dist;
+  };
+
+  /* Impulse-based contact. n points from B to A (pushes A along +n). B may be null (barrier). */
+  F1.contactImpulse = function (A, B, px, py, nx, ny, e, mu, applyB) {
+    const im = 1 / CAR.MASS, ii = 1 / CAR.INERTIA;
+    const rax = px - A.x, ray = py - A.y;
+    let rvx = A.vx - A.w * ray, rvy = A.vy + A.w * rax;
+    let rbx = 0, rby = 0;
+    if (B) {
+      rbx = px - B.x; rby = py - B.y;
+      rvx -= B.vx - B.w * rby; rvy -= B.vy + B.w * rbx;
+    }
+    const vn = rvx * nx + rvy * ny;
+    if (vn >= 0) return 0;
+    const ran = rax * ny - ray * nx;
+    let denom = im + ran * ran * ii;
+    let rbn = 0;
+    if (B) { rbn = rbx * ny - rby * nx; denom += im + rbn * rbn * ii; }
+    const j = (-(1 + e) * vn) / denom;
+    A.vx += j * nx * im; A.vy += j * ny * im; A.w += ran * j * ii;
+    if (B && applyB) { B.vx -= j * nx * im; B.vy -= j * ny * im; B.w -= rbn * j * ii; }
+    // friction
+    let tx = rvx - vn * nx, ty = rvy - vn * ny;
+    const tl = Math.hypot(tx, ty);
+    if (tl > 1e-4) {
+      tx /= tl; ty /= tl;
+      const rat = rax * ty - ray * tx;
+      let dt2 = im + rat * rat * ii, rbt = 0;
+      if (B) { rbt = rbx * ty - rby * tx; dt2 += im + rbt * rbt * ii; }
+      let jt = -tl / dt2;
+      const maxF = mu * j;
+      if (jt < -maxF) jt = -maxF;
+      A.vx += jt * tx * im; A.vy += jt * ty * im; A.w += rat * jt * ii;
+      if (B && applyB) { B.vx -= jt * tx * im; B.vy -= jt * ty * im; B.w -= rbt * jt * ii; }
+    }
+    return j;
+  };
+
+  function wallCollide(c, T) {
+    const wallHere = T.wall[c.seg];
+    if (c.dist < wallHere - 3.2) return;
+    const ca = Math.cos(c.a), sa = Math.sin(c.a);
+    for (let k = 0; k < 4; k++) {
+      const fx = k < 2 ? 1 : -1, fy = (k & 1) ? 1 : -1;
+      const px = c.x + ca * CAR.HL * fx - sa * CAR.HW * fy;
+      const py = c.y + sa * CAR.HL * fx + ca * CAR.HW * fy;
+      F1.queryTrack(T, px, py, c.seg, Q2);
+      const w = T.wall[Q2.idx];
+      if (Q2.dist > w && Q2.dist > 1e-6) {
+        const pen = Q2.dist - w;
+        const nx = (Q2.cx - px) / Q2.dist, ny = (Q2.cy - py) / Q2.dist;
+        const j = F1.contactImpulse(c, null, px, py, nx, ny, 0.25, 0.45, false);
+        c.x += nx * pen; c.y += ny * pen;
+        if (j > c.wallHit) c.wallHit = j;
+      }
+    }
+  }
+
+  /* One physics sub-step for one car. inp: {throttle 0..1, brake 0..1, steer -1.6..1.6, drs, reset} */
+  F1.stepCar = function (c, inp, T, dt) {
+    if (c.out) return;
+    if (c.resetCd > 0) c.resetCd -= dt;
+    let sp = Math.hypot(c.vx, c.vy);
+    if (inp.reset && c.resetCd <= 0 && sp < 30 && !c.locked) {
+      F1.resetCar(c, T); c.resetCd = 3; return;
+    }
+    F1.queryTrack(T, c.x, c.y, c.seg, Q);
+    c.seg = Q.idx; c.s = Q.s; c.d = Q.d; c.dist = Q.dist;
+    if (c.locked) {
+      c.vx = 0; c.vy = 0; c.w = 0; c.drsOpen = false;
+      c.delta = clamp(inp.steer, -1, 1) * P.STEER_MAX * 0.6;
+      return;
+    }
+    // surfaces under the left and right wheels
+    const phi = c.a - T.hd[Q.idx];
+    const lat = 0.8 * Math.cos(phi);
+    const sL = F1.surfaceAt(T, Q.idx, Q.d - lat), sR = F1.surfaceAt(T, Q.idx, Q.d + lat);
+    const A = SURFS[sL], B = SURFS[sR];
+    const grip = (A.grip + B.grip) * 0.5;
+    const traction = (A.traction + B.traction) * 0.5;
+    const roll = (A.roll + B.roll) * 0.5, drag2 = (A.drag2 + B.drag2) * 0.5;
+    c.surf = sL > sR ? sL : sR;
+
+    const thr = clamp(inp.throttle || 0, 0, 1), brk = clamp(inp.brake || 0, 0, 1);
+    if (inp.drs && c.drsAllowed) c.drsOpen = true;
+    if (!c.drsAllowed || brk > 0.05) c.drsOpen = false;
+
+    const ca = Math.cos(c.a), sa = Math.sin(c.a);
+    let vf = c.vx * ca + c.vy * sa;
+    let vl = -c.vx * sa + c.vy * ca;
+    const latRef = Math.min(P.LAT_MAX, P.LAT0 + P.LAT_K * sp * sp);
+    let latAvail = latRef * grip;
+    if (brk > 0 && vf > 2) latAvail *= 1 - 0.28 * brk;
+    const vfa = Math.abs(vf);
+
+    // steering is a proportion of the grip-limited angle, so keyboard steering works at any speed
+    const steer = clamp(inp.steer || 0, -1.6, 1.6);
+    const maxDelta = Math.min(P.STEER_MAX, Math.atan(CAR.WB * latRef / Math.max(vfa * vfa, 1)) * 1.05);
+    const delta = clamp(steer * maxDelta, -P.STEER_MAX, P.STEER_MAX);
+    c.delta = delta;
+
+    // yaw: follow the steering (kinematic bicycle) limited by grip; lose authority when sliding
+    let wT = (vf * Math.tan(delta)) / CAR.WB;
+    const wCap = (latAvail * 1.08) / Math.max(vfa, 1.5);
+    if (wT > wCap) wT = wCap; else if (wT < -wCap) wT = -wCap;
+    const beta = Math.atan2(Math.abs(vl), Math.max(vfa, 1));
+    const werr = Math.abs(wT - c.w);
+    if (!c.slide) { if (sp > 6 && (beta > 0.3 || werr > 1.3)) c.slide = true; }
+    else if (sp < 3 || (beta < 0.12 && werr < 0.35)) c.slide = false;
+    const auth = (c.slide ? 2.6 : 18) * (0.4 + 0.6 * grip) * Math.min(1, 0.2 + sp / 20);
+    const dw = wT - c.w, lim = auth * dt;
+    c.w += dw > lim ? lim : dw < -lim ? -lim : dw;
+    c.a += c.w * dt;
+    if (c.a > Math.PI) c.a -= 2 * Math.PI; else if (c.a < -Math.PI) c.a += 2 * Math.PI;
+
+    const ca2 = Math.cos(c.a), sa2 = Math.sin(c.a);
+    vf = c.vx * ca2 + c.vy * sa2;
+    vl = -c.vx * sa2 + c.vy * ca2;
+
+    // longitudinal
+    const drag = P.DRAG * (c.drsOpen ? P.DRS_DRAG : 1);
+    const aero = (drag * vf * Math.abs(vf)) / CAR.MASS;
+    if (vf > 0.4) {
+      let acc = 0;
+      if (thr > 0) {
+        const tr = Math.min(P.TRACT_MAX, P.TRACT0 + P.TRACT_K * sp * sp) * traction;
+        acc += thr * Math.min(P.POWER / (CAR.MASS * Math.max(vf, 4)), tr);
+      } else acc -= P.ENGINE_BRAKE;
+      if (brk > 0) acc -= brk * Math.min(P.BRAKE_MAX, P.BRAKE0 + P.BRAKE_K * sp * sp) * (0.35 + 0.65 * grip);
+      acc -= aero + P.ROLL;
+      vf += acc * dt;
+      if (vf < 0) vf = 0;
+    } else if (vf < -0.4) {
+      let acc = 0;
+      if (thr > 0) acc += 14 * thr;
+      else if (brk > 0) acc -= vf > -P.REV_MAX ? brk * P.REV_ACC : 0;
+      else acc += 2.5;
+      acc -= aero - P.ROLL;
+      vf += acc * dt;
+      if (thr === 0 && brk === 0 && vf > 0) vf = 0;
+    } else {
+      if (thr > 0) vf += thr * P.TRACT0 * traction * dt;
+      else if (brk > 0) vf -= brk * P.REV_ACC * dt;
+      else vf *= 0.9;
+    }
+
+    // lateral tyre grip
+    const latCap = latAvail * (c.slide ? 0.8 : 1) * dt;
+    if (vl > latCap) vl -= latCap; else if (vl < -latCap) vl += latCap; else vl = 0;
+
+    c.vx = vf * ca2 - vl * sa2;
+    c.vy = vf * sa2 + vl * ca2;
+
+    // grass / gravel resistance
+    const extra = roll + drag2 * sp * sp;
+    if (extra > 0) {
+      const s2 = Math.hypot(c.vx, c.vy);
+      if (s2 > 0.01) { const f = Math.max(0, 1 - (extra * dt) / s2); c.vx *= f; c.vy *= f; }
+    }
+    c.x += c.vx * dt;
+    c.y += c.vy * dt;
+    wallCollide(c, T);
+  };
+
+  /* Car-to-car contact: oriented boxes, separating-axis test, impulse at the deepest point.
+     applyB=false only moves A (used for client-side prediction). */
+  F1.lastContact = { x: 0, y: 0 };
+  const AX = [[0, 0], [0, 0], [0, 0], [0, 0]];
+  F1.collideCars = function (A, B, applyB) {
+    const dx = B.x - A.x, dy = B.y - A.y;
+    if (dx * dx + dy * dy > 33) return 0;
+    const ca = Math.cos(A.a), sa = Math.sin(A.a), cb = Math.cos(B.a), sb = Math.sin(B.a);
+    AX[0][0] = ca; AX[0][1] = sa; AX[1][0] = -sa; AX[1][1] = ca;
+    AX[2][0] = cb; AX[2][1] = sb; AX[3][0] = -sb; AX[3][1] = cb;
+    let best = Infinity, bi = -1;
+    for (let k = 0; k < 4; k++) {
+      const ux = AX[k][0], uy = AX[k][1];
+      const rA = CAR.HL * Math.abs(ca * ux + sa * uy) + CAR.HW * Math.abs(-sa * ux + ca * uy);
+      const rB = CAR.HL * Math.abs(cb * ux + sb * uy) + CAR.HW * Math.abs(-sb * ux + cb * uy);
+      const ov = rA + rB - Math.abs(dx * ux + dy * uy);
+      if (ov <= 0) return 0;
+      if (ov < best) { best = ov; bi = k; }
+    }
+    let nx = AX[bi][0], ny = AX[bi][1];
+    if (dx * nx + dy * ny > 0) { nx = -nx; ny = -ny; }   // n points from B towards A
+    // Contact point: clip the incident box's nearest edge against the reference face (proper manifold).
+    const Rb = bi < 2 ? A : B, Ib = bi < 2 ? B : A;
+    const rc = bi < 2 ? ca : cb, rs = bi < 2 ? sa : sb, ic = bi < 2 ? cb : ca, is = bi < 2 ? sb : sa;
+    const nri = bi < 2 ? -1 : 1;                         // direction from reference towards incident = nri * n
+    const ux = nri * nx, uy = nri * ny;
+    const longFace = (bi % 2) === 0;
+    const tx = longFace ? -rs : rc, ty = longFace ? rc : rs;   // tangent along the reference face
+    const ext = longFace ? CAR.HW : CAR.HL, faceOff = longFace ? CAR.HL : CAR.HW;
+    let p1x = 0, p1y = 0, p2x = 0, p2y = 0, d1 = Infinity, d2 = Infinity;
+    for (let k = 0; k < 4; k++) {
+      const fx = k < 2 ? 1 : -1, fy = (k & 1) ? 1 : -1;
+      const px = Ib.x + ic * CAR.HL * fx - is * CAR.HW * fy;
+      const py = Ib.y + is * CAR.HL * fx + ic * CAR.HW * fy;
+      const pr = (px - Rb.x) * ux + (py - Rb.y) * uy;
+      if (pr < d1) { d2 = d1; p2x = p1x; p2y = p1y; d1 = pr; p1x = px; p1y = py; }
+      else if (pr < d2) { d2 = pr; p2x = px; p2y = py; }
+    }
+    let u1 = (p1x - Rb.x) * tx + (p1y - Rb.y) * ty, u2 = (p2x - Rb.x) * tx + (p2y - Rb.y) * ty;
+    let q1x = p1x, q1y = p1y, q2x = p2x, q2y = p2y;
+    if (Math.abs(u2 - u1) > 1e-6) {
+      const clipT = function (u) { return (u - u1) / (u2 - u1); };
+      let ta = clipT(-ext), tb = clipT(ext);
+      if (ta > tb) { const tmp = ta; ta = tb; tb = tmp; }
+      ta = Math.max(0, ta); tb = Math.min(1, tb);
+      if (ta <= tb) {
+        q1x = p1x + (p2x - p1x) * ta; q1y = p1y + (p2y - p1y) * ta;
+        q2x = p1x + (p2x - p1x) * tb; q2y = p1y + (p2y - p1y) * tb;
+      }
+    }
+    // weight the two clipped points by how deep they are
+    const w1 = Math.max(0, faceOff - ((q1x - Rb.x) * ux + (q1y - Rb.y) * uy)) + 1e-4;
+    const w2 = Math.max(0, faceOff - ((q2x - Rb.x) * ux + (q2y - Rb.y) * uy)) + 1e-4;
+    const cx = (q1x * w1 + q2x * w2) / (w1 + w2), cy = (q1y * w1 + q2y * w2) / (w1 + w2);
+    const j = F1.contactImpulse(A, B, cx, cy, nx, ny, 0.2, 0.3, applyB);
+    const corr = applyB ? best * 0.5 : best;
+    A.x += nx * corr; A.y += ny * corr;
+    if (applyB) { B.x -= nx * corr; B.y -= ny * corr; }
+    F1.lastContact.x = cx; F1.lastContact.y = cy;
+    return j > 0 ? j : 1;
+  };
+
+  F1.isWrongWay = function (c, T) {
+    const i = c.seg < 0 ? 0 : c.seg;
+    return c.vx * T.tx[i] + c.vy * T.ty[i] < -4;
+  };
+
+  // ---------------------------------------------------------------- AI
+  const AI_LEVELS = (F1.AI_LEVELS = {
+    easy: { lat: 0.8, brake: 0.72, pace: 0.965 },
+    medium: { lat: 0.88, brake: 0.84, pace: 0.985 },
+    hard: { lat: 0.95, brake: 0.93, pace: 1.0 }
+  });
+
+  F1.speedProfile = function (T, level) {
+    T._prof = T._prof || {};
+    if (T._prof[level]) return T._prof[level];
+    const Lv = AI_LEVELS[level] || AI_LEVELS.medium;
+    const N = T.n, K = T.rlK, ds = T.ds;
+    const v = new Float64Array(N);
+    for (let i = 0; i < N; i++) {
+      const k = Math.abs(K[i]), m = Lv.lat;
+      let vmax = 105;
+      if (k > P.LAT_K * m) vmax = Math.min(vmax, Math.sqrt((P.LAT0 * m) / (k - P.LAT_K * m)));
+      vmax = Math.min(vmax, Math.sqrt((P.LAT_MAX * m) / Math.max(k, 1e-6)));
+      v[i] = vmax;
+    }
+    for (let pass = 0; pass < 2; pass++) {
+      for (let k = N - 1; k >= 0; k--) {
+        const i = k, nI = (i + 1) % N, vn = v[nI];
+        const dec = Math.min(P.BRAKE_MAX, P.BRAKE0 + P.BRAKE_K * vn * vn) * Lv.brake + (P.DRAG * vn * vn) / CAR.MASS;
+        const limv = Math.sqrt(vn * vn + 2 * dec * ds);
+        if (limv < v[i]) v[i] = limv;
+      }
+    }
+    T._prof[level] = v;
+    return v;
+  };
+
+  F1.refLapTime = function (T) {
+    if (T._refLap) return T._refLap;
+    const prof = F1.speedProfile(T, 'medium');
+    let v = 20, t = 0;
+    for (let lap = 0; lap < 2; lap++) {
+      t = 0;
+      for (let i = 0; i < T.n; i++) {
+        const acc = Math.min(P.POWER / (CAR.MASS * Math.max(v, 4)), P.TRACT0) - (P.DRAG * v * v) / CAR.MASS;
+        let vn = Math.sqrt(Math.max(1, v * v + 2 * acc * T.ds));
+        if (vn > prof[i]) vn = prof[i];
+        t += T.ds / ((v + vn) / 2);
+        v = vn;
+      }
+    }
+    T._refLap = t;
+    return t;
+  };
+
+  F1.aiDrive = function (c, S) {
+    const T = S.track, ai = c.ai, inp = ai.inp;
+    inp.reset = false; inp.drs = false;
+    if (S.phase === 'countdown' || c.locked) { inp.throttle = 0; inp.brake = 1; inp.steer = 0; return inp; }
+    const sp = Math.hypot(c.vx, c.vy);
+    const prof = F1.speedProfile(T, S.aiLevel);
+    const look = 8 + sp * 0.3;
+    const i = F1.idxAt(T, c.s + look);
+    const room = T.hw - 1.1;
+
+    // traffic: move off the racing line to pass, or follow
+    let vCap = Infinity;
+    if (S.collisions) {
+      let ahead = null, bestDs = 42;
+      for (let q = 0; q < S.cars.length; q++) {
+        const o = S.cars[q];
+        if (o === c || o.out) continue;
+        let dS = o.s - c.s;
+        if (dS < -T.length / 2) dS += T.length; else if (dS > T.length / 2) dS -= T.length;
+        if (dS <= 0 || dS > bestDs) continue;
+        if (Math.abs(o.d - c.d) > 3.4) continue;
+        ahead = o; bestDs = dS;
+      }
+      if (ahead) {
+        const osp = Math.hypot(ahead.vx, ahead.vy);
+        const closing = sp - osp;
+        if (closing > -1.5) {
+          const leftLat = ahead.d - 3.1, rightLat = ahead.d + 3.1;
+          const canL = leftLat > -room, canR = rightLat < room;
+          let passLat = null;
+          if (canL && canR) passLat = Math.abs(leftLat - c.d) < Math.abs(rightLat - c.d) ? leftLat : rightLat;
+          else if (canL) passLat = leftLat;
+          else if (canR) passLat = rightLat;
+          ai.biasTarget = passLat !== null ? passLat - T.rlOff[i] : 0;
+          const safe = 7 + Math.max(0, closing) * 0.9;
+          if (bestDs < safe && (passLat === null || Math.abs(c.d - passLat) > 1.3)) {
+            vCap = Math.max(0, osp - 0.5 + (bestDs - 6) * 0.5);
+          }
+        } else ai.biasTarget = 0;
+      } else ai.biasTarget = 0;
+    } else ai.biasTarget = 0;
+    const db = ai.biasTarget - ai.bias, mx = 2.5 * F1.DT;
+    ai.bias += db > mx ? mx : db < -mx ? -mx : db;
+
+    // pure pursuit towards the (biased) racing line
+    const latT = clamp(T.rlOff[i] + ai.bias, -room, room);
+    const tx = T.x[i] + T.nx[i] * latT, ty = T.y[i] + T.ny[i] * latT;
+    const ca = Math.cos(c.a), sa = Math.sin(c.a);
+    const dx = tx - c.x, dy = ty - c.y;
+    const lx = dx * ca + dy * sa, ly = -dx * sa + dy * ca;
+    const curv = (2 * ly) / Math.max(1, lx * lx + ly * ly);
+    const vf = c.vx * ca + c.vy * sa, vfa = Math.abs(vf);
+    const latRef = Math.min(P.LAT_MAX, P.LAT0 + P.LAT_K * sp * sp);
+    const maxDelta = Math.min(P.STEER_MAX, Math.atan(CAR.WB * latRef / Math.max(vfa * vfa, 1)) * 1.05);
+    let steer = Math.atan(CAR.WB * curv) / maxDelta;
+    if (lx < 0) steer = ly > 0 ? 1 : -1;
+    inp.steer = clamp(steer, -1, 1);
+
+    // speed
+    let vt = prof[F1.idxAt(T, c.s + sp * 0.12)] * ai.pace;
+    if (vCap < vt) vt = vCap;
+    if (c.dist > T.hw + 1) vt = Math.min(vt, 30);
+    if (sp > vt + 1.0) { inp.throttle = 0; inp.brake = Math.min(1, (sp - vt) / 5 + 0.3); }
+    else if (sp > vt - 0.5) { inp.throttle = 0.35; inp.brake = 0; }
+    else { inp.throttle = 1; inp.brake = 0; }
+    if (S.type === 'race' && S.startTime !== null && S.time < S.startTime + ai.react) { inp.throttle = 0; inp.brake = 0; }
+    inp.drs = c.drsAllowed;
+
+    // get unstuck
+    if (sp < 1.5) ai.stuck += F1.DT; else ai.stuck = 0;
+    if (F1.isWrongWay(c, T) || (Math.abs(F1.wrapAngle(c.a - T.hd[c.seg])) > 2.2 && sp < 10)) ai.backward += F1.DT; else ai.backward = 0;
+    if (ai.stuck > 2.0 || ai.backward > 1.2) { inp.reset = true; ai.stuck = 0; ai.backward = 0; }
+    return inp;
+  };
+
+  // ---------------------------------------------------------------- session
+  function passed(ps, ns, x, L) {
+    let d = ns - ps;
+    if (d < -L / 2) d += L; else if (d > L / 2) d -= L;
+    if (d <= 0 || d > 60) return false;
+    let rel = x - ps;
+    if (rel < 0) rel += L;
+    return rel > 0 && rel <= d;
+  }
+
+  /* opts: {type:'practice'|'quali'|'race', track, entries:[{id, driverId, isAI, name}], laps, aiLevel, collisions, seed} */
+  function Session(opts) {
+    const T = opts.track;
+    this.type = opts.type;
+    this.track = T;
+    this.laps = opts.laps || 0;
+    this.aiLevel = AI_LEVELS[opts.aiLevel] ? opts.aiLevel : 'medium';
+    this.collisions = opts.type === 'quali' ? false : opts.collisions !== false;
+    this.rng = mulberry32(opts.seed || 1234567);
+    this.tick = 0;
+    this.time = 0;
+    this.cars = [];
+    this.byId = {};
+    this.events = [];
+    this.fx = [];
+    this.phase = opts.type === 'practice' ? 'running' : 'countdown';
+    this.lights = 0;
+    this.startTime = opts.type === 'practice' ? 0 : null;
+    this.lightsOutAt = opts.type === 'race' ? 5.5 + 0.4 + this.rng() * 2.0 : null;
+    this.leaderFinishTime = null;
+    this.lastHumanFinish = null;
+    this.humansDoneAt = null;
+    this.finishCount = 0;
+    this.finalLapAnnounced = false;
+    this.fastest = null;
+    this.loopFirst = [];
+    this.detLast = T.drs.map(function () { return null; });
+    this.results = null;
+    const ref = F1.refLapTime(T);
+    this.refLap = ref;
+    this.timeLimit = opts.type === 'quali' ? 3 + ref * 1.3 + this.laps * ref * 1.6 + 60
+      : opts.type === 'race' ? 8 + this.laps * ref * 2.2 + 120 : Infinity;
+    const self = this;
+    const lvl = AI_LEVELS[this.aiLevel];
+    opts.entries.forEach(function (e, k) {
+      const c = F1.createCar(e.id !== undefined ? e.id : k, e.driverId, T, k, e.isAI);
+      c.name = e.name || null;
+      c.lineCount = 0; c.maxLine = 0; c.lapsDone = 0;
+      c.lapStart = null; c.lastLap = null; c.bestLap = null; c.laps = [];
+      c.finished = false; c.finishTime = null; c.finishPos = 0;
+      c.raceDist = c.s - T.length; c.loopIdx = -1; c.gap = 0; c.pos = k + 1;
+      c.qualiDone = false;
+      c.drsElig = T.drs.map(function () { return opts.type !== 'race'; });
+      c.input = F1.NEUTRAL;
+      c.prevS = c.s;
+      if (c.isAI) {
+        c.ai = {
+          inp: { throttle: 0, brake: 0, steer: 0, drs: false, reset: false },
+          bias: 0, biasTarget: 0, stuck: 0, backward: 0,
+          pace: lvl.pace * (1 - self.rng() * 0.012),
+          react: 0.12 + self.rng() * 0.25
+        };
+      }
+      self.cars.push(c);
+      self.byId[c.id] = c;
+    });
+    this.updateOrder();
+  }
+
+  Session.prototype.step = function (inputs) {
+    const T = this.track, dt = F1.DT;
+    this.tick++;
+    this.time += dt;
+    this.updatePhase();
+    const cars = this.cars;
+    for (let i = 0; i < cars.length; i++) {
+      const c = cars[i];
+      c.px = c.x; c.py = c.y; c.pa = c.a; c.prevS = c.s;
+      if (c.out) continue;
+      c.locked = this.phase === 'countdown';
+      if (c.isAI) c.input = F1.aiDrive(c, this);
+      else if (inputs && inputs[c.id]) c.input = inputs[c.id];
+      const z = T.drsZone[F1.idxAt(T, c.s)];
+      c.drsAllowed = z >= 0 && c.drsElig[z] && this.phase !== 'countdown';
+    }
+    const sub = dt / F1.SUBSTEPS;
+    const contactOn = this.collisions && this.phase !== 'countdown';
+    for (let k = 0; k < F1.SUBSTEPS; k++) {
+      for (let i = 0; i < cars.length; i++) if (!cars[i].out) F1.stepCar(cars[i], cars[i].input, T, sub);
+      if (contactOn) this.resolveContacts();
+    }
+    for (let i = 0; i < cars.length; i++) {
+      const c = cars[i];
+      if (c.wallHit > 2500) this.fx.push([Math.round(c.x * 10) / 10, Math.round(c.y * 10) / 10, Math.round(c.wallHit)]);
+      c.wallHit = 0;
+      if (!c.out) this.updateProgress(c, dt);
+    }
+    this.updateOrder();
+    this.checkEnd();
+  };
+
+  Session.prototype.resolveContacts = function () {
+    const cars = this.cars;
+    for (let i = 0; i < cars.length; i++) {
+      const A = cars[i];
+      if (A.out) continue;
+      for (let j = i + 1; j < cars.length; j++) {
+        const B = cars[j];
+        if (B.out) continue;
+        const dx = B.x - A.x, dy = B.y - A.y;
+        if (dx * dx + dy * dy > 33) continue;
+        const imp = F1.collideCars(A, B, true);
+        if (imp > 1500) this.fx.push([Math.round(F1.lastContact.x * 10) / 10, Math.round(F1.lastContact.y * 10) / 10, Math.round(imp)]);
+      }
+    }
+  };
+
+  Session.prototype.updatePhase = function () {
+    if (this.phase !== 'countdown') return;
+    const t = this.time;
+    if (this.type === 'race') {
+      this.lights = t >= 5.5 ? 5 : t >= 4.5 ? 4 : t >= 3.5 ? 3 : t >= 2.5 ? 2 : t >= 1.5 ? 1 : 0;
+      if (t >= this.lightsOutAt) {
+        this.phase = 'running';
+        this.lights = 0;
+        this.startTime = this.lightsOutAt;
+        for (let i = 0; i < this.cars.length; i++) this.cars[i].lapStart = this.startTime;
+        this.events.push({ k: 'lightsOut' });
+      }
+    } else if (this.type === 'quali' && t >= 3) {
+      this.phase = 'running';
+      this.startTime = 3;
+      this.events.push({ k: 'go' });
+    }
+  };
+
+  Session.prototype.updateProgress = function (c, dt) {
+    const T = this.track, L = T.length;
+    F1.queryTrack(T, c.x, c.y, c.seg, Q);
+    c.seg = Q.idx; c.s = Q.s; c.d = Q.d; c.dist = Q.dist;
+    const ps = c.prevS, ns = c.s;
+    let crossed = 0, frac = 1;
+    if (ps > L * 0.75 && ns < L * 0.25) { crossed = 1; frac = (L - ps) / Math.max(1e-6, L - ps + ns); }
+    else if (ps < L * 0.25 && ns > L * 0.75) crossed = -1;
+    if (crossed) {
+      c.lineCount += crossed;
+      if (crossed > 0 && c.lineCount > c.maxLine) {
+        c.maxLine = c.lineCount;
+        this.onLine(c, this.time - dt + frac * dt);
+      }
+    }
+    for (let z = 0; z < T.drs.length; z++) if (passed(ps, ns, T.drs[z].detect, L)) this.onDetection(c, z);
+    c.raceDist = (c.lineCount - 1) * L + c.s;
+    if (this.type === 'race' && this.phase !== 'countdown' && c.raceDist >= 0 && !c.finished) {
+      const li = Math.floor(c.raceDist / 50);
+      if (li > c.loopIdx) {
+        c.loopIdx = li;
+        const f = this.loopFirst[li];
+        if (f === undefined) { this.loopFirst[li] = this.time; c.gap = 0; } else c.gap = this.time - f;
+      }
+    }
+  };
+
+  Session.prototype.onLine = function (c, t) {
+    if (this.type === 'race') {
+      if (this.phase === 'countdown' || c.maxLine < 2) return;
+      this.recordLap(c, t - c.lapStart);
+      c.lapsDone = c.maxLine - 1;
+      c.lapStart = t;
+      if (!c.finished && (this.leaderFinishTime !== null || c.lapsDone >= this.laps)) this.finishCar(c, t);
+      else if (!this.finalLapAnnounced && this.leaderFinishTime === null && c.lapsDone === this.laps - 1 && this.laps > 1) {
+        this.finalLapAnnounced = true;
+        this.events.push({ k: 'finalLap' });
+      }
+      return;
+    }
+    if (this.phase !== 'running' || c.qualiDone) return;
+    if (c.lapStart !== null) {
+      this.recordLap(c, t - c.lapStart);
+      c.lapsDone++;
+      if (this.type === 'quali' && c.lapsDone >= this.laps) {
+        c.qualiDone = true;
+        c.lapStart = null;
+        this.events.push({ k: 'qualiDone', id: c.id });
+        if (!c.isAI && this.humansDoneAt === null && this.cars.every(function (o) { return o.isAI || o.out || o.qualiDone; })) this.humansDoneAt = this.time;
+        return;
+      }
+    }
+    c.lapStart = t;
+  };
+
+  Session.prototype.recordLap = function (c, lt) {
+    c.lastLap = lt;
+    c.laps.push(lt);
+    const pb = c.bestLap === null || lt < c.bestLap;
+    if (pb) c.bestLap = lt;
+    const fastest = this.fastest === null || lt < this.fastest.time;
+    if (fastest) this.fastest = { id: c.id, time: lt };
+    this.events.push({ k: 'lap', id: c.id, t: lt, pb: pb, fastest: fastest, n: c.laps.length });
+  };
+
+  Session.prototype.finishCar = function (c, t) {
+    c.finished = true;
+    c.finishTime = t;
+    c.finishPos = ++this.finishCount;
+    if (this.leaderFinishTime === null) {
+      this.leaderFinishTime = t;
+      this.phase = 'finishing';
+      this.events.push({ k: 'chequered', id: c.id });
+    }
+    if (!c.isAI) this.lastHumanFinish = t;
+    this.events.push({ k: 'finish', id: c.id, pos: c.finishPos });
+  };
+
+  Session.prototype.onDetection = function (c, z) {
+    if (this.type !== 'race') { c.drsElig[z] = true; return; }
+    const prev = this.detLast[z];
+    c.drsElig[z] = this.phase === 'running' && c.maxLine >= 2 && prev !== null && prev.id !== c.id && this.time - prev.t <= 1.0;
+    this.detLast[z] = { id: c.id, t: this.time };
+  };
+
+  Session.prototype.updateOrder = function () {
+    const arr = this.cars.slice();
+    if (this.type === 'race') {
+      arr.sort(function (a, b) {
+        if (a.out !== b.out) return a.out ? 1 : -1;
+        if (a.finished && b.finished) return a.finishPos - b.finishPos;
+        if (a.finished !== b.finished) return a.finished ? -1 : 1;
+        return b.raceDist - a.raceDist;
+      });
+    } else {
+      arr.sort(function (a, b) {
+        if (a.out !== b.out) return a.out ? 1 : -1;
+        const ab = a.bestLap === null ? Infinity : a.bestLap, bb = b.bestLap === null ? Infinity : b.bestLap;
+        if (ab !== bb) return ab - bb;
+        return a.slot - b.slot;
+      });
+    }
+    for (let i = 0; i < arr.length; i++) arr[i].pos = i + 1;
+    this.order = arr.map(function (c) { return c.id; });
+  };
+
+  Session.prototype.checkEnd = function () {
+    if (this.phase === 'done' || this.type === 'practice') return;
+    const active = this.cars.filter(function (c) { return !c.out; });
+    const humans = active.filter(function (c) { return !c.isAI; });
+    let end = false;
+    if (this.type === 'quali') {
+      if (this.phase === 'running') {
+        if (active.every(function (c) { return c.qualiDone; })) end = true;
+        if (this.humansDoneAt !== null && this.time - this.humansDoneAt > 20) end = true;
+      }
+    } else if (this.leaderFinishTime !== null) {
+      if (active.every(function (c) { return c.finished; })) end = true;
+      else if (humans.length && humans.every(function (c) { return c.finished; }) && this.time - this.lastHumanFinish > 8) end = true;
+      else if (this.time - this.leaderFinishTime > 75) end = true;
+    }
+    if (this.time > this.timeLimit) end = true;
+    if (end) this.finish();
+  };
+
+  Session.prototype.finish = function () {
+    if (this.phase === 'done') return;
+    this.phase = 'done';
+    this.updateOrder();
+    this.results = this.buildResults();
+    this.events.push({ k: 'end' });
+  };
+
+  Session.prototype.buildResults = function () {
+    const self = this;
+    const order = this.order.map(function (id) { return self.byId[id]; });
+    if (this.type === 'race') {
+      const w = order[0];
+      return order.map(function (c, i) {
+        let gap;
+        if (c.out) gap = 'DNF';
+        else if (i === 0) gap = w.finished ? F1.fmtLap(w.finishTime - self.startTime) : 'LEADER';
+        else if (c.finished && c.lapsDone >= w.lapsDone) gap = '+' + (c.finishTime - w.finishTime).toFixed(3) + 's';
+        else {
+          // not yet across the line: still on the lead lap -> time gap from the timing loops
+          const behind = (w.lapsDone || self.laps) - c.lapsDone - (c.finished ? 0 : 1);
+          if (behind <= 0) gap = '+' + c.gap.toFixed(3) + 's';
+          else gap = '+' + behind + (behind === 1 ? ' LAP' : ' LAPS');
+        }
+        return { pos: i + 1, id: c.id, driverId: c.driverId, isAI: c.isAI, name: c.name, laps: c.lapsDone, best: c.bestLap, gap: gap, out: c.out };
+      });
+    }
+    const pole = order.length && order[0].bestLap !== null ? order[0].bestLap : null;
+    return order.map(function (c, i) {
+      let gap = '';
+      if (c.out) gap = 'DNF';
+      else if (c.bestLap === null) gap = 'NO TIME';
+      else if (i === 0) gap = F1.fmtLap(c.bestLap);
+      else gap = '+' + (c.bestLap - pole).toFixed(3) + 's';
+      return { pos: i + 1, id: c.id, driverId: c.driverId, isAI: c.isAI, name: c.name, laps: c.lapsDone, best: c.bestLap, gap: gap, out: c.out };
+    });
+  };
+
+  Session.prototype.retire = function (id) {
+    const c = this.byId[id];
+    if (!c || c.out) return;
+    c.out = true;
+    c.vx = 0; c.vy = 0; c.w = 0;
+    this.updateOrder();
+  };
+
+  Session.prototype.drainEvents = function () {
+    const e = this.events;
+    this.events = [];
+    return e;
+  };
+  Session.prototype.drainFx = function () {
+    const f = this.fx;
+    this.fx = [];
+    return f;
+  };
+
+  F1.Session = Session;
+
+  if (typeof module !== 'undefined' && module.exports) module.exports = F1;
+})(typeof window !== 'undefined' ? window : globalThis);
