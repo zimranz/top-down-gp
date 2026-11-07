@@ -55,6 +55,7 @@
     this.ended = false;
     this.alpha = 0;
     this.wrongT = 0;
+    this.stuckT = 0;
     this.views = {};
     this.tmpA = {}; this.tmpB = {}; this.tmpC = {};
     this.started = performance.now();
@@ -165,25 +166,8 @@
   };
 
   OnlineGame.prototype.onEvents = function (evs) {
-    for (let i = 0; i < evs.length; i++) {
-      const e = evs[i];
-      if (e.k === 'lightsOut') this.msgs.add('LIGHTS OUT AND AWAY WE GO!', { big: true, color: '#e10600', key: 'start', dur: 2600 });
-      else if (e.k === 'go') this.msgs.add('QUALIFYING — GO!', { big: true, color: '#19c94a', key: 'start', dur: 2200 });
-      else if (e.k === 'finalLap') this.msgs.add('FINAL LAP', { color: '#ffffff', key: 'final', dur: 3500 });
-      else if (e.k === 'chequered') this.msgs.add('CHEQUERED FLAG', { sub: this.code(e.id) + ' WINS', big: true, color: '#ffffff', key: 'cheq', dur: 4500 });
-      else if (e.k === 'finish' && e.id === this.myId) this.msgs.add('FINISHED  P' + e.pos, { big: true, color: '#ffd600', key: 'fin', dur: 6000 });
-      else if (e.k === 'qualiDone' && e.id === this.myId) this.msgs.add('QUALIFYING COMPLETE', { sub: 'Keep driving — waiting for the others', color: '#19c94a', key: 'qd', dur: 6000 });
-      else if (e.k === 'lap') {
-        if (e.id === this.myId) {
-          this.msgs.add('LAP ' + e.n + '   ' + F1.fmtLap(e.t), {
-            sub: e.fastest ? 'FASTEST LAP OF THE SESSION' : e.pb ? 'PERSONAL BEST' : null,
-            subColor: e.fastest ? '#c77dff' : '#19c94a', color: e.fastest ? '#9b30ff' : '#19c94a', key: 'mylap', dur: 4000
-          });
-        } else if (e.fastest) {
-          this.msgs.add('FASTEST LAP', { sub: this.code(e.id) + '  ' + F1.fmtLap(e.t), color: '#9b30ff', subColor: '#c77dff', key: 'fl', dur: 3000 });
-        }
-      }
-    }
+    const self = this;
+    for (let i = 0; i < evs.length; i++) window.HUD.eventMessage(this.msgs, evs[i], this.myId, function (id) { return self.code(id); });
   };
 
   OnlineGame.prototype.step = function () {
@@ -197,6 +181,7 @@
     this.ownPrev = { x: own.x, y: own.y, a: own.a };
     this.simulate(inp, this.pending.length, this.snapT);
     this.wrongT = F1.isWrongWay(own, this.T) ? this.wrongT + DT : 0;
+    this.stuckT = Math.hypot(own.vx, own.vy) < 2 && this.phase >= 1 && !own.inPit ? this.stuckT + DT : 0;
   };
 
   /* Tab hidden: tell the server to brake so the car does not keep the last key held. */
@@ -263,72 +248,17 @@
   };
 
   OnlineGame.prototype.hud = function (now) {
-    const T = this.T, rows = this.rows, self = this;
     const tm = this.timing;
-    const order = tm ? tm.o : Object.keys(this.entries).map(Number);
-    const fastestId = tm && tm.f ? tm.f[0] : null;
-    const isRace = this.type === 'race';
-    const leader = rows[order[0]] || null;
-    const tower = order.map(function (id, i) {
-      const e = self.entries[id], r = rows[id] || {};
-      const t = F1.teamOfDriver(e.driverId);
-      let info = '';
-      if (r.out) info = 'OUT';
-      else if (isRace) {
-        if (i === 0) info = r.fin ? 'WINNER' : 'LEADER';
-        else if (leader && leader.dist - r.dist > T.length && !r.fin) {
-          const n = Math.floor((leader.dist - r.dist) / T.length);
-          info = '+' + n + (n > 1 ? ' LAPS' : ' LAP');
-        } else {
-          const ahead = rows[order[i - 1]];
-          const iv = ahead ? Math.max(0, r.gap - ahead.gap) : 0;
-          info = '+' + iv.toFixed(1);
-        }
-      } else info = r.best !== null && r.best !== undefined ? F1.fmtLap(r.best) : 'NO TIME';
-      return {
-        pos: i + 1, code: e.driverId, color: F1.teamUiColor(t), info: info,
-        me: id === self.myId, out: !!r.out, done: isRace ? !!r.fin : !!r.qdone, purple: !isRace && id === fastestId
-      };
+    return window.HUD.build({
+      type: this.type, laps: this.laps, track: this.T,
+      order: tm ? tm.o : Object.keys(this.entries).map(Number),
+      rows: this.rows, entries: this.entries, myId: this.myId, phase: this.phase, lights: this.lights,
+      time: this.serverTime + Math.min(1, (now - this.snapRecv) / 1000),
+      timeLeft: tm && tm.tl >= 0 ? tm.tl : -1,
+      fastestId: tm && tm.f ? tm.f[0] : null,
+      own: this.own, msgs: this.msgs, ping: this.net.ping,
+      started: this.started, wrongT: this.wrongT, stuckT: this.stuckT
     });
-    const srvNow = this.serverTime + Math.min(1, (now - this.snapRecv) / 1000);
-    const hud = {
-      title: isRace ? 'RACE' : 'QUALIFYING',
-      towerRight: isRace ? 'LAP ' + Math.min(this.laps, (leader ? leader.laps : 0) + 1) + '/' + this.laps : T.name.toUpperCase(),
-      tower: tower,
-      msgs: this.msgs.active(),
-      ping: this.net.ping
-    };
-    if (this.phase === 0 && isRace) hud.lights = this.lights;
-    if (this.phase === 0 && !isRace) {
-      const left = Math.ceil(3 - this.serverTime);
-      if (left > 0) hud.centre = { text: String(left), size: 90 };
-    }
-    if (tm && tm.tl >= 0 && !isRace) {
-      const m = Math.floor(tm.tl / 60), s = tm.tl % 60;
-      hud.timeLeft = 'SESSION ' + m + ':' + (s < 10 ? '0' : '') + s;
-    }
-    const own = this.own;
-    if (own && !own.out) {
-      const r = rows[this.myId] || {};
-      const sp = Math.hypot(own.vx, own.vy) * 3.6;
-      const vf = own.vx * Math.cos(own.a) + own.vy * Math.sin(own.a);
-      const pos = order.indexOf(this.myId) + 1;
-      hud.speed = Math.round(sp);
-      hud.gear = window.gearFor(sp, vf);
-      hud.drs = own.drsOpen ? 'open' : own.drsAllowed ? 'avail' : 'off';
-      hud.posText = 'P' + pos + ' / ' + order.length;
-      if (isRace) hud.lapText = r.fin ? 'FINISHED' : 'LAP ' + Math.min(this.laps, (r.laps || 0) + 1) + ' / ' + this.laps;
-      else hud.lapText = r.qdone ? 'QUALIFYING COMPLETE' : r.lapStart === null || r.lapStart === undefined ? 'OUT LAP' : 'TIMED LAP ' + Math.min(this.laps, (r.laps || 0) + 1) + ' / ' + this.laps;
-      hud.cur = r.lapStart !== null && r.lapStart !== undefined && this.phase >= 1 && !r.fin ? F1.fmtLap(Math.max(0, srvNow - r.lapStart)) : (isRace ? null : 'OUT LAP');
-      hud.last = r.last !== null && r.last !== undefined ? F1.fmtLap(r.last) : null;
-      hud.best = r.best !== null && r.best !== undefined ? F1.fmtLap(r.best) : null;
-      hud.bestPurple = fastestId === this.myId;
-      hud.wrongWay = this.wrongT > 1.2;
-      if (now - this.started < 9000 && this.phase === 0) hud.hint = window.controlsHint();
-    } else if (this.myId === null) {
-      hud.msgs = hud.msgs.concat([{ text: 'SPECTATING', sub: 'You will join the next session', color: '#ffd600' }]);
-    }
-    return hud;
   };
 
   window.OnlineGame = OnlineGame;

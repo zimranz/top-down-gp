@@ -1,27 +1,52 @@
-/* Practice mode (and the menu background), simulated entirely in the browser. */
+/* Sessions simulated entirely in the browser: practice, Grand Prix (qualifying + race) and the menu background. */
 (function () {
   'use strict';
   const F1 = window.F1;
+  const PH = { countdown: 0, running: 1, finishing: 2, done: 3 };
 
+  /* opts: { attract, type: 'practice'|'quali'|'race', track, driverId, aiCount, aiDrivers, grid, aiLevel, collisions, laps, onEnd } */
   function LocalGame(opts) {
-    this.kind = opts.attract ? 'attract' : 'practice';
+    this.kind = opts.attract ? 'attract' : 'local';
+    this.type = opts.type || 'practice';
     this.opts = opts;
     this.T = F1.getTrack(opts.track);
     const rng = F1.rng((Math.random() * 1e9) | 0);
-    const entries = [];
-    if (!opts.attract) entries.push({ id: 0, driverId: opts.driverId, isAI: false, name: 'You' });
-    const pool = F1.DRIVERS.map(function (d) { return d.id; }).filter(function (id) { return id !== opts.driverId; });
-    for (let i = pool.length - 1; i > 0; i--) { const j = Math.floor(rng() * (i + 1)); const t = pool[i]; pool[i] = pool[j]; pool[j] = t; }
-    pool.slice(0, opts.aiCount || 0).forEach(function (id) { entries.push({ id: entries.length, driverId: id, isAI: true }); });
-    this.S = new F1.Session({
-      type: 'practice', track: this.T, entries: entries,
-      aiLevel: opts.aiLevel || 'medium', collisions: opts.collisions !== false, seed: (rng() * 1e9) | 0
+    let order;
+    if (opts.grid) {
+      order = opts.grid.slice();
+    } else {
+      let ai = opts.aiDrivers ? opts.aiDrivers.slice() : null;
+      if (!ai) {
+        ai = F1.DRIVERS.map(function (d) { return d.id; }).filter(function (id) { return id !== opts.driverId; });
+        for (let i = ai.length - 1; i > 0; i--) { const j = Math.floor(rng() * (i + 1)); const t = ai[i]; ai[i] = ai[j]; ai[j] = t; }
+        ai = ai.slice(0, opts.aiCount || 0);
+      }
+      order = opts.attract ? ai : [opts.driverId].concat(ai);
+      if (this.type !== 'practice') {
+        for (let i = order.length - 1; i > 0; i--) { const j = Math.floor(rng() * (i + 1)); const t = order[i]; order[i] = order[j]; order[j] = t; }
+      }
+    }
+    const self = this;
+    this.myId = null;
+    const entries = order.map(function (driverId, k) {
+      const human = !opts.attract && driverId === opts.driverId;
+      if (human) self.myId = k;
+      return { id: k, driverId: driverId, isAI: !human, name: human ? 'You' : null };
     });
-    this.me = opts.attract ? null : this.S.byId[0];
+    this.S = new F1.Session({
+      type: this.type, track: this.T, entries: entries, laps: opts.laps || 0,
+      aiLevel: opts.aiLevel || 'medium', collisions: this.type === 'practice' ? opts.collisions !== false : true,
+      seed: (rng() * 1e9) | 0, startMode: this.type === 'practice' && !opts.attract ? 'pit' : 'grid'
+    });
+    this.me = this.myId !== null ? this.S.byId[this.myId] : null;
+    this.entries = {};
+    entries.forEach(function (e) { self.entries[e.id] = e; });
     this.paused = false;
+    this.ended = false;
     this.msgs = new window.Messages();
     this.fx = [];
     this.wrongT = 0;
+    this.stuckT = 0;
     this.started = performance.now();
     this.views = {};
   }
@@ -29,25 +54,28 @@
   LocalGame.prototype.step = function () {
     if (this.paused) return;
     const inputs = {};
-    if (this.me) inputs[0] = window.Input.sample(F1.DT);
+    if (this.me) inputs[this.myId] = window.Input.sample(F1.DT);
     this.S.step(inputs);
     const evs = this.S.drainEvents();
-    for (let i = 0; i < evs.length; i++) this.onEvent(evs[i]);
+    const self = this;
+    for (let i = 0; i < evs.length; i++) {
+      const e = evs[i];
+      if (this.kind === 'attract') continue;
+      if (e.k === 'end') {
+        if (!this.ended) {
+          this.ended = true;
+          if (this.opts.onEnd) setTimeout(function () { self.opts.onEnd(self.S.results, self); }, 900);
+        }
+        continue;
+      }
+      window.HUD.eventMessage(this.msgs, e, this.myId, function (id) { return self.S.byId[id].driverId; });
+    }
     const fx = this.S.drainFx();
     for (let i = 0; i < fx.length; i++) this.fx.push(fx[i]);
-    if (this.me) this.wrongT = F1.isWrongWay(this.me, this.T) ? this.wrongT + F1.DT : 0;
-  };
-
-  LocalGame.prototype.onEvent = function (e) {
-    if (!this.me || e.k !== 'lap') return;
-    const c = this.S.byId[e.id];
-    if (e.id === 0) {
-      this.msgs.add('LAP ' + e.n + '   ' + F1.fmtLap(e.t), {
-        sub: e.fastest ? 'FASTEST LAP OF THE SESSION' : e.pb ? 'PERSONAL BEST' : null,
-        subColor: e.fastest ? '#c77dff' : '#19c94a', color: e.fastest ? '#9b30ff' : '#19c94a', key: 'mylap', dur: 4000
-      });
-    } else if (e.fastest) {
-      this.msgs.add('FASTEST LAP', { sub: c.driverId + '  ' + F1.fmtLap(e.t), color: '#9b30ff', subColor: '#c77dff', key: 'fl', dur: 3000 });
+    if (this.me) {
+      this.wrongT = F1.isWrongWay(this.me, this.T) ? this.wrongT + F1.DT : 0;
+      const sp = Math.hypot(this.me.vx, this.me.vy);
+      this.stuckT = sp < 2 && this.S.phase !== 'countdown' && !this.me.inPit && this.S.time > 4 ? this.stuckT + F1.DT : 0;
     }
   };
 
@@ -62,7 +90,7 @@
     v.a = window.Renderer.lerpAngle(c.pa, c.a, alpha);
     v.vx = c.vx; v.vy = c.vy; v.delta = c.delta; v.drsOpen = c.drsOpen; v.surf = c.surf;
     v.me = this.me === c;
-    v.ghost = false;
+    v.ghost = this.type === 'quali' && !v.me;
     return v;
   };
 
@@ -70,7 +98,7 @@
     const S = this.S, T = this.T;
     const cars = [];
     for (let i = 0; i < S.cars.length; i++) if (!S.cars[i].out) cars.push(this.view(S.cars[i], this.paused ? 1 : alpha));
-    let focus = this.me ? this.views[0] : null;
+    let focus = this.me ? this.views[this.myId] : null;
     if (!focus && cars.length) focus = cars[0];
     const frame = { track: T, cars: cars, labels: window.Settings.data.labels };
     R.updateCamera(focus, dt, this.kind === 'attract' ? true : window.Settings.data.camera === 'rotate');
@@ -82,37 +110,19 @@
   };
 
   LocalGame.prototype.hud = function () {
-    const S = this.S, me = this.me;
-    const fastestId = S.fastest ? S.fastest.id : null;
-    const tower = S.order.map(function (id) {
-      const c = S.byId[id];
-      const t = F1.teamOfDriver(c.driverId);
-      return {
-        pos: c.pos, code: c.driverId, color: F1.teamUiColor(t),
-        info: c.bestLap !== null ? F1.fmtLap(c.bestLap) : 'NO TIME',
-        me: c === me, purple: id === fastestId
-      };
+    const S = this.S;
+    const rows = {};
+    for (let i = 0; i < S.cars.length; i++) {
+      const c = S.cars[i];
+      rows[c.id] = { laps: c.lapsDone, last: c.lastLap, best: c.bestLap, gap: c.gap, lapStart: c.lapStart, fin: c.finished, out: c.out, qdone: c.qualiDone, dist: c.raceDist };
+    }
+    return window.HUD.build({
+      type: this.type, laps: S.laps, track: this.T, order: S.order, rows: rows, entries: this.entries,
+      myId: this.myId, phase: PH[S.phase], lights: S.lights, time: S.time,
+      timeLeft: isFinite(S.timeLimit) ? Math.max(0, S.timeLimit - S.time) : -1,
+      fastestId: S.fastest ? S.fastest.id : null, own: this.me, msgs: this.msgs, ping: null,
+      started: this.started, wrongT: this.wrongT, stuckT: this.stuckT
     });
-    const sp = Math.hypot(me.vx, me.vy) * 3.6;
-    const vf = me.vx * Math.cos(me.a) + me.vy * Math.sin(me.a);
-    const hint = performance.now() - this.started < 14000 ? window.controlsHint() : null;
-    return {
-      title: 'PRACTICE',
-      towerRight: this.T.name.toUpperCase(),
-      lapText: 'LAPS COMPLETED  ' + me.lapsDone,
-      tower: tower,
-      speed: Math.round(sp),
-      gear: window.gearFor(sp, vf),
-      drs: me.drsOpen ? 'open' : me.drsAllowed ? 'avail' : 'off',
-      cur: me.lapStart !== null ? F1.fmtLap(S.time - me.lapStart) : 'OUT LAP',
-      last: me.lastLap !== null ? F1.fmtLap(me.lastLap) : null,
-      best: me.bestLap !== null ? F1.fmtLap(me.bestLap) : null,
-      bestPurple: fastestId === 0,
-      posText: 'P' + me.pos + ' / ' + S.cars.length,
-      msgs: this.msgs.active(),
-      wrongWay: this.wrongT > 1.2,
-      hint: hint
-    };
   };
 
   window.LocalGame = LocalGame;

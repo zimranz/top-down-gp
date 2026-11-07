@@ -3,14 +3,15 @@
 A top-down F1 racing game you can play in the browser, alone or online with up to 8 friends.
 
 - **2026 grid**: all 11 teams and 22 drivers with their race numbers and team colours
-- **Two real circuits**: Monza and Silverstone, built from the real track outlines at real scale (cars are 5.4 m long, tracks about 14–15 m wide)
-- **Practice mode**: drive on your own, with or without AI cars
-- **Online mode**: room codes, a lobby, qualifying (1–5 laps) that decides an F1-style staggered grid, five start lights, then the race (1–10 laps)
-- **AI drivers** fill the empty seats (easy / medium / hard)
-- **Realistic contact**: cars bump with real momentum. A tap from behind can spin you and a side hit pushes you wide. There is no damage.
-- **Track limits**: grass and gravel slow you down. There are no penalties.
+- **Five real circuits**: Monza, Silverstone, Abu Dhabi (Yas Marina), Spa-Francorchamps and Interlagos, built from the real track outlines at real scale
+- **Practice mode**: you drive out of your team's garage in the pit lane (80 km/h limiter) while AI cars are already lapping
+- **Grand Prix mode** (single player): pick your track, driver, number of opponents and difficulty, then qualifying (none, or 1–5 laps) decides the grid, five start lights, and a race of 1–7 laps
+- **Online mode**: room codes, a lobby, qualifying (none, or 1–5 laps), then a race (1–7 laps) with up to 8 friends
+- **AI drivers** fill the empty seats (easy / medium / hard). They make occasional, realistic mistakes (running wide, braking too late), and they follow exactly the same physics as you.
+- **Realistic contact**: cars bump with real momentum, but tyres resist being shoved. Rubbing costs time, a hard punt on a rear corner can spin you, and nobody gets thrown off the track by a light touch. There is no damage.
+- **Track limits**: grass and gravel slow you down hard if you arrive fast, but you can drive back out (about 100 km/h on grass, 65 km/h in gravel). There are no penalties.
 - **DRS**: in a DRS zone, press Shift or Space. In races you need to be within 1 second of the car ahead at the detection line, from lap 2 onwards.
-- **HUD**: timing tower with your row highlighted, position, lap, current/last/best lap, speed, gear, DRS light, minimap, and a "YOU" marker over your car
+- **HUD**: timing tower with your row highlighted, position, lap, current/last/best lap, speed, gear, DRS / pit limiter light, minimap, a "YOU" marker over your car, and an on-screen **Pause (P)** button
 - **Steering sensitivity** setting, available on the home screen and in the pause menu
 
 ## Controls
@@ -61,12 +62,13 @@ On the free plan the server goes to sleep after 15 minutes with nobody connected
 ```
 server.js            game server: rooms, lobby, authoritative 60 Hz race simulation
 shared/data.js       teams, drivers, numbers, colours
-shared/tracks.js     circuit outlines, kerbs, gravel, barriers, DRS zones, racing line
+shared/tracks.js     circuit outlines, kerbs, gravel, barriers, pit lane, DRS zones, racing line
 shared/sim.js        car physics, collisions, AI drivers, practice/qualifying/race rules
 public/index.html    menus and screens
 public/css/style.css styling
 public/js/render.js  canvas drawing: track, cars, HUD, minimap
-public/js/game-local.js   practice mode (runs in the browser)
+public/js/hud.js     timing tower / dashboard data shared by every mode
+public/js/game-local.js   practice + Grand Prix (run in the browser)
 public/js/game-online.js  online client: instant local response + smoothing of other cars
 public/js/main.js    menus, lobby, results, settings, main loop
 ```

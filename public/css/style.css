@@ -149,3 +149,18 @@ table.results .purple { color: #c77dff; }
   .col.narrow { flex: none; }
   .panel-head h2 { font-size: 18px; }
 }
+
+/* on-screen pause button (bottom-right, clear of the dashboard) */
+#pausebtn { position: fixed; right: 16px; bottom: 14px; display: flex; flex-direction: column; align-items: center; gap: 4px; z-index: 5; }
+#pausebtn.hidden { display: none; }
+#pausebtn button { width: 52px; height: 52px; border-radius: 12px; border: 1px solid rgba(255,255,255,0.25); background: rgba(10,10,14,0.85);
+  cursor: pointer; display: flex; align-items: center; justify-content: center; gap: 7px; padding: 0; }
+#pausebtn button:hover { background: rgba(225,6,0,0.85); }
+#pausebtn button span { display: block; width: 6px; height: 22px; background: #fff; border-radius: 2px; }
+#pausebtn .lbl { font-size: 12px; font-weight: 800; color: #fff; text-shadow: 0 1px 3px rgba(0,0,0,0.9); letter-spacing: 0.5px; }
+
+.foot-btns { display: flex; gap: 10px; flex-wrap: wrap; justify-content: flex-end; }
+.gp-laps { margin-top: 14px; }
+.tracks { grid-template-columns: 1fr 1fr; }
+.track-card canvas { height: 72px; }
+.track-card .tname { font-size: 14px; }

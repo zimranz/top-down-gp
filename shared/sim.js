@@ -18,12 +18,16 @@
     REV_MAX: 7, REV_ACC: 4,
     DRS_DRAG: 0.86
   });
+  // Grass and gravel scrub off speed hard when you arrive fast, but you can drive back out at a decent pace
+  // (about 100 km/h on grass, about 65 km/h in gravel). Same rules for players and AI.
   const SURFS = [
     { grip: 1.0, traction: 1.0, roll: 0, drag2: 0 },          // asphalt
-    { grip: 0.93, traction: 0.95, roll: 0.3, drag2: 0 },      // kerb
-    { grip: 0.5, traction: 0.5, roll: 4.2, drag2: 0.0016 },   // grass
-    { grip: 0.4, traction: 0.35, roll: 3.0, drag2: 0.005 }    // gravel
+    { grip: 0.94, traction: 0.96, roll: 0.25, drag2: 0 },     // kerb
+    { grip: 0.62, traction: 0.62, roll: 2.6, drag2: 0.0048 }, // grass
+    { grip: 0.48, traction: 0.46, roll: 2.4, drag2: 0.007 },  // gravel
+    { grip: 1.0, traction: 1.0, roll: 0, drag2: 0 }           // pit lane (80 km/h limiter)
   ];
+  const PIT_LIMIT = (F1.PIT_LIMIT = 80 / 3.6);
   F1.DT = 1 / 60;
   F1.SUBSTEPS = 2;
   F1.NEUTRAL = { throttle: 0, brake: 0, steer: 0, drs: false, reset: false };
@@ -111,16 +115,40 @@
     return j;
   };
 
+  /* Pit wall: a thin barrier between the main straight and the pit lane. */
+  function pitWallCollide(c, T) {
+    const P = T.pit;
+    if (!P || !T.pitWall[c.seg]) return;
+    const dW = P.side * P.wallOff;
+    if (Math.abs(c.d - dW) > 3.4) return;
+    const ca = Math.cos(c.a), sa = Math.sin(c.a);
+    const s0 = c.d - dW, sgn = s0 >= 0 ? 1 : -1;
+    for (let k = 0; k < 4; k++) {
+      const fx = k < 2 ? 1 : -1, fy = (k & 1) ? 1 : -1;
+      const px = c.x + ca * CAR.HL * fx - sa * CAR.HW * fy;
+      const py = c.y + sa * CAR.HL * fx + ca * CAR.HW * fy;
+      F1.queryTrack(T, px, py, c.seg, Q2);
+      if (!T.pitWall[Q2.idx]) continue;
+      const pen = 0.35 - sgn * (Q2.d - dW);
+      if (pen <= 0) continue;
+      const nx = T.nx[Q2.idx] * sgn, ny = T.ny[Q2.idx] * sgn;
+      const j = F1.contactImpulse(c, null, px, py, nx, ny, 0.25, 0.45, false);
+      c.x += nx * pen; c.y += ny * pen;
+      if (j > c.wallHit) c.wallHit = j;
+    }
+  }
+
   function wallCollide(c, T) {
-    const wallHere = T.wall[c.seg];
-    if (c.dist < wallHere - 3.2) return;
+    pitWallCollide(c, T);
+    const wallHere = F1.wallAt(T, c.seg, c.d);
+    if (c.dist < Math.min(wallHere, T.wall[c.seg]) - 3.2) return;
     const ca = Math.cos(c.a), sa = Math.sin(c.a);
     for (let k = 0; k < 4; k++) {
       const fx = k < 2 ? 1 : -1, fy = (k & 1) ? 1 : -1;
       const px = c.x + ca * CAR.HL * fx - sa * CAR.HW * fy;
       const py = c.y + sa * CAR.HL * fx + ca * CAR.HW * fy;
       F1.queryTrack(T, px, py, c.seg, Q2);
-      const w = T.wall[Q2.idx];
+      const w = F1.wallAt(T, Q2.idx, Q2.d);
       if (Q2.dist > w && Q2.dist > 1e-6) {
         const pen = Q2.dist - w;
         const nx = (Q2.cx - px) / Q2.dist, ny = (Q2.cy - py) / Q2.dist;
@@ -154,9 +182,12 @@
     const grip = (A.grip + B.grip) * 0.5;
     const traction = (A.traction + B.traction) * 0.5;
     const roll = (A.roll + B.roll) * 0.5, drag2 = (A.drag2 + B.drag2) * 0.5;
-    c.surf = sL > sR ? sL : sR;
+    const sl2 = sL === 4 ? 0 : sL, sr2 = sR === 4 ? 0 : sR;
+    c.surf = sl2 > sr2 ? sl2 : sr2;       // pit lane counts as asphalt for effects
+    c.inPit = sL === 4 || sR === 4;
 
-    const thr = clamp(inp.throttle || 0, 0, 1), brk = clamp(inp.brake || 0, 0, 1);
+    let thr = clamp(inp.throttle || 0, 0, 1);
+    const brk = clamp(inp.brake || 0, 0, 1);
     if (inp.drs && c.drsAllowed) c.drsOpen = true;
     if (!c.drsAllowed || brk > 0.05) c.drsOpen = false;
 
@@ -180,9 +211,9 @@
     if (wT > wCap) wT = wCap; else if (wT < -wCap) wT = -wCap;
     const beta = Math.atan2(Math.abs(vl), Math.max(vfa, 1));
     const werr = Math.abs(wT - c.w);
-    if (!c.slide) { if (sp > 6 && (beta > 0.3 || werr > 1.3)) c.slide = true; }
-    else if (sp < 3 || (beta < 0.12 && werr < 0.35)) c.slide = false;
-    const auth = (c.slide ? 2.6 : 18) * (0.4 + 0.6 * grip) * Math.min(1, 0.2 + sp / 20);
+    if (!c.slide) { if (sp > 6 && (beta > 0.34 || werr > 1.9)) c.slide = true; }
+    else if (sp < 3 || (beta < 0.12 && werr < 0.4)) c.slide = false;
+    const auth = (c.slide ? 3.4 : 18) * (0.4 + 0.6 * grip) * Math.min(1, 0.2 + sp / 20);
     const dw = wT - c.w, lim = auth * dt;
     c.w += dw > lim ? lim : dw < -lim ? -lim : dw;
     c.a += c.w * dt;
@@ -195,8 +226,10 @@
     // longitudinal
     const drag = P.DRAG * (c.drsOpen ? P.DRS_DRAG : 1);
     const aero = (drag * vf * Math.abs(vf)) / CAR.MASS;
+    if (c.inPit && vf > PIT_LIMIT - 0.4) thr = 0;   // pit limiter
     if (vf > 0.4) {
       let acc = 0;
+      if (c.inPit && vf > PIT_LIMIT + 0.4) acc -= Math.min(12, (vf - PIT_LIMIT) * 3);
       if (thr > 0) {
         const tr = Math.min(P.TRACT_MAX, P.TRACT0 + P.TRACT_K * sp * sp) * traction;
         acc += thr * Math.min(P.POWER / (CAR.MASS * Math.max(vf, 4)), tr);
@@ -236,6 +269,12 @@
     c.y += c.vy * dt;
     wallCollide(c, T);
   };
+
+  function scrub(c) {
+    const ca = Math.cos(c.a), sa = Math.sin(c.a);
+    const vf = c.vx * ca + c.vy * sa, vl = (-c.vx * sa + c.vy * ca) * 0.86;
+    c.vx = vf * ca - vl * sa; c.vy = vf * sa + vl * ca;
+  }
 
   /* Car-to-car contact: oriented boxes, separating-axis test, impulse at the deepest point.
      applyB=false only moves A (used for client-side prediction). */
@@ -291,10 +330,16 @@
     const w1 = Math.max(0, faceOff - ((q1x - Rb.x) * ux + (q1y - Rb.y) * uy)) + 1e-4;
     const w2 = Math.max(0, faceOff - ((q2x - Rb.x) * ux + (q2y - Rb.y) * uy)) + 1e-4;
     const cx = (q1x * w1 + q2x * w2) / (w1 + w2), cy = (q1y * w1 + q2y * w2) / (w1 + w2);
-    const j = F1.contactImpulse(A, B, cx, cy, nx, ny, 0.2, 0.3, applyB);
-    const corr = applyB ? best * 0.5 : best;
+    // nearly inelastic (carbon and tyres don't bounce), modest rubbing friction, gentle separation
+    const j = F1.contactImpulse(A, B, cx, cy, nx, ny, 0.06, 0.18, applyB);
+    // Separate overlapping cars gently: the impulse handles the motion and each car's tyres decide
+    // how far it gets pushed, so a car can't simply be bulldozed sideways off the track.
+    const corr = Math.min(0.06, Math.max(0, best - 0.02) * 0.3);
     A.x += nx * corr; A.y += ny * corr;
     if (applyB) { B.x -= nx * corr; B.y -= ny * corr; }
+    // tyres scrub while the cars lean on each other: sideways sliding dies away instead of drifting on
+    scrub(A);
+    if (applyB) scrub(B);
     F1.lastContact.x = cx; F1.lastContact.y = cy;
     return j > 0 ? j : 1;
   };
@@ -305,10 +350,12 @@
   };
 
   // ---------------------------------------------------------------- AI
+  // mistake = chance per car per lap of braking too late or running wide (across a full grid that is
+  // roughly: easy one a lap, medium one every ~4 laps, hard one every ~10 laps)
   const AI_LEVELS = (F1.AI_LEVELS = {
-    easy: { lat: 0.8, brake: 0.72, pace: 0.965 },
-    medium: { lat: 0.88, brake: 0.84, pace: 0.985 },
-    hard: { lat: 0.95, brake: 0.93, pace: 1.0 }
+    easy: { lat: 0.8, brake: 0.72, pace: 0.965, mistake: 0.05 },
+    medium: { lat: 0.88, brake: 0.84, pace: 0.985, mistake: 0.012 },
+    hard: { lat: 0.95, brake: 0.93, pace: 1.0, mistake: 0.005 }
   });
 
   F1.speedProfile = function (T, level) {
@@ -334,6 +381,23 @@
     }
     T._prof[level] = v;
     return v;
+  };
+
+  /* Points where the AI starts braking for a corner (speed drops by more than 12 m/s). */
+  F1.brakeZones = function (T, level) {
+    T._bz = T._bz || {};
+    if (T._bz[level]) return T._bz[level];
+    const v = F1.speedProfile(T, level), N = T.n, out = [];
+    for (let i = 0; i < N; i++) {
+      const a = v[(i - 1 + N) % N], b = v[i], c = v[(i + 1) % N];
+      if (!(b >= a && b > c + 0.05)) continue;          // local peak: braking starts here
+      let minV = b, minI = i;
+      for (let k = 1; k < 140; k++) { const j = (i + k) % N; if (v[j] < minV) { minV = v[j]; minI = j; } }
+      if (b - minV < 12) continue;
+      out.push({ s: i * T.ds, turn: T.curv[minI] });
+    }
+    T._bz[level] = out;
+    return out;
   };
 
   F1.refLapTime = function (T) {
@@ -395,6 +459,7 @@
         } else ai.biasTarget = 0;
       } else ai.biasTarget = 0;
     } else ai.biasTarget = 0;
+    if (ai.mistakeUntil > S.time && ai.mistakeType === 1) ai.biasTarget = ai.mistakeSide * 4.5;
     const db = ai.biasTarget - ai.bias, mx = 2.5 * F1.DT;
     ai.bias += db > mx ? mx : db < -mx ? -mx : db;
 
@@ -415,17 +480,36 @@
     // speed
     let vt = prof[F1.idxAt(T, c.s + sp * 0.12)] * ai.pace;
     if (vCap < vt) vt = vCap;
+    // occasional human-like mistake: brake too late (runs deep) or run wide on the exit
+    if (ai.mistakeUntil > S.time) {
+      if (ai.mistakeType === 0) vt = vt * 1.1 + 3;
+      else vt = vt * 1.04;
+    }
     if (c.dist > T.hw + 1) vt = Math.min(vt, 30);
     if (sp > vt + 1.0) { inp.throttle = 0; inp.brake = Math.min(1, (sp - vt) / 5 + 0.3); }
     else if (sp > vt - 0.5) { inp.throttle = 0.35; inp.brake = 0; }
     else { inp.throttle = 1; inp.brake = 0; }
+    // one dice roll per braking zone (fixed points on the track where the AI starts braking for a corner)
+    const zones = F1.brakeZones(T, S.aiLevel);
+    if (ai.lastS !== undefined && zones.length && S.phase !== 'countdown') {
+      for (let z = 0; z < zones.length; z++) {
+        if (passed(ai.lastS, c.s, zones[z].s, T.length) && ai.mistakeUntil < S.time - 4) {
+          if (S.rng() < (AI_LEVELS[S.aiLevel] || AI_LEVELS.medium).mistake / zones.length) {
+            ai.mistakeType = S.rng() < 0.55 ? 0 : 1;
+            ai.mistakeUntil = S.time + (ai.mistakeType === 0 ? 1.6 : 2.6);
+            ai.mistakeSide = zones[z].turn > 0 ? -1 : 1;   // run wide = towards the outside of the corner
+          }
+        }
+      }
+    }
+    ai.lastS = c.s;
     if (S.type === 'race' && S.startTime !== null && S.time < S.startTime + ai.react) { inp.throttle = 0; inp.brake = 0; }
     inp.drs = c.drsAllowed;
 
     // get unstuck
     if (sp < 1.5) ai.stuck += F1.DT; else ai.stuck = 0;
     if (F1.isWrongWay(c, T) || (Math.abs(F1.wrapAngle(c.a - T.hd[c.seg])) > 2.2 && sp < 10)) ai.backward += F1.DT; else ai.backward = 0;
-    if (ai.stuck > 2.0 || ai.backward > 1.2) { inp.reset = true; ai.stuck = 0; ai.backward = 0; }
+    if (ai.stuck > 3.0 || ai.backward > 2.5) { inp.reset = true; ai.stuck = 0; ai.backward = 0; }
     return inp;
   };
 
@@ -488,6 +572,7 @@
         c.ai = {
           inp: { throttle: 0, brake: 0, steer: 0, drs: false, reset: false },
           bias: 0, biasTarget: 0, stuck: 0, backward: 0,
+          mistakeUntil: -99, mistakeType: 0, mistakeSide: 1, wasBraking: false,
           pace: lvl.pace * (1 - self.rng() * 0.012),
           react: 0.12 + self.rng() * 0.25
         };
@@ -495,8 +580,38 @@
       self.cars.push(c);
       self.byId[c.id] = c;
     });
+    if (opts.startMode === 'pit' && T.pit) this.placeForPitStart();
     this.updateOrder();
   }
+
+  /* Practice: players start in front of their team's garage; AI cars are already out on track. */
+  Session.prototype.placeForPitStart = function () {
+    const T = this.track, L = T.length;
+    const ais = this.cars.filter(function (c) { return c.isAI; });
+    const prof = F1.speedProfile(T, this.aiLevel);
+    const teamIdx = function (driverId) {
+      const d = F1.driver(driverId);
+      return F1.TEAMS.findIndex(function (t) { return t.id === d.team; });
+    };
+    for (let i = 0; i < this.cars.length; i++) {
+      const c = this.cars[i];
+      if (c.isAI) {
+        const k = ais.indexOf(c);
+        const s = F1.wrapS(L * (k + 1) / (ais.length + 1) + 260, L);
+        const idx = F1.idxAt(T, s);
+        const v = prof[idx] * 0.8;
+        c.x = T.rlX[idx]; c.y = T.rlY[idx]; c.a = T.hd[idx];
+        c.vx = Math.cos(c.a) * v; c.vy = Math.sin(c.a) * v;
+      } else {
+        const p = F1.pitSpot(T, teamIdx(c.driverId));
+        c.x = p.x; c.y = p.y; c.a = p.h; c.vx = 0; c.vy = 0;
+      }
+      c.px = c.x; c.py = c.y; c.pa = c.a;
+      F1.queryTrack(T, c.x, c.y, -1, Q);
+      c.seg = Q.idx; c.s = Q.s; c.d = Q.d; c.dist = Q.dist; c.prevS = c.s;
+      c.raceDist = c.s;
+    }
+  };
 
   Session.prototype.step = function (inputs) {
     const T = this.track, dt = F1.DT;
@@ -606,6 +721,7 @@
       return;
     }
     if (this.phase !== 'running' || c.qualiDone) return;
+    if (c.inPit) { c.lapStart = null; return; }
     if (c.lapStart !== null) {
       this.recordLap(c, t - c.lapStart);
       c.lapsDone++;

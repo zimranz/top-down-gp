@@ -337,7 +337,7 @@ io.on('connection', function (socket) {
     const st = room.settings;
     if (s.track && F1.TRACK_DEFS[s.track]) st.track = s.track;
     if (s.qualiLaps !== undefined) st.qualiLaps = intIn(s.qualiLaps, 0, 5, st.qualiLaps);
-    if (s.raceLaps !== undefined) st.raceLaps = intIn(s.raceLaps, 1, 10, st.raceLaps);
+    if (s.raceLaps !== undefined) st.raceLaps = intIn(s.raceLaps, 1, 7, st.raceLaps);
     if (s.aiCount !== undefined) st.aiCount = intIn(s.aiCount, 0, GRID_SIZE - 1, st.aiCount);
     if (s.aiLevel && F1.AI_LEVELS[s.aiLevel]) st.aiLevel = s.aiLevel;
     broadcastRoom(room);

@@ -18,10 +18,11 @@
     <section id="home" class="screen active">
       <div class="brand">
         <div class="logo">TOP-DOWN <span>GP</span></div>
-        <div class="tag">2026 grid · 11 teams · 22 drivers · Monza &amp; Silverstone</div>
+        <div class="tag">2026 grid · 11 teams · 22 drivers · 5 circuits</div>
       </div>
       <div class="menu">
         <button class="btn big" data-go="practice">Practice</button>
+        <button class="btn big" data-go="gp">Grand Prix</button>
         <button class="btn big red" data-go="online">Online with friends</button>
         <button class="btn" data-act="settings">Settings</button>
       </div>
@@ -54,6 +55,36 @@
         <div class="col wide">
           <h3>Choose your driver</h3>
           <div class="drivers" id="practice-drivers"></div>
+        </div>
+      </div>
+    </section>
+
+    <!-- GRAND PRIX SETUP -->
+    <section id="gp" class="screen panel">
+      <div class="panel-head">
+        <button class="btn ghost" data-go="home">← Back</button>
+        <h2>Grand Prix</h2>
+        <button class="btn red" id="gp-start">Start weekend</button>
+      </div>
+      <div class="cols">
+        <div class="col narrow">
+          <h3>Track</h3>
+          <div class="tracks" id="gp-tracks"></div>
+          <h3>Opponents</h3>
+          <div class="row"><input type="range" id="gp-ai" min="1" max="21" value="15"><span class="val" id="gp-ai-val">15</span></div>
+          <p class="note">Opponents are picked at random from the 2026 grid.</p>
+          <h3>AI difficulty</h3>
+          <div class="seg" id="gp-level">
+            <button data-v="easy">Easy</button><button data-v="medium" class="on">Medium</button><button data-v="hard">Hard</button>
+          </div>
+          <div class="settings-grid gp-laps">
+            <label>Qualifying<select id="gp-quali"></select></label>
+            <label>Race<select id="gp-race"></select></label>
+          </div>
+        </div>
+        <div class="col wide">
+          <h3>Choose your driver</h3>
+          <div class="drivers" id="gp-drivers"></div>
         </div>
       </div>
     </section>
@@ -124,7 +155,12 @@
       </div>
       <div class="results-foot">
         <span id="results-note"></span>
-        <button class="btn red" id="results-lobby">Back to lobby</button>
+        <div class="foot-btns">
+          <button class="btn ghost" id="results-menu">Back to menu</button>
+          <button class="btn" id="results-again">Race again</button>
+          <button class="btn red" id="results-next">Start the race</button>
+          <button class="btn red" id="results-lobby">Back to lobby</button>
+        </div>
       </div>
     </section>
   </div>
@@ -136,7 +172,7 @@
       <p class="muted" id="pause-note"></p>
       <button class="btn red big" id="pause-resume">Resume</button>
       <button class="btn" data-act="settings">Settings</button>
-      <button class="btn" id="pause-restart">Restart practice</button>
+      <button class="btn" id="pause-restart">Restart</button>
       <button class="btn ghost" id="pause-quit">Quit to menu</button>
     </div>
   </div>
@@ -161,12 +197,18 @@
 
   <div id="toast"></div>
 
+  <div id="pausebtn" class="hidden">
+    <button type="button" aria-label="Pause"><span></span><span></span></button>
+    <div class="lbl">Pause (P)</div>
+  </div>
+
   <script src="/socket.io/socket.io.js"></script>
   <script src="/shared/data.js"></script>
   <script src="/shared/tracks.js"></script>
   <script src="/shared/sim.js"></script>
   <script src="js/util.js"></script>
   <script src="js/render.js"></script>
+  <script src="js/hud.js"></script>
   <script src="js/game-local.js"></script>
   <script src="js/game-online.js"></script>
   <script src="js/main.js"></script>
