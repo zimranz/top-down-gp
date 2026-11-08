@@ -201,7 +201,7 @@
     function off(i, d) { return [X[i] + NX[i] * d, Y[i] + NY[i] * d]; }
     for (let c0 = 0; c0 < N; c0 += CH) {
       const c1 = Math.min(N, c0 + CH);
-      const ch = { center: new Path2D(), runoff: [], edges: new Path2D(), kerbR: new Path2D(), kerbW: new Path2D(), gravel: new Path2D(), cx: 0, cy: 0, r: 0 };
+      const ch = { center: new Path2D(), runoff: [], edges: new Path2D(), kerbR: new Path2D(), kerbW: new Path2D(), kerbAll: new Path2D(), gravel: new Path2D(), cx: 0, cy: 0, r: 0 };
       let sx = 0, sy = 0;
       for (let k = c0; k <= c1; k++) {
         const i = k % N;
@@ -233,17 +233,20 @@
       for (let k = c0; k < c1; k++) {
         const i = k % N, j = (k + 1) % N;
         if (T.kerb[i] && T.kerb[j]) {
-          const path = (Math.floor(k / 1) % 2 === 0) ? ch.kerbR : ch.kerbW;
+          // the whole kerb is filled white, then the red blocks go on top: no seams between blocks
+          const path = k % 2 === 0 ? ch.kerbR : ch.kerbW;
           for (const side of [-1, 1]) {
             const a = off(i, side * (hw - 0.2)), b = off(j, side * (hw - 0.2)), c = off(j, side * (hw + T.kerbW)), d = off(i, side * (hw + T.kerbW));
-            path.moveTo(a[0], a[1]); path.lineTo(b[0], b[1]); path.lineTo(c[0], c[1]); path.lineTo(d[0], d[1]); path.closePath();
+            for (const pth of [path, ch.kerbAll]) { pth.moveTo(a[0], a[1]); pth.lineTo(b[0], b[1]); pth.lineTo(c[0], c[1]); pth.lineTo(d[0], d[1]); pth.closePath(); }
           }
         }
         for (const side of [-1, 1]) {
           const bit = side < 0 ? 1 : 2;
           if ((T.gravel[i] & bit) && (T.gravel[j] & bit)) {
             const w1 = T.wall[i] - 1.2, w2 = T.wall[j] - 1.2;
-            const a = off(i, side * (hw + 1.5)), b = off(j, side * (hw + 1.5)), c = off(j, side * w2), d = off(i, side * w1);
+            // starts just under the track edge (the kerbs are drawn on top), so no grass shows next to the kerbs or the track
+            const g0 = hw - 0.25;
+            const a = off(i, side * g0), b = off(j, side * g0), c = off(j, side * w2), d = off(i, side * w1);
             ch.gravel.moveTo(a[0], a[1]); ch.gravel.lineTo(b[0], b[1]); ch.gravel.lineTo(c[0], c[1]); ch.gravel.lineTo(d[0], d[1]); ch.gravel.closePath();
           }
         }
@@ -364,17 +367,20 @@
 
   // ------------------------------------------------------------- camera
   /* The car always stays in the upper-middle of the screen, clear of the dashboard at the bottom. */
-  Renderer.prototype.updateCamera = function (focus, dt, rotate) {
+  /* Camera distance: close / normal / far (zoom multiplier). */
+  const ZOOM = { close: 1.45, normal: 1, far: 0.62 };
+
+  Renderer.prototype.updateCamera = function (focus, dt, rotate, distance) {
     const cam = this.cam, W = this.w, H = this.h;
     const sp = focus ? Math.hypot(focus.vx || 0, focus.vy || 0) : 0;
-    const base = F1.clamp(Math.min(W, H) / 88, 4.2, 13);
+    const base = F1.clamp(Math.min(W, H) / 88, 4.2, 13) * (ZOOM[distance] || 1);
     const zT = this.zoomOverride || base * (1 - 0.3 * Math.min(1, sp / 85));
     const dash = 130;                                   // space taken by the dashboard at the bottom
     if (!cam.ready && focus) {
       cam.x = focus.x; cam.y = focus.y; cam.a = focus.a; cam.z = zT; cam.lx = 0; cam.ly = 0; cam.ready = true;
     }
     if (!focus) return;
-    cam.z += (zT - cam.z) * Math.min(1, dt * 1.6);
+    cam.z += (zT - cam.z) * Math.min(1, dt * 2.4);
     cam.a += F1.wrapAngle(focus.a - cam.a) * Math.min(1, dt * 7);
     cam.rotate = rotate;
     cam.ax = W / 2;
@@ -465,8 +471,8 @@
     ctx.lineJoin = 'round'; ctx.lineCap = 'round';
     ctx.strokeStyle = COL.asphalt; ctx.lineWidth = 2 * T.hw;
     ctx.stroke(merge('center'));
+    ctx.fillStyle = COL.kerbW; ctx.fill(merge('kerbAll'));
     ctx.fillStyle = COL.kerbR; ctx.fill(merge('kerbR'));
-    ctx.fillStyle = COL.kerbW; ctx.fill(merge('kerbW'));
     ctx.strokeStyle = COL.line; ctx.lineWidth = 0.28; ctx.lineCap = 'butt';
     ctx.stroke(merge('edges'));
     ctx.fillStyle = '#f5f5f5'; ctx.fill(G.chequerW);
@@ -487,8 +493,6 @@
       ctx.stroke(sk);
     }
 
-    // marshal posts waving yellow flags before an incident
-    if (frame.yellow && frame.yellow.length) { ctx.save(); this.drawMarshals(ctx, T, frame.yellow, vc, vr); ctx.restore(); }
 
     // cars
     const cars = frame.cars;
@@ -496,10 +500,10 @@
       const c = cars[i];
       if (Math.abs(c.x - vc[0]) > vr + 6 || Math.abs(c.y - vc[1]) > vr + 6) continue;
       if (c.me) this.drawMeGlow(ctx, c);
-      ctx.globalAlpha = c.ghost ? 0.42 : 1;
+      ctx.globalAlpha = c.replay ? 0.38 : c.ghost ? 0.42 : 1;
       this.drawCar(ctx, c, c.team, c.delta || 0, c.drsOpen);
       ctx.globalAlpha = 1;
-      this.trackSkids(c, T);
+      if (!c.replay) this.trackSkids(c, T);
     }
 
     // particles
@@ -515,39 +519,6 @@
       if (sp[0] < -60 || sp[1] < -60 || sp[0] > this.w + 60 || sp[1] > this.h + 60) continue;
       if (c.me) this.drawYouTag(ctx, sp[0], sp[1] - 3.6 * cam.z - 14);
       else if (frame.labels) this.drawLabel(ctx, sp[0], sp[1] - 3.2 * cam.z - 8, c);
-    }
-  };
-
-  /* Flag-waving marshals at the barrier, 200 m and 90 m before each incident (both sides of the track). */
-  Renderer.prototype.drawMarshals = function (ctx, T, zones, vc, vr) {
-    const t = performance.now() / 1000;
-    const on = Math.floor(t * 3) % 2 === 0;
-    for (let k = 0; k < zones.length; k++) {
-      for (const back of [200, 90]) {
-        const s = zones[k][0] - back, i = F1.idxAt(T, s);
-        for (const side of [-1, 1]) {
-          const pitSide = T.pit && side === T.pit.side && T.pitWall[i];   // between the track and the pit wall
-          const d = side * (pitSide ? T.hw + 2.4 : Math.min(T.hw + 6, F1.wallAt(T, i, side) - 1.6));
-          const p = F1.trackPoint(T, s, d);
-          if (Math.abs(p.x - vc[0]) > vr + 10 || Math.abs(p.y - vc[1]) > vr + 10) continue;
-          // marshal post: white box with an orange roof
-          ctx.save();
-          ctx.translate(p.x, p.y); ctx.rotate(p.h); ctx.scale(1.5, 1.5);
-          ctx.fillStyle = 'rgba(0,0,0,0.3)'; ctx.fillRect(-0.9, -0.7, 2, 1.6);
-          ctx.fillStyle = '#f2f2f2'; ctx.fillRect(-1.1, -0.9, 2, 1.6);
-          ctx.fillStyle = '#ff7a00'; ctx.fillRect(-1.1, -0.9, 2, 0.45);
-          // waving flag
-          const wave = Math.sin(t * 9 + k + back) * 0.5;
-          ctx.strokeStyle = '#222'; ctx.lineWidth = 0.12;
-          ctx.beginPath(); ctx.moveTo(0.9, 0); ctx.lineTo(0.9, -side * 2.2); ctx.stroke();
-          ctx.fillStyle = on ? '#ffd600' : '#e6b800';
-          ctx.beginPath();
-          ctx.moveTo(0.9, -side * 2.2); ctx.lineTo(0.9 + 1.5 + wave * 0.3, -side * (2.2 - wave * 0.2));
-          ctx.lineTo(0.9 + 1.5 + wave * 0.3, -side * (1.2 - wave * 0.2)); ctx.lineTo(0.9, -side * 1.2);
-          ctx.closePath(); ctx.fill();
-          ctx.restore();
-        }
-      }
     }
   };
 
@@ -891,26 +862,11 @@
       roundRect(ctx, mx, my, ms, ms, 8); ctx.fill();
       ctx.drawImage(mm.canvas, mx, my, ms, ms);
       const k = ms / mm.size;
-      if (hud.yellow && hud.yellow.length) {
-        const T = frame.track;
-        ctx.strokeStyle = Math.floor(performance.now() / 300) % 2 ? '#ffd600' : '#ffb000';
-        ctx.lineWidth = 6; ctx.lineCap = 'round'; ctx.lineJoin = 'round';
-        for (let z = 0; z < hud.yellow.length; z++) {
-          ctx.beginPath();
-          for (let ds = -200; ds <= 50; ds += 10) {
-            const p = F1.trackPoint(T, hud.yellow[z][0] + ds, 0);
-            const px = mx + (p.x * mm.sc + mm.ox) * k, py = my + (p.y * mm.sc + mm.oy) * k;
-            if (ds === -200) ctx.moveTo(px, py); else ctx.lineTo(px, py);
-          }
-          ctx.stroke();
-        }
-        ctx.lineCap = 'butt';
-      }
       const cars = frame.cars;
       for (let pass = 0; pass < 2; pass++) {
         for (let i = 0; i < cars.length; i++) {
           const c = cars[i];
-          if (!!c.me !== (pass === 1)) continue;
+          if (!!c.me !== (pass === 1) || c.replay) continue;
           const px = mx + (c.x * mm.sc + mm.ox) * k, py = my + (c.y * mm.sc + mm.oy) * k;
           ctx.beginPath(); ctx.arc(px, py, c.me ? 5 : 3, 0, TAU);
           ctx.fillStyle = F1.teamUiColor(c.team); ctx.fill();
@@ -925,7 +881,6 @@
         ctx.fillText(hud.timeLeft, mx + ms / 2, fy + 13);
         fy += 34;
       }
-      if (hud.flag) this.drawFlagPanel(ctx, hud.flag, mx, fy, ms);
     }
 
     // ---- start lights (top-centre)
@@ -1054,39 +1009,6 @@
       ctx.textAlign = 'right';
       ctx.fillText('PING ' + hud.ping + ' ms', W - 92, H - 18);
     }
-  };
-
-  /* Yellow / blue flag board under the minimap. */
-  Renderer.prototype.drawFlagPanel = function (ctx, kind, x, y, w) {
-    const t = performance.now() / 1000;
-    const yellow = kind === 'yellow';
-    const h = 50;
-    ctx.fillStyle = 'rgba(10,10,14,0.9)';
-    roundRect(ctx, x, y, w, h, 6); ctx.fill();
-    ctx.lineWidth = 2;
-    ctx.strokeStyle = yellow ? (Math.floor(t * 3) % 2 ? '#ffd600' : '#a88d00') : (Math.floor(t * 3) % 2 ? '#2f7bff' : '#1747a8');
-    roundRect(ctx, x + 1, y + 1, w - 2, h - 2, 6); ctx.stroke();
-    // waving flag icon
-    const fx = x + 12, fy = y + 10, wave = Math.sin(t * 8) * 2;
-    ctx.strokeStyle = '#d0d4d9'; ctx.lineWidth = 2;
-    ctx.beginPath(); ctx.moveTo(fx, fy - 2); ctx.lineTo(fx, fy + 32); ctx.stroke();
-    ctx.fillStyle = yellow ? '#ffd600' : '#1f6bff';
-    ctx.beginPath();
-    ctx.moveTo(fx + 1, fy); ctx.quadraticCurveTo(fx + 12, fy - 3 + wave, fx + 24, fy + wave * 0.6);
-    ctx.lineTo(fx + 24, fy + 17 + wave * 0.6); ctx.quadraticCurveTo(fx + 12, fy + 14 + wave, fx + 1, fy + 17);
-    ctx.closePath(); ctx.fill();
-    if (!yellow) { ctx.strokeStyle = '#ffd600'; ctx.lineWidth = 2; ctx.beginPath(); ctx.moveTo(fx + 2, fy + 13); ctx.lineTo(fx + 23, fy + 4 + wave * 0.6); ctx.stroke(); }
-    ctx.textAlign = 'left';
-    const room = w - 52;
-    let fs = w < 150 ? 12 : 15;
-    ctx.fillStyle = '#fff'; ctx.font = '800 ' + fs + 'px ' + FONT;
-    ctx.fillText(yellow ? 'YELLOW FLAG' : 'BLUE FLAG', x + 44, y + 18);
-    const sub = yellow ? 'SLOW DOWN · NO OVERTAKING' : 'LET THE LEADER THROUGH';
-    fs = w < 150 ? 9 : 11;
-    ctx.font = '700 ' + fs + 'px ' + FONT;
-    while (fs > 7 && ctx.measureText(sub).width > room) { fs -= 0.5; ctx.font = '700 ' + fs + 'px ' + FONT; }
-    ctx.fillStyle = yellow ? '#ffe680' : '#9cc0ff';
-    ctx.fillText(sub, x + 44, y + 35);
   };
 
   /* Small car preview for menus. */

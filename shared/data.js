@@ -3,12 +3,15 @@
   'use strict';
   const F1 = (root.F1 = root.F1 || {});
 
+  // Game version: goes up by one with every update
+  F1.VERSION = 6;
+
   // Simple livery colours: primary = main body, secondary = engine cover / wings, accent = helmet & details.
   // ui = the team colour used for menus, the timing tower, labels and the minimap (bright on dark backgrounds).
   F1.TEAMS = [
     { id: 'mclaren',  name: 'McLaren',         primary: '#FF8000', secondary: '#232326', accent: '#FFFFFF', ui: '#FF8000' },
     { id: 'mercedes', name: 'Mercedes',        primary: '#C3C9CD', secondary: '#141414', accent: '#00D2BE', ui: '#27F4D2' },
-    { id: 'redbull',  name: 'Red Bull Racing', primary: '#1C2B5E', secondary: '#E10600', accent: '#FFC906', ui: '#3671C6' },
+    { id: 'redbull',  name: 'Red Bull Racing', primary: '#1C2B5E', secondary: '#E10600', accent: '#FFC906', ui: '#2445D1' },
     { id: 'ferrari',  name: 'Ferrari',         primary: '#DC0000', secondary: '#F4F4F4', accent: '#FFE600', ui: '#E8002D' },
     { id: 'williams', name: 'Williams',        primary: '#0F3FA8', secondary: '#00A3E0', accent: '#FFFFFF', ui: '#64C4FF' },
     { id: 'rb',       name: 'Racing Bulls',    primary: '#F2F3F5', secondary: '#2148D6', accent: '#E10600', ui: '#6692FF' },

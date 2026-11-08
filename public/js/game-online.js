@@ -60,7 +60,6 @@
     this.tmpA = {}; this.tmpB = {}; this.tmpC = {};
     this.started = performance.now();
     this.collide = info.type === 'race';
-    this.yellow = [];
     this.near = [];       // nearby cars (track position) for dirty air on our own car
   }
 
@@ -121,7 +120,6 @@
     own.drsOpen = !!(flags & 1); own.locked = !!(flags & 2); own.slide = !!(flags & 4);
     own.drsElig[0] = !!(flags & 8); own.drsElig[1] = !!(flags & 16);
     own.finished = !!(flags & 32);
-    own.blueFlag = !!(flags & 128);
     F1.queryTrack(this.T, own.x, own.y, own.seg, Q);
     own.seg = Q.idx; own.s = Q.s; own.d = Q.d; own.dist = Q.dist;
     for (let k = 0; k < this.pending.length; k++) this.simulate(this.pending[k].inp, k + 1, t);
@@ -191,7 +189,6 @@
       rows[a[0]] = { laps: a[1], last: a[2] < 0 ? null : a[2], best: a[3] < 0 ? null : a[3], gap: a[4], lapStart: a[5] < 0 ? null : a[5], fin: !!(a[6] & 1), out: !!(a[6] & 2), qdone: !!(a[6] & 4), dist: a[7] };
     }
     this.rows = rows;
-    this.yellow = t.y || [];
   };
 
   OnlineGame.prototype.code = function (id) {
@@ -279,9 +276,9 @@
       }
     }
     if (!focus && cars.length) focus = cars[0];
-    const frame = { track: this.T, cars: cars, labels: window.Settings.data.labels, yellow: this.yellow,
+    const frame = { track: this.T, cars: cars, labels: window.Settings.data.labels,
       lights: this.phase === 0 ? this.lights : 0, pitRed: this.phase === 0 && this.type === 'race' };
-    R.updateCamera(focus, dt, window.Settings.data.camera === 'rotate');
+    R.updateCamera(focus, dt, window.Settings.data.camera === 'rotate', window.Settings.data.zoom);
     for (let i = 0; i < this.fx.length; i++) {
       const f = this.fx[i];
       R.sparks(f[0], f[1], f[2]);
@@ -329,8 +326,7 @@
       timeLeft: tm && tm.tl >= 0 ? tm.tl : -1,
       fastestId: tm && tm.f ? tm.f[0] : null,
       own: this.own, msgs: this.msgs, ping: this.net.ping,
-      started: this.started, wrongT: this.wrongT, stuckT: this.stuckT,
-      yellow: this.yellow, blue: !!(this.own && this.own.blueFlag)
+      started: this.started, wrongT: this.wrongT, stuckT: this.stuckT
     });
   };
 

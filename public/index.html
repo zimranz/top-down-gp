@@ -23,13 +23,15 @@
       <div class="menu">
         <button class="btn big" data-go="practice">Practice</button>
         <button class="btn big" data-go="gp">Grand Prix</button>
+        <button class="btn big" data-go="champ">Championship</button>
         <button class="btn big red" data-go="online">Online with friends</button>
         <button class="btn" data-act="settings">Settings</button>
       </div>
       <div class="keys">
         <span><b>↑ / W</b> throttle</span><span><b>↓ / S</b> brake</span><span><b>← → / A D</b> steer</span>
-        <span><b>Shift / Space</b> DRS</span><span><b>R</b> reset car</span><span><b>Esc</b> pause</span>
+        <span><b>Shift / Space</b> DRS</span><span><b>R</b> reset car</span><span><b>C</b> camera</span><span><b>Esc</b> pause</span>
       </div>
+      <div class="version" id="version"></div>
     </section>
 
     <!-- PRACTICE SETUP -->
@@ -90,6 +92,75 @@
         <div class="col wide">
           <h3>Choose your driver</h3>
           <div class="drivers" id="gp-drivers"></div>
+        </div>
+      </div>
+    </section>
+
+    <!-- CHAMPIONSHIP SETUP -->
+    <section id="champ" class="screen panel">
+      <div class="panel-head">
+        <button class="btn ghost" data-go="home">← Back</button>
+        <h2>Championship</h2>
+        <button class="btn red" id="champ-start">Start season</button>
+      </div>
+      <div class="champ-continue hidden" id="champ-continue">
+        <div class="cc-text"><b id="cc-title">Season in progress</b><span id="cc-sub"></span></div>
+        <button class="btn ghost" id="cc-standings">Standings</button>
+        <button class="btn red" id="cc-go">Continue season</button>
+      </div>
+      <div class="weekend-bar">
+        <span class="wk-title">Every weekend</span>
+        <label>Practice 1<select id="champ-p1"></select></label>
+        <label>Practice 2<select id="champ-p2"></select></label>
+        <label>Practice 3<select id="champ-p3"></select></label>
+        <label>Qualifying<select id="champ-quali"></select></label>
+        <label>Race<select id="champ-race"></select></label>
+        <span class="wk-note">Points: 25-18-15-12-10-8-6-4-2-1 for the top 10</span>
+      </div>
+      <div class="cols">
+        <div class="col narrow">
+          <h3>Calendar</h3>
+          <p class="note cal-note">Click the tracks in the order you want to race them (2 to 5 races).</p>
+          <div class="tracks" id="champ-tracks"></div>
+          <h3>Opponents</h3>
+          <div class="row"><input type="range" id="champ-ai" min="1" max="21" value="15"><span class="val" id="champ-ai-val">15</span></div>
+          <p class="note">The same rivals race you all season.</p>
+          <h3>AI difficulty</h3>
+          <div class="seg" id="champ-level">
+            <button data-v="easy">Easy</button><button data-v="medium" class="on">Medium</button><button data-v="hard">Hard</button>
+          </div>
+        </div>
+        <div class="col wide">
+          <h3>Choose your driver</h3>
+          <div class="drivers" id="champ-drivers"></div>
+        </div>
+      </div>
+    </section>
+
+    <!-- CHAMPIONSHIP STANDINGS -->
+    <section id="standings" class="screen panel">
+      <div class="panel-head">
+        <span></span>
+        <h2 id="st-title">Standings</h2>
+        <span></span>
+      </div>
+      <div class="champ-banner hidden" id="st-banner"></div>
+      <div class="standings-wrap">
+        <div class="st-drivers">
+          <h3>Drivers</h3>
+          <table class="results standings"><thead id="st-drivers-head"></thead><tbody id="st-drivers"></tbody></table>
+        </div>
+        <div class="st-teams">
+          <h3>Constructors</h3>
+          <table class="results standings"><thead><tr><th>Pos</th><th>Team</th><th class="r">Pts</th></tr></thead><tbody id="st-teams"></tbody></table>
+        </div>
+      </div>
+      <div class="results-foot">
+        <span id="st-note"></span>
+        <div class="foot-btns">
+          <button class="btn ghost" id="st-menu">Back to menu</button>
+          <button class="btn" id="st-new">New season</button>
+          <button class="btn red" id="st-next">Next race</button>
         </div>
       </div>
     </section>
@@ -163,6 +234,7 @@
         <div class="foot-btns">
           <button class="btn ghost" id="results-menu">Back to menu</button>
           <button class="btn" id="results-restart">Restart weekend</button>
+          <button class="btn red" id="results-standings">Championship standings</button>
           <button class="btn" id="results-again">Race again</button>
           <button class="btn red" id="results-next">Start the race</button>
           <button class="btn red" id="results-lobby">Back to lobby</button>
@@ -197,7 +269,13 @@
           <button data-v="rotate">Rotate with car</button><button data-v="fixed">Fixed (north up)</button>
         </div>
       </label>
+      <label>Camera distance <span class="muted-inline">(press C while driving)</span>
+        <div class="seg" id="set-zoom">
+          <button data-v="close">Close</button><button data-v="normal">Normal</button><button data-v="far">Far</button>
+        </div>
+      </label>
       <label class="check"><input type="checkbox" id="set-labels"> Show driver names above cars</label>
+      <label class="check"><input type="checkbox" id="set-ghost"> Ghost car of your best lap (practice sessions)</label>
       <div class="sound-box">
         <div class="sound-head"><span>Sound</span><label class="check"><input type="checkbox" id="set-mute"> Mute (M)</label></div>
         <label class="slider small"><span class="slider-title">Master <b id="set-vol-master-val">80</b></span><input type="range" id="set-vol-master" min="0" max="100" step="5"></label>
@@ -226,6 +304,7 @@
   <script src="/shared/sim.js"></script>
   <script src="js/util.js"></script>
   <script src="js/audio.js"></script>
+  <script src="js/ghost.js"></script>
   <script src="js/render.js"></script>
   <script src="js/hud.js"></script>
   <script src="js/game-local.js"></script>

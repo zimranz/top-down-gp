@@ -63,7 +63,7 @@
       x: g.x, y: g.y, a: g.h, vx: 0, vy: 0, w: 0, delta: 0,
       seg: -1, s: 0, d: 0, dist: 0, surf: 0,
       slide: false, drsOpen: false, drsAllowed: false, locked: false,
-      resetCd: 0, wallHit: 0, out: false, dirty: 1, blue: -1, lockFx: false,
+      resetCd: 0, wallHit: 0, out: false, dirty: 1, lockFx: false,
       px: g.x, py: g.y, pa: g.h
     };
     F1.queryTrack(T, c.x, c.y, -1, Q);
@@ -199,7 +199,6 @@
     const latRef = Math.min(P.LAT_MAX, P.LAT0 + P.LAT_K * sp * sp);
     let latAvail = latRef * grip;
     if (c.dirty < 1) latAvail *= c.dirty;          // dirty air behind another car
-    if (brk > 0 && vf > 2) latAvail *= 1 - 0.28 * brk;
     const vfa = Math.abs(vf);
 
     // steering is a proportion of the grip-limited angle, so keyboard steering works at any speed
@@ -500,7 +499,6 @@
     const room = T.hw - 1.05;
     const cv = c.vx * T.tx[c.seg] + c.vy * T.ty[c.seg];      // speed along the track
     const zones = F1.brakeZones(T, S.aiLevel);
-    const yellow = S.yellowAt(c.s);
     const race = S.type === 'race';
     const iv = F1.idxAt(T, c.s + sp * 0.12);
     const vFree = prof[iv] * ai.pace;
@@ -568,30 +566,23 @@
       const w = clamp((S.firstBrake - 30 - c.raceDist) / 170, 0, 1);
       if (w > 0) want = want * (1 - w) + ai.gridLane * w;
     }
-    // blue flag: move off the racing line and let the faster car through
-    let blueNear = false;
-    if (c.blue >= 0) {
-      const o = S.byId[c.blue];
-      if (o) { const dS = wrapD(o.s - c.s, L); if (dS < 0 && dS > -110) blueNear = true; }
-    }
-    if (blueNear && vFree > 55) want = (T.rlOff[i] > 0 ? -1 : 1) * (room - 0.8);
 
     // overtaking, or getting round a slow / stopped car
     let passing = false, urgent = false;
     if (ai.pass) {
       const o = S.byId[ai.pass.id];
       const dS = o && !o.out ? wrapD(o.s - c.s, L) : 999;
-      if (dS < -9 || dS > 80 || now - ai.pass.t > 12 || (yellow && !ai.pass.urgent && dS > 7.5) || blueNear) ai.pass = null;
+      if (dS < -9 || dS > 80 || now - ai.pass.t > 12) ai.pass = null;
       else {
         const lane = clamp(o.d + ai.pass.side * 2.9, -room - 0.3, room + 0.3);
         if (Math.abs(lane - o.d) < 2.6 || !laneClear(S, c, lane, o.id, -6, Math.max(12, dS + 25))) ai.pass = null;
         else { want = lane; passing = true; urgent = ai.pass.urgent; }
       }
     }
-    if (!ai.pass && lead && !blueNear) {
+    if (!ai.pass && lead) {
       const closing = cv - leadV;
       const slow = leadV < Math.max(8, cv * 0.6);
-      if (leadGap < (slow ? 90 : 38) && (slow || (!yellow && (closing > 1 || (leadGap < 14 && vFree > leadV + 2))))) {
+      if (leadGap < (slow ? 90 : 38) && (slow || closing > 1 || (leadGap < 14 && vFree > leadV + 2))) {
         let best = 0, bestScore = -Infinity;
         for (let side = -1; side <= 1; side += 2) {
           const lane = lead.d + side * 2.9;
@@ -652,8 +643,6 @@
     if (c.dirty < 1 && vt < 80) vt *= Math.sqrt(c.dirty);            // lift a touch in dirty air
     const offLine = Math.abs(latT - T.rlOff[i]);
     if (offLine > 1.5 && vt < 70) vt *= 1 - Math.min(0.08, (offLine - 1.5) * 0.015);   // off line = less grip
-    if (yellow) vt *= 0.92;                                            // yellow flag: lift
-    if (blueNear) vt *= vFree > 55 ? 0.97 : 0.93;
     const lim = F1.speedProfile(T, 'limit')[iv];
     if (mkType === 'wide' && mkRel > mk.apexRel - 40 && mkRel < mk.apexRel + 40) vt = Math.max(vt, lim * (1.03 + 0.07 * mk.sev));
     if (lead) {   // keep a safe gap to the car in front: always able to slow to its speed in time
@@ -676,7 +665,7 @@
       if (vArc < vt) vt = vArc;
     }
     if (offTrack) { vt = Math.min(vt, 30); if (rejoinBlocked) vt = Math.min(vt, 12); }
-    if (F1.DEBUG_AI) { ai.dbg = { lo: lo, hi: hi, want: want, latT: latT, vt: vt, vFree: vFree, lead: lead ? lead.id : -1, leadGap: leadGap, leadV: leadV, pass: ai.pass ? ai.pass.id + (ai.pass.side > 0 ? 'R' : 'L') : '', mk: mkType || '', yellow: yellow, blue: blueNear, chased: chased }; }
+    if (F1.DEBUG_AI) { ai.dbg = { lo: lo, hi: hi, want: want, latT: latT, vt: vt, vFree: vFree, lead: lead ? lead.id : -1, leadGap: leadGap, leadV: leadV, pass: ai.pass ? ai.pass.id + (ai.pass.side > 0 ? 'R' : 'L') : '', mk: mkType || '', chased: chased }; }
     if (sp > vt + 1.0) { inp.throttle = 0; inp.brake = Math.min(1, (sp - vt) / 5 + 0.3); }
     else if (sp > vt - 0.5) { inp.throttle = 0.35; inp.brake = 0; }
     else { inp.throttle = 1; inp.brake = 0; }
@@ -783,7 +772,6 @@
     this.loopFirst = [];
     this.detLast = T.drs.map(function () { return null; });
     this.results = null;
-    this.yellow = [];                     // yellow flag zones: {id, s, until}
     // first braking zone after the start line (AI hold their grid lanes until then on lap 1)
     const bz = F1.brakeZones(T, this.aiLevel).filter(function (z) { return z.s > 30; });
     this.firstBrake = bz.length ? bz[0].s : null;
@@ -848,7 +836,6 @@
     this.tick++;
     this.time += dt;
     this.updatePhase();
-    if (this.tick % 6 === 0) this.updateFlags();
     const cars = this.cars, L = T.length;
     for (let i = 0; i < cars.length; i++) {
       const c = cars[i];
@@ -891,46 +878,6 @@
         if (imp > 1500) this.fx.push([Math.round(F1.lastContact.x * 10) / 10, Math.round(F1.lastContact.y * 10) / 10, Math.round(imp)]);
       }
     }
-  };
-
-  /* Yellow flags where a car has stopped, spun or is crawling off the track; blue flags for cars about
-     to be lapped. Runs 10 times a second. */
-  Session.prototype.updateFlags = function () {
-    const T = this.track, L = T.length, now = this.time, cars = this.cars;
-    if (this.phase === 'countdown') return;
-    const started = this.type !== 'race' || (this.startTime !== null && now > this.startTime + 4);
-    for (let i = 0; i < cars.length; i++) {
-      const c = cars[i];
-      if (c.out || c.inPit || !started) continue;
-      const sp = Math.hypot(c.vx, c.vy);
-      const ang = Math.abs(F1.wrapAngle(c.a - T.hd[c.seg]));
-      if ((ang > 0.9 && sp < 35) || sp < 6 || (c.dist > T.hw + 2.5 && sp < 30)) {
-        let z = null;
-        for (let k = 0; k < this.yellow.length; k++) if (this.yellow[k].id === c.id) z = this.yellow[k];
-        if (!z) { z = { id: c.id, s: c.s, until: 0 }; this.yellow.push(z); }
-        z.s = c.s; z.until = now + 3;
-      }
-    }
-    this.yellow = this.yellow.filter(function (z) { return z.until > now; });
-    for (let i = 0; i < cars.length; i++) {
-      const c = cars[i];
-      c.blue = -1;
-      if (this.type !== 'race' || c.out || c.finished || this.phase === 'countdown') continue;
-      for (let j = 0; j < cars.length; j++) {
-        const o = cars[j];
-        if (o === c || o.out || o.raceDist - c.raceDist < L * 0.5) continue;
-        const dS = wrapD(c.s - o.s, L);              // o is behind c on the road...
-        if (dS > 0 && dS < 150) { c.blue = o.id; break; }   // ...but a lap ahead in the race
-      }
-    }
-  };
-
-  /* Is track position s inside a yellow flag zone (from 200 m before the incident to 50 m after)? */
-  Session.prototype.yellowAt = function (s) {
-    for (let k = 0; k < this.yellow.length; k++) {
-      if (F1.wrapS(s - this.yellow[k].s + 200, this.track.length) < 250) return true;
-    }
-    return false;
   };
 
   Session.prototype.updatePhase = function () {

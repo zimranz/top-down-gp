@@ -5,13 +5,15 @@
 
   // ------------------------------------------------------------- settings
   const Settings = {
-    data: { steering: 5, camera: 'rotate', labels: true, name: '' },
+    data: { steering: 5, camera: 'rotate', zoom: 'normal', labels: true, name: '' },
     load: function () {
       try {
         const raw = window.localStorage.getItem('topdowngp.settings');
         if (raw) Object.assign(this.data, JSON.parse(raw));
       } catch (e) { /* storage unavailable: keep defaults */ }
       this.data.steering = F1.clamp(Math.round(Number(this.data.steering) || 5), 1, 12);
+      if (['close', 'normal', 'far'].indexOf(this.data.zoom) < 0) this.data.zoom = 'normal';
+      if (typeof this.data.ghost !== 'boolean') this.data.ghost = true;
     },
     save: function () {
       try { window.localStorage.setItem('topdowngp.settings', JSON.stringify(this.data)); } catch (e) { /* ignore */ }

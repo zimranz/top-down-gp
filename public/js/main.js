@@ -7,6 +7,7 @@
   Settings.load();
   Input.init();
   const GameAudio = window.GameAudio;
+  $('version').textContent = 'Version ' + F1.VERSION;
   GameAudio.load();
   // menu clicks: a rising sound for the big red buttons, a falling one for going back, a tap for the rest
   document.addEventListener('click', function (e) {
@@ -28,7 +29,10 @@
   const gpOpts = Object.assign({ track: 'monza', driverId: 'NOR', aiCount: 15, aiLevel: 'medium', p1: 0, p2: 0, p3: 0, qualiLaps: 2, raceLaps: 5 }, Settings.data.gp || {});
   if (!F1.TRACK_DEFS[practiceOpts.track]) practiceOpts.track = 'monza';
   if (!F1.TRACK_DEFS[gpOpts.track]) gpOpts.track = 'monza';
-  let gp = null;               // current Grand Prix weekend { opts, aiDrivers, grid, stages, idx }
+  let gp = null;               // current Grand Prix weekend { opts, aiDrivers, grid, stages, idx, champ }
+  const champOpts = Object.assign({ driverId: 'NOR', aiCount: 15, aiLevel: 'medium', p1: 0, p2: 0, p3: 0, qualiLaps: 2, raceLaps: 5,
+    calendar: ['silverstone', 'spa', 'monza', 'interlagos', 'abudhabi'] }, Settings.data.champ || {});
+  champOpts.calendar = (champOpts.calendar || []).filter(function (id) { return F1.TRACK_DEFS[id]; });
   const STAGE_NAME = { p1: 'Practice 1', p2: 'Practice 2', p3: 'Practice 3', quali: 'Qualifying', race: 'Race' };
   let resultsCtx = 'online';   // which buttons the results screen shows
 
@@ -48,6 +52,7 @@
   function toast(msg) {
     const t = $('toast');
     t.textContent = msg;
+    t.classList.toggle('high', mode !== 'menu' && !!game && game.kind !== 'attract');   // above the dashboard while driving
     t.classList.add('show');
     clearTimeout(toastT);
     toastT = setTimeout(function () { t.classList.remove('show'); }, 2600);
@@ -189,9 +194,12 @@
     Settings.data.gp = Object.assign({}, gpOpts);
     Settings.save();
     const pool = F1.DRIVERS.map(function (d) { return d.id; }).filter(function (id) { return id !== gpOpts.driverId; });
-    gp = { opts: Object.assign({}, gpOpts), aiDrivers: shuffled(pool).slice(0, gpOpts.aiCount), grid: null, stages: [], idx: 0 };
-    ['p1', 'p2', 'p3'].forEach(function (k) { if (gp.opts[k] > 0) gp.stages.push(k); });
-    if (gp.opts.qualiLaps > 0) gp.stages.push('quali');
+    newWeekend(Object.assign({}, gpOpts), shuffled(pool).slice(0, gpOpts.aiCount), null);
+  }
+  function newWeekend(opts, aiDrivers, champ) {
+    gp = { opts: opts, aiDrivers: aiDrivers, grid: null, stages: [], idx: 0, champ: champ, recorded: false };
+    ['p1', 'p2', 'p3'].forEach(function (k) { if (opts[k] > 0) gp.stages.push(k); });
+    if (opts.qualiLaps > 0) gp.stages.push('quali');
     gp.stages.push('race');
     startGpStage(0);
   }
@@ -200,18 +208,21 @@
     const type = stage === 'quali' ? 'quali' : stage === 'race' ? 'race' : 'practice';
     gp.idx = i;
     gp.stage = stage;
+    gp.recorded = false;
     if (type === 'race' && !gp.grid) gp.grid = shuffled([o.driverId].concat(gp.aiDrivers));   // no qualifying: random grid
+    const round = gp.champ ? gp.champ.rounds.length + 1 : 0;
     mode = 'gp';
     clearInterval(resultsTimer);
     game = new window.LocalGame({
       type: type, track: o.track, driverId: o.driverId, aiDrivers: gp.aiDrivers,
       grid: type === 'race' ? gp.grid : null, aiLevel: o.aiLevel, collisions: true,
       laps: type === 'race' ? o.raceLaps : type === 'quali' ? o.qualiLaps : o[stage],
-      title: type === 'practice' ? STAGE_NAME[stage].toUpperCase() : null,
+      title: round ? 'R' + round + ' ' + STAGE_NAME[stage].toUpperCase() : type === 'practice' ? STAGE_NAME[stage].toUpperCase() : null,
       onEnd: function (results) {
         if (mode !== 'gp' || game.S.results !== results) return;
         if (type === 'quali') gp.grid = results.map(function (r) { return r.driverId; });
-        showResults({ type: type, stage: stage, track: o.track, results: results }, 'gp');
+        if (type === 'race' && gp.champ && !gp.recorded) recordRound(gp.champ, o.track, results);
+        showResults({ type: type, stage: stage, track: o.track, results: results, round: round }, gp.champ ? 'champ' : 'gp');
       }
     });
     R.resetEffects();
@@ -229,12 +240,205 @@
   });
   $('results-menu').addEventListener('click', function () { goHome(); });
 
+  // ------------------------------------------------------------- championship
+  /* A season: { v, opts, calendar:[track ids], aiDrivers, rounds:[{ track, res:[{ d, pos, pts, out }] }], done }
+     saved in this browser so it can be continued later. */
+  const Champ = {
+    load: function () {
+      try {
+        const c = JSON.parse(window.localStorage.getItem('topdowngp.champ') || 'null');
+        return c && c.v === 1 && Array.isArray(c.calendar) && Array.isArray(c.rounds) ? c : null;
+      } catch (e) { return null; }
+    },
+    save: function (c) { try { window.localStorage.setItem('topdowngp.champ', JSON.stringify(c)); } catch (e) { /* ignore */ } }
+  };
+
+  function buildCalendar() {
+    const box = $('champ-tracks');
+    box.innerHTML = '';
+    Object.keys(F1.TRACK_DEFS).forEach(function (id) {
+      const T = F1.getTrack(id);
+      const b = el('button', 'track-card');
+      const cv = el('canvas');
+      b.append(cv, el('div', 'tname', T.name), el('div', 'tlen', (T.length / 1000).toFixed(3) + ' km · ' + T.country));
+      b.dataset.id = id;
+      b.addEventListener('click', function () {
+        const k = champOpts.calendar.indexOf(id);
+        if (k >= 0) champOpts.calendar.splice(k, 1); else champOpts.calendar.push(id);
+        markCalendar();
+      });
+      box.appendChild(b);
+      requestAnimationFrame(function () { Renderer.trackPreview(cv, T); });
+    });
+    markCalendar();
+  }
+  function markCalendar() {
+    $('champ-tracks').querySelectorAll('.track-card').forEach(function (b) {
+      const k = champOpts.calendar.indexOf(b.dataset.id);
+      b.classList.toggle('on', k >= 0);
+      const old = b.querySelector('.round-badge');
+      if (old) old.remove();
+      if (k >= 0) b.appendChild(el('span', 'round-badge', String(k + 1)));
+    });
+    const n = champOpts.calendar.length;
+    $('champ-start').textContent = n >= 2 ? 'Start season (' + n + ' races)' : 'Start season';
+  }
+
+  function openChamp() {
+    buildCalendar();
+    buildDrivers($('champ-drivers'), { selected: champOpts.driverId, onPick: function (id) { champOpts.driverId = id; } });
+    $('champ-ai').value = champOpts.aiCount; $('champ-ai-val').textContent = champOpts.aiCount;
+    $('champ-ai').oninput = function () { champOpts.aiCount = Number(this.value); $('champ-ai-val').textContent = this.value; };
+    segInit($('champ-level'), champOpts.aiLevel, function (v) { champOpts.aiLevel = v; });
+    ['p1', 'p2', 'p3'].forEach(function (k) {
+      lapOptions($('champ-' + k), 1, 3, champOpts[k], 'Skip');
+      $('champ-' + k).onchange = function () { champOpts[k] = Number(this.value); };
+    });
+    lapOptions($('champ-quali'), 1, 5, champOpts.qualiLaps, 'None (random grid)');
+    lapOptions($('champ-race'), 1, 7, champOpts.raceLaps);
+    $('champ-quali').onchange = function () { champOpts.qualiLaps = Number(this.value); };
+    $('champ-race').onchange = function () { champOpts.raceLaps = Number(this.value); };
+    // a season already under way?
+    const c = Champ.load();
+    $('champ-continue').classList.toggle('hidden', !c);
+    if (c) {
+      const st = standings(c), me = st.drivers.findIndex(function (r) { return r.id === c.opts.driverId; });
+      if (c.done) {
+        const w = st.drivers[0];
+        $('cc-title').textContent = 'Last season: ' + (w.id === c.opts.driverId ? 'you were World Champion!' : F1.driver(w.id).name + ' was World Champion');
+        $('cc-sub').textContent = 'You finished P' + (me + 1) + ' with ' + st.drivers[me].pts + ' points. Starting a new season replaces it.';
+        $('cc-go').style.display = 'none';
+      } else {
+        const next = F1.getTrack(c.calendar[c.rounds.length]).name;
+        $('cc-title').textContent = 'Season in progress: round ' + (c.rounds.length + 1) + ' of ' + c.calendar.length + ' — ' + next;
+        $('cc-sub').textContent = (c.rounds.length ? 'You are P' + (me + 1) + ' with ' + st.drivers[me].pts + ' points. ' : '') + 'Starting a new season replaces it.';
+        $('cc-go').style.display = '';
+      }
+    }
+    show('champ');
+  }
+  function startSeason() {
+    if (champOpts.calendar.length < 2) { toast('Pick at least 2 tracks for the calendar'); return; }
+    Settings.data.champ = JSON.parse(JSON.stringify(champOpts));
+    Settings.save();
+    const pool = F1.DRIVERS.map(function (d) { return d.id; }).filter(function (id) { return id !== champOpts.driverId; });
+    const o = champOpts;
+    const c = { v: 1, opts: { driverId: o.driverId, aiCount: o.aiCount, aiLevel: o.aiLevel, p1: o.p1, p2: o.p2, p3: o.p3, qualiLaps: o.qualiLaps, raceLaps: o.raceLaps },
+      calendar: o.calendar.slice(), aiDrivers: shuffled(pool).slice(0, o.aiCount), rounds: [], done: false };
+    Champ.save(c);
+    startRound(c);
+  }
+  function startRound(c) {
+    if (c.done) return;
+    newWeekend(Object.assign({ track: c.calendar[c.rounds.length] }, c.opts), c.aiDrivers.slice(), c);
+  }
+  function recordRound(c, track, results) {
+    gp.recorded = true;
+    c.rounds.push({ track: track, res: results.map(function (r) { return { d: r.driverId, pos: r.pos, pts: r.pts || 0, out: !!r.out }; }) });
+    if (c.rounds.length >= c.calendar.length) c.done = true;
+    Champ.save(c);
+  }
+  /* Drivers' and constructors' points; ties go to whoever has more wins, then more 2nd places, and so on. */
+  function standings(c) {
+    const ids = [c.opts.driverId].concat(c.aiDrivers);
+    const rows = ids.map(function (id) { return { id: id, pts: 0, res: [], count: new Array(23).fill(0) }; });
+    const byId = {};
+    rows.forEach(function (r) { byId[r.id] = r; });
+    c.rounds.forEach(function (rd, k) {
+      rd.res.forEach(function (x) {
+        const r = byId[x.d];
+        if (!r) return;
+        r.pts += x.pts;
+        r.res[k] = x.out ? 'DNF' : x.pos;
+        if (!x.out) r.count[x.pos]++;
+      });
+    });
+    rows.sort(function (a, b) {
+      if (b.pts !== a.pts) return b.pts - a.pts;
+      for (let p = 1; p < 23; p++) if (b.count[p] !== a.count[p]) return b.count[p] - a.count[p];
+      return ids.indexOf(a.id) - ids.indexOf(b.id);
+    });
+    const teams = {};
+    rows.forEach(function (r) { const t = F1.teamOfDriver(r.id); teams[t.id] = (teams[t.id] || 0) + r.pts; });
+    const teamRows = Object.keys(teams).map(function (id) { return { id: id, pts: teams[id] }; })
+      .sort(function (a, b) { return b.pts - a.pts || F1.TEAMS.findIndex(function (t) { return t.id === a.id; }) - F1.TEAMS.findIndex(function (t) { return t.id === b.id; }); });
+    return { drivers: rows, teams: teamRows };
+  }
+  function showStandings(c) {
+    const st = standings(c), myId = c.opts.driverId;
+    const done = c.done, n = c.rounds.length;
+    $('st-title').textContent = done ? 'Final standings' : n ? 'Standings after round ' + n + ' of ' + c.calendar.length : 'Standings';
+    const banner = $('st-banner');
+    banner.classList.toggle('hidden', !done);
+    if (done) {
+      const w = st.drivers[0], t = F1.teamOfDriver(w.id);
+      banner.innerHTML = '';
+      banner.append(document.createTextNode(w.id === myId ? '🏆 You are the World Champion!' : '🏆 ' + F1.driver(w.id).name + ' is the World Champion'));
+      banner.appendChild(el('small', null, t.name + ' · ' + w.pts + ' points · Constructors\' champions: ' + F1.team(st.teams[0].id).name));
+    }
+    // drivers: a column per round (finishing position), then the total
+    const head = $('st-drivers-head');
+    head.innerHTML = '';
+    const hr = el('tr');
+    hr.append(el('th', null, 'Pos'), el('th', null, 'Driver'));
+    const CODES = { monza: 'ITA', silverstone: 'GBR', abudhabi: 'UAE', spa: 'BEL', interlagos: 'BRA' };
+    c.calendar.forEach(function (id) { const th = el('th', 'rd', CODES[id] || id.slice(0, 3).toUpperCase()); th.title = F1.getTrack(id).name; hr.appendChild(th); });
+    hr.appendChild(el('th', 'r', 'Pts'));
+    head.appendChild(hr);
+    const body = $('st-drivers');
+    body.innerHTML = '';
+    st.drivers.forEach(function (r, k) {
+      const d = F1.driver(r.id), t = F1.teamOfDriver(r.id);
+      const tr = el('tr', r.id === myId ? 'me' : '');
+      tr.appendChild(el('td', 'pos', String(k + 1)));
+      const td = el('td', 'drv');
+      const bar = el('span', 'bar'); bar.style.background = teamColor(t);
+      td.append(bar, document.createTextNode(d.name + (r.id === myId ? '  (You)' : '')));
+      tr.appendChild(td);
+      c.calendar.forEach(function (id, i) {
+        const v = r.res[i];
+        tr.appendChild(el('td', 'rd' + (v === 'DNF' ? ' dnf' : v === 1 ? ' p1' : v === 2 ? ' p2' : v === 3 ? ' p3' : ''), v === undefined ? '–' : String(v)));
+      });
+      tr.appendChild(el('td', 'r big', String(r.pts)));
+      body.appendChild(tr);
+    });
+    const tb = $('st-teams');
+    tb.innerHTML = '';
+    const myTeam = F1.teamOfDriver(myId).id;
+    st.teams.forEach(function (r, k) {
+      const t = F1.team(r.id);
+      const tr = el('tr', r.id === myTeam ? 'me' : '');
+      tr.appendChild(el('td', 'pos', String(k + 1)));
+      const td = el('td', 'drv');
+      const bar = el('span', 'bar'); bar.style.background = teamColor(t);
+      td.append(bar, document.createTextNode(t.name));
+      tr.appendChild(td);
+      tr.appendChild(el('td', 'r big', String(r.pts)));
+      tb.appendChild(tr);
+    });
+    const next = done ? null : F1.getTrack(c.calendar[n]);
+    $('st-note').textContent = done ? 'Season complete.' : 'Your season is saved: you can carry on later from Championship on the home screen.';
+    $('st-next').style.display = next ? '' : 'none';
+    if (next) $('st-next').textContent = 'Next race: ' + next.name;
+    $('st-new').style.display = done ? '' : 'none';
+    $('pause').classList.add('hidden');
+    show('standings');
+  }
+  $('champ-start').addEventListener('click', startSeason);
+  $('cc-go').addEventListener('click', function () { const c = Champ.load(); if (c && !c.done) startRound(c); });
+  $('cc-standings').addEventListener('click', function () { const c = Champ.load(); if (c) showStandings(c); });
+  $('results-standings').addEventListener('click', function () { const c = gp && gp.champ ? gp.champ : Champ.load(); if (c) showStandings(c); });
+  $('st-next').addEventListener('click', function () { const c = Champ.load(); if (c && !c.done) startRound(c); });
+  $('st-new').addEventListener('click', function () { goHome(); openChamp(); });
+  $('st-menu').addEventListener('click', function () { goHome(); });
+
   // ------------------------------------------------------------- navigation
   document.querySelectorAll('[data-go]').forEach(function (b) {
     b.addEventListener('click', function () {
       const go = b.dataset.go;
       if (go === 'practice') openPractice();
       else if (go === 'gp') openGp();
+      else if (go === 'champ') openChamp();
       else if (go === 'online') openOnline();
       else show(go);
     });
@@ -248,8 +452,11 @@
     $('set-steer-val').textContent = d.steering;
     $('set-steer').oninput = function () { d.steering = Number(this.value); $('set-steer-val').textContent = this.value; Settings.save(); };
     segInit($('set-camera'), d.camera, function (v) { d.camera = v; Settings.save(); });
+    segInit($('set-zoom'), d.zoom || 'normal', function (v) { d.zoom = v; Settings.save(); });
     $('set-labels').checked = !!d.labels;
     $('set-labels').onchange = function () { d.labels = this.checked; Settings.save(); };
+    $('set-ghost').checked = d.ghost !== false;
+    $('set-ghost').onchange = function () { d.ghost = this.checked; Settings.save(); };
     ['master', 'engine', 'effects'].forEach(function (k) {
       const inp = $('set-vol-' + k), out = $('set-vol-' + k + '-val');
       inp.value = Math.round(GameAudio.vol[k] * 100); out.textContent = inp.value;
@@ -314,6 +521,14 @@
       const muted = GameAudio.toggleMute();
       toast(muted ? 'Sound off (M to turn it back on)' : 'Sound on');
       if ($('set-mute')) $('set-mute').checked = muted;
+      return;
+    }
+    // C: camera distance (close / normal / far) while driving
+    if (e.code === 'KeyC' && !e.repeat && tg !== 'INPUT' && tg !== 'SELECT' && mode !== 'menu' && game && game.kind !== 'attract') {
+      const order = ['close', 'normal', 'far'], d = Settings.data;
+      d.zoom = order[(order.indexOf(d.zoom || 'normal') + 1) % order.length];
+      Settings.save();
+      toast('Camera: ' + d.zoom.charAt(0).toUpperCase() + d.zoom.slice(1));
       return;
     }
     if (e.code !== 'Escape' && e.code !== 'KeyP') return;
@@ -510,12 +725,13 @@
     lastResults = m;
     resultsCtx = ctx;
     const T = F1.getTrack(m.track);
-    $('results-title').textContent = (m.stage ? STAGE_NAME[m.stage] : m.type === 'quali' ? 'Qualifying' : 'Race') + ' results — ' + T.name;
+    $('results-title').textContent = (m.round ? 'Round ' + m.round + ' · ' : '') + (m.stage ? STAGE_NAME[m.stage] : m.type === 'quali' ? 'Qualifying' : 'Race') + ' results — ' + T.name;
     const body = $('results-body');
     body.innerHTML = '';
     $('results-table').classList.toggle('no-pts', m.type !== 'race');
     const me = net && net.id();
-    const myPlayer = ctx === 'gp' ? { driverId: gp && gp.opts.driverId } : room && room.players.find(function (p) { return p.id === me; });
+    const local = ctx === 'gp' || ctx === 'champ';
+    const myPlayer = local ? { driverId: gp && gp.opts.driverId } : room && room.players.find(function (p) { return p.id === me; });
     let fastest = null;
     m.results.forEach(function (r) { if (r.best !== null && (fastest === null || r.best < fastest)) fastest = r.best; });
     m.results.forEach(function (r) {
@@ -524,7 +740,7 @@
       tr.appendChild(el('td', 'pos', String(r.pos)));
       const td = el('td', 'drv');
       const bar = el('span', 'bar'); bar.style.background = teamColor(t);
-      td.append(bar, document.createTextNode(d.name + (r.isAI ? '' : '  (' + (ctx === 'gp' ? 'You' : r.name || 'Player') + ')')));
+      td.append(bar, document.createTextNode(d.name + (r.isAI ? '' : '  (' + (local ? 'You' : r.name || 'Player') + ')')));
       tr.appendChild(td);
       tr.appendChild(el('td', null, t.name));
       tr.appendChild(el('td', 'r', r.gap));
@@ -534,7 +750,7 @@
       body.appendChild(tr);
     });
     clearInterval(resultsTimer);
-    if (ctx === 'gp') {
+    if (local) {
       const mine = m.results.find(function (r) { return !r.isAI; });
       if (m.type === 'practice') $('results-note').textContent = mine && mine.best !== null ? 'Your best lap ' + F1.fmtLap(mine.best) + ' — P' + mine.pos : 'No lap time set';
       else if (m.type === 'quali') $('results-note').textContent = mine ? 'You start the race from P' + mine.pos : '';
@@ -555,15 +771,16 @@
     updateResultsButtons();
   }
   function updateResultsButtons() {
-    const isGp = resultsCtx === 'gp';
+    const isChamp = resultsCtx === 'champ', isGp = resultsCtx === 'gp' || isChamp;
     const isHost = !isGp && room && net && room.hostId === net.id();
     const raceDone = lastResults && lastResults.type === 'race';
     $('results-lobby').style.display = !isGp && isHost && raceDone ? '' : 'none';
     const next = isGp && gp && !raceDone ? gp.stages[gp.idx + 1] : null;
     $('results-next').style.display = next ? '' : 'none';
     if (next) $('results-next').textContent = next === 'race' ? 'Start the race' : 'Start ' + STAGE_NAME[next];
-    $('results-again').style.display = isGp && raceDone ? '' : 'none';
-    $('results-restart').style.display = isGp && raceDone && gp && gp.stages.length > 1 ? '' : 'none';
+    $('results-again').style.display = isGp && !isChamp && raceDone ? '' : 'none';
+    $('results-restart').style.display = isGp && !isChamp && raceDone && gp && gp.stages.length > 1 ? '' : 'none';
+    $('results-standings').style.display = isChamp && raceDone ? '' : 'none';
     $('results-menu').style.display = isGp ? '' : 'none';
     if (!isGp && raceDone && !isHost) $('results-note').textContent = 'Waiting for the host to return to the lobby…';
   }

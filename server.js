@@ -175,8 +175,7 @@ function snapshot(room) {
   for (let i = 0; i < S.cars.length; i++) {
     const c = S.cars[i];
     if (c.out) { cars.push([c.id, 0, 0, 0, 0, 0, 0, 0, 64, 0]); continue; }
-    let flags = (c.drsOpen ? 1 : 0) | (c.locked ? 2 : 0) | (c.slide ? 4 : 0) | (c.finished ? 32 : 0) |
-      (c.blue >= 0 ? 128 : 0) | (c.lockFx ? 256 : 0);
+    let flags = (c.drsOpen ? 1 : 0) | (c.locked ? 2 : 0) | (c.slide ? 4 : 0) | (c.finished ? 32 : 0) | (c.lockFx ? 256 : 0);
     for (let z = 0; z < c.drsElig.length; z++) if (c.drsElig[z]) flags |= 8 << z;
     cars.push([c.id, r2(c.x), r2(c.y), r4(c.a), r2(c.vx), r2(c.vy), r3(c.w), r3(c.delta), flags, room.ack.get(c.id) || 0]);
   }
@@ -193,8 +192,7 @@ function timing(room) {
     }),
     f: S.fastest ? [S.fastest.id, r3(S.fastest.time)] : null,
     tl: isFinite(S.timeLimit) ? Math.max(0, Math.round(S.timeLimit - S.time)) : -1,
-    st: S.startTime,
-    y: S.yellow.map(function (z) { return [Math.round(z.s), z.id]; })     // yellow flag incidents [track position, car]
+    st: S.startTime
   };
 }
 
@@ -413,6 +411,6 @@ setInterval(function () {
 }, 4);
 
 server.listen(PORT, function () {
-  console.log('Top-Down GP running on port ' + PORT);
+  console.log('Top-Down GP (version ' + F1.VERSION + ') running on port ' + PORT);
   console.log('Open http://localhost:' + PORT + ' in your browser');
 });

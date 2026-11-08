@@ -49,13 +49,39 @@
     this.stuckT = 0;
     this.started = performance.now();
     this.views = {};
+    // ghost car: your laps are recorded; in practice your best saved lap on this track is replayed
+    this.rec = this.me ? new window.GhostRecorder() : null;
+    this.ghost = undefined;            // loaded when first needed
+    this.ghostView = null;
   }
+
+  /* The saved ghost lap to show in this session (practice only, if switched on in Settings). */
+  LocalGame.prototype.ghostLap = function () {
+    if (this.type !== 'practice' || !this.me || !window.Settings.data.ghost) return null;
+    if (this.ghost === undefined) this.ghost = window.Ghost.load(this.T.id);
+    return this.ghost;
+  };
+
+  /* A lap of lapT seconds just finished: keep it as the ghost if it beats the saved one. */
+  LocalGame.prototype.saveGhost = function (lapT) {
+    if (!this.rec) return;
+    const saved = window.Ghost.load(this.T.id);
+    if (saved && saved.t <= lapT) return;
+    const t1 = this.me.lapStart !== null ? this.me.lapStart : this.S.time;
+    const p = this.rec.lap(t1 - lapT, t1);
+    if (!p) return;
+    const g = { t: lapT, d: this.me.driverId, p: p };
+    window.Ghost.save(this.T.id, g);
+    this.ghost = g;
+    this.ghostView = null;
+  };
 
   LocalGame.prototype.step = function () {
     if (this.paused) return;
     const inputs = {};
     if (this.me) inputs[this.myId] = window.Input.sample(F1.DT);
     this.S.step(inputs);
+    if (this.rec && !this.me.out) this.rec.sample(this.S.time, this.me);
     const evs = this.S.drainEvents();
     const self = this;
     for (let i = 0; i < evs.length; i++) {
@@ -68,7 +94,10 @@
         }
         continue;
       }
-      if (e.k === 'lap' && e.id === this.myId) e.record = window.PB.offer(this.T.id, e.t, this.me.driverId);
+      if (e.k === 'lap' && e.id === this.myId) {
+        e.record = window.PB.offer(this.T.id, e.t, this.me.driverId);
+        this.saveGhost(e.t);
+      }
       window.HUD.eventMessage(this.msgs, e, this.myId, function (id) { return self.S.byId[id].driverId; });
       window.GameAudio.event(e, this.myId);
     }
@@ -102,9 +131,17 @@
     for (let i = 0; i < S.cars.length; i++) if (!S.cars[i].out) cars.push(this.view(S.cars[i], this.paused ? 1 : alpha));
     let focus = this.me ? this.views[this.myId] : null;
     if (!focus && cars.length) focus = cars[0];
-    const frame = { track: T, cars: cars, labels: window.Settings.data.labels, yellow: S.yellow.map(function (z) { return [z.s, z.id]; }),
+    // the ghost runs from the moment you start a timed lap
+    const g = this.ghostLap();
+    if (g && this.me.lapStart !== null && !this.me.out && !this.me.inPit) {
+      const t = S.time - (this.paused ? 0 : (1 - alpha) * F1.DT) - this.me.lapStart;
+      const gv = this.ghostView || (this.ghostView = { id: 'ghost', team: F1.teamOfDriver(g.d || this.me.driverId), code: 'GHOST', label: 'GHOST',
+        ghost: true, replay: true, me: false, delta: 0, drsOpen: false, surf: 0 });
+      if (window.ghostAt(g, t, gv)) cars.unshift(gv);
+    }
+    const frame = { track: T, cars: cars, labels: window.Settings.data.labels,
       lights: S.phase === 'countdown' ? S.lights : 0, pitRed: S.phase === 'countdown' && this.type === 'race' };
-    R.updateCamera(focus, dt, this.kind === 'attract' ? true : window.Settings.data.camera === 'rotate');
+    R.updateCamera(focus, dt, this.kind === 'attract' ? true : window.Settings.data.camera === 'rotate', this.kind === 'attract' ? 'normal' : window.Settings.data.zoom);
     for (let i = 0; i < this.fx.length; i++) {
       const f = this.fx[i];
       R.sparks(f[0], f[1], f[2]);
@@ -152,8 +189,7 @@
       myId: this.myId, phase: PH[S.phase], lights: S.lights, time: S.time,
       timeLeft: isFinite(S.timeLimit) ? Math.max(0, S.timeLimit - S.time) : -1,
       fastestId: S.fastest ? S.fastest.id : null, own: this.me, msgs: this.msgs, ping: null,
-      started: this.started, wrongT: this.wrongT, stuckT: this.stuckT,
-      yellow: S.yellow.map(function (z) { return [z.s, z.id]; }), blue: !!(this.me && this.me.blue >= 0)
+      started: this.started, wrongT: this.wrongT, stuckT: this.stuckT
     });
   };
 

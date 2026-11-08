@@ -30,8 +30,7 @@
 
   /* o = { type, laps, track, order, rows:{id:{laps,last,best,gap,lapStart,fin,out,qdone,dist}}, entries:{id:{driverId}},
            myId, phase (0 countdown, 1 running, 2 finishing, 3 done), lights, time, timeLeft, fastestId,
-           own (car state or null), msgs, ping, started, wrongT, stuckT,
-           yellow: [[track position, car id] of incidents], blue: true when the player is about to be lapped } */
+           own (car state or null), msgs, ping, started, wrongT, stuckT } */
   function buildHud(o) {
     const T = o.track, rows = o.rows, order = o.order, isRace = o.type === 'race', isQuali = o.type === 'quali';
     const limited = isQuali || (o.type === 'practice' && o.laps > 0);   // a set number of timed laps
@@ -61,8 +60,7 @@
       towerRight: isRace ? 'LAP ' + Math.min(o.laps, (leader ? leader.laps : 0) + 1) + '/' + o.laps : (T.short || T.name).toUpperCase(),
       tower: tower,
       msgs: o.msgs.active(),
-      ping: o.ping,
-      yellow: o.yellow || []
+      ping: o.ping
     };
     if (o.phase === 0 && isRace) hud.lights = o.lights;
     if (o.phase === 0 && isQuali) {
@@ -96,14 +94,6 @@
       const pb = window.PB.get(T.id);
       hud.pb = pb ? F1.fmtLap(pb.t) : null;
       hud.wrongWay = o.wrongT > 1.2;
-      // flags: blue when about to be lapped, yellow near an incident
-      if (o.blue) hud.flag = 'blue';
-      else if (o.yellow && o.yellow.length && o.phase >= 1) {
-        for (let k = 0; k < o.yellow.length; k++) {
-          const z = o.yellow[k];
-          if (z[1] !== o.myId && F1.wrapS(own.s - z[0] + 200, T.length) < 250) { hud.flag = 'yellow'; break; }
-        }
-      }
       if (performance.now() - o.started < 12000 && (o.phase === 0 || o.type === 'practice')) hud.hint = window.controlsHint();
       if (o.stuckT > 3 || o.wrongT > 4) {
         hud.msgs = hud.msgs.concat([{ text: 'STUCK?', sub: 'Press R to put the car back on track', color: '#ffd600' }]);

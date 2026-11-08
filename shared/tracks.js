@@ -314,6 +314,13 @@
       }
       T.cornerList.push({ s: wrapS((s0 + s1) / 2, T.length), turn: turnDeg * c.sign });
     });
+    // join kerbs that stop for only a few metres between two corners
+    for (let i = 0; i < N; i++) {
+      if (!T.kerb[i] || T.kerb[(i + 1) % N]) continue;
+      let g = 1;
+      while (g <= 8 && !T.kerb[(i + 1 + g) % N]) g++;
+      if (g <= 8) for (let k = 1; k <= g; k++) T.kerb[(i + k) % N] = 3;
+    }
   }
 
   /* Barrier distance: normally hw + runoff, closer where two parts of the circuit run near each other. */
@@ -558,7 +565,7 @@
       if (po === po && (d > 0 ? 1 : -1) === T.pit.side && ad >= po - T.pit.half && ad <= po + T.pit.half + T.pitWork[idx]) return 4;
     }
     const bit = d < 0 ? 1 : 2;
-    if ((T.gravel[idx] & bit) && ad >= T.hw + 1.5) return 3;
+    if (T.gravel[idx] & bit) return 3;     // gravel starts where the kerb ends, or at the track edge where there is no kerb
     return 2;
   };
 

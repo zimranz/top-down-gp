@@ -143,6 +143,7 @@ table.results .purple { color: #c77dff; }
 #toast { position: fixed; left: 50%; bottom: 26px; transform: translateX(-50%); background: rgba(12,12,16,0.95); border: 1px solid var(--line);
   padding: 10px 18px; border-radius: 8px; font-weight: 700; opacity: 0; transition: opacity .25s; pointer-events: none; z-index: 30; }
 #toast.show { opacity: 1; }
+#toast.high { bottom: 124px; }
 
 @media (max-width: 860px) {
   .cols { flex-direction: column; }
@@ -187,3 +188,37 @@ table.results td.pts { color: var(--yellow); font-weight: 900; }
 .engine-row select { width: 100%; }
 .btn.small { padding: 9px 14px; font-size: 14px; }
 #set-engine-note:empty { display: none; }
+/* room under the last item when a setup screen is scrolled to the bottom
+   (a spacer after the last item, because the columns stretch to the visible height) */
+.cols > .col::after { content: ''; display: block; flex: none; height: 26px; }
+/* version number in the corner of the home screen */
+.version { position: fixed; left: 16px; bottom: 12px; font-size: 13px; font-weight: 700; color: rgba(255,255,255,0.55); letter-spacing: 0.5px; }
+.muted-inline { color: var(--muted); font-weight: 600; font-size: 12px; }
+/* championship */
+.track-card { position: relative; }
+.track-card .round-badge { position: absolute; top: 6px; left: 6px; width: 24px; height: 24px; border-radius: 50%; background: var(--red); color: #fff;
+  font-weight: 900; font-size: 13px; display: flex; align-items: center; justify-content: center; }
+.cal-note { margin-top: -4px; }
+.champ-continue { display: flex; align-items: center; gap: 12px; padding: 12px 20px; border-bottom: 1px solid var(--line); background: rgba(225,6,0,0.1); }
+.champ-continue.hidden { display: none; }
+.champ-continue .cc-text { flex: 1; display: flex; flex-direction: column; gap: 2px; }
+.champ-continue .cc-text b { font-size: 16px; }
+.champ-continue .cc-text span { color: var(--muted); font-size: 13px; font-weight: 600; }
+.champ-banner { margin: 14px 20px 0; padding: 16px 20px; border-radius: 12px; text-align: center; font-size: 24px; font-weight: 900; font-style: italic;
+  background: linear-gradient(90deg, rgba(212,175,55,0.25), rgba(212,175,55,0.08)); border: 1px solid rgba(212,175,55,0.6); color: #ffe9a8; }
+.champ-banner.hidden { display: none; }
+.champ-banner small { display: block; font-size: 14px; font-style: normal; font-weight: 700; color: #e9dcb0; margin-top: 4px; }
+/* results and standings sit over the race: keep the race messages from showing through */
+#results, #standings { background: rgb(12, 12, 16); }
+.standings-wrap { display: flex; gap: 22px; padding: 6px 20px 10px; overflow: auto; min-height: 0; }
+.standings-wrap h3 { margin: 10px 0 6px; }
+.standings-wrap .st-drivers { flex: 1.7; min-width: 0; }
+.standings-wrap .st-teams { flex: 1; min-width: 240px; }
+table.standings td.rd { text-align: center; color: #cfd3d8; width: 42px; }
+table.standings th.rd { text-align: center; }
+table.standings td.rd.p1 { color: #ffd600; font-weight: 900; }
+table.standings td.rd.p2 { color: #d9dde2; font-weight: 900; }
+table.standings td.rd.p3 { color: #e0a060; font-weight: 900; }
+table.standings td.rd.dnf { color: #ff6b6b; font-size: 12px; }
+table.standings td.big { font-weight: 900; font-size: 17px; }
+@media (max-width: 900px) { .standings-wrap { flex-direction: column; } }
