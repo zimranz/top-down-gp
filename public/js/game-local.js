@@ -68,7 +68,9 @@
         }
         continue;
       }
+      if (e.k === 'lap' && e.id === this.myId) e.record = window.PB.offer(this.T.id, e.t, this.me.driverId);
       window.HUD.eventMessage(this.msgs, e, this.myId, function (id) { return self.S.byId[id].driverId; });
+      window.GameAudio.event(e, this.myId);
     }
     const fx = this.S.drainFx();
     for (let i = 0; i < fx.length; i++) this.fx.push(fx[i]);
@@ -88,7 +90,7 @@
     v.x = c.px + (c.x - c.px) * alpha;
     v.y = c.py + (c.y - c.py) * alpha;
     v.a = window.Renderer.lerpAngle(c.pa, c.a, alpha);
-    v.vx = c.vx; v.vy = c.vy; v.delta = c.delta; v.drsOpen = c.drsOpen; v.surf = c.surf;
+    v.vx = c.vx; v.vy = c.vy; v.delta = c.delta; v.drsOpen = c.drsOpen; v.surf = c.surf; v.lock = c.lockFx;
     v.me = this.me === c;
     v.ghost = this.type === 'quali' && !v.me;
     return v;
@@ -100,13 +102,42 @@
     for (let i = 0; i < S.cars.length; i++) if (!S.cars[i].out) cars.push(this.view(S.cars[i], this.paused ? 1 : alpha));
     let focus = this.me ? this.views[this.myId] : null;
     if (!focus && cars.length) focus = cars[0];
-    const frame = { track: T, cars: cars, labels: window.Settings.data.labels };
+    const frame = { track: T, cars: cars, labels: window.Settings.data.labels, yellow: S.yellow.map(function (z) { return [z.s, z.id]; }),
+      lights: S.phase === 'countdown' ? S.lights : 0, pitRed: S.phase === 'countdown' && this.type === 'race' };
     R.updateCamera(focus, dt, this.kind === 'attract' ? true : window.Settings.data.camera === 'rotate');
-    for (let i = 0; i < this.fx.length; i++) R.sparks(this.fx[i][0], this.fx[i][1], this.fx[i][2]);
+    for (let i = 0; i < this.fx.length; i++) {
+      const f = this.fx[i];
+      R.sparks(f[0], f[1], f[2]);
+      if (focus) window.GameAudio.contact(f[2], Math.hypot(f[0] - focus.x, f[1] - focus.y));
+    }
     this.fx = [];
+    this.focus = focus;
     R.drawWorld(frame, this.paused ? 0 : dt);
     if (this.kind === 'attract') return;
     R.drawHUD(this.hud(), frame);
+  };
+
+  /* What the sound system needs this frame. */
+  LocalGame.prototype.audioState = function () {
+    const S = this.S, me = this.me && !this.me.out ? this.me : null, f = this.focus || me;
+    if (!f) return null;
+    const cars = [];
+    for (let i = 0; i < S.cars.length; i++) {
+      const c = S.cars[i];
+      if (c === me || c.out) continue;
+      cars.push({ id: c.id, x: c.x, y: c.y, vx: c.vx, vy: c.vy, throttle: c.input ? c.input.throttle : 0.7 });
+    }
+    let own = null;
+    if (me) {
+      const vf = me.vx * Math.cos(me.a) + me.vy * Math.sin(me.a);
+      own = { speed: Math.hypot(me.vx, me.vy), vf: vf, throttle: me.input ? me.input.throttle || 0 : 0, inPit: !!me.inPit, surf: me.surf,
+        drsOpen: me.drsOpen, drsAllowed: me.drsAllowed, locked: me.locked };
+    }
+    return {
+      listener: { x: f.x, y: f.y, a: f.a, vx: f.vx, vy: f.vy }, own: own, cars: cars,
+      lights: S.phase === 'countdown' ? S.lights : 0,
+      countdown: S.type === 'quali' && S.phase === 'countdown' ? Math.max(0, Math.ceil(3 - S.time)) : 0
+    };
   };
 
   LocalGame.prototype.hud = function () {
@@ -117,11 +148,12 @@
       rows[c.id] = { laps: c.lapsDone, last: c.lastLap, best: c.bestLap, gap: c.gap, lapStart: c.lapStart, fin: c.finished, out: c.out, qdone: c.qualiDone, dist: c.raceDist };
     }
     return window.HUD.build({
-      type: this.type, laps: S.laps, track: this.T, order: S.order, rows: rows, entries: this.entries,
+      type: this.type, laps: S.laps, track: this.T, order: S.order, rows: rows, entries: this.entries, title: this.opts.title,
       myId: this.myId, phase: PH[S.phase], lights: S.lights, time: S.time,
       timeLeft: isFinite(S.timeLimit) ? Math.max(0, S.timeLimit - S.time) : -1,
       fastestId: S.fastest ? S.fastest.id : null, own: this.me, msgs: this.msgs, ping: null,
-      started: this.started, wrongT: this.wrongT, stuckT: this.stuckT
+      started: this.started, wrongT: this.wrongT, stuckT: this.stuckT,
+      yellow: S.yellow.map(function (z) { return [z.s, z.id]; }), blue: !!(this.me && this.me.blue >= 0)
     });
   };
 

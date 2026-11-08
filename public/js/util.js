@@ -11,7 +11,7 @@
         const raw = window.localStorage.getItem('topdowngp.settings');
         if (raw) Object.assign(this.data, JSON.parse(raw));
       } catch (e) { /* storage unavailable: keep defaults */ }
-      this.data.steering = F1.clamp(Math.round(Number(this.data.steering) || 5), 1, 10);
+      this.data.steering = F1.clamp(Math.round(Number(this.data.steering) || 5), 1, 12);
     },
     save: function () {
       try { window.localStorage.setItem('topdowngp.settings', JSON.stringify(this.data)); } catch (e) { /* ignore */ }
@@ -20,6 +20,28 @@
     steerRate: function () { return 2.4 + (this.data.steering - 1) * 0.7; },
     steerGain: function () { return 0.74 + (this.data.steering - 1) * 0.085; }
   };
+
+  // ------------------------------------------------------------- personal bests (per track, this browser)
+  const PB = {
+    data: {},
+    load: function () {
+      try { this.data = JSON.parse(window.localStorage.getItem('topdowngp.pb') || '{}') || {}; } catch (e) { this.data = {}; }
+    },
+    get: function (track) {
+      const r = this.data[track];
+      return r && isFinite(r.t) && r.t > 0 ? r : null;
+    },
+    /* Returns true when lap time t beats the saved best for this track (and saves it). */
+    offer: function (track, t, driverId) {
+      if (!isFinite(t) || t <= 0) return false;
+      const cur = this.get(track);
+      if (cur && cur.t <= t) return false;
+      this.data[track] = { t: Math.round(t * 1000) / 1000, d: driverId || null, at: Date.now() };
+      try { window.localStorage.setItem('topdowngp.pb', JSON.stringify(this.data)); } catch (e) { /* ignore */ }
+      return true;
+    }
+  };
+  PB.load();
 
   // ------------------------------------------------------------- input
   const GAME_KEYS = { ArrowUp: 1, ArrowDown: 1, ArrowLeft: 1, ArrowRight: 1, KeyW: 1, KeyA: 1, KeyS: 1, KeyD: 1, Space: 1, ShiftLeft: 1, ShiftRight: 1, KeyR: 1 };
@@ -100,6 +122,7 @@
   }
 
   window.Settings = Settings;
+  window.PB = PB;
   window.Input = Input;
   window.Messages = Messages;
   window.gearFor = gearFor;

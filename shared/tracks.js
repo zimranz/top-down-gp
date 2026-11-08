@@ -389,11 +389,21 @@
     });
   }
 
-  /* Pit lane beside the main straight: entry before the line, exit after it, one garage per team.
+  /* Pit lane beside the main straight: entry before the line, exit after it. A fast lane runs next to the
+     pit wall and a working lane in front of the garages holds one painted box per team.
      Picks the side of the straight with the most free space. */
   function computePit(T) {
     const L = T.length, hw = T.hw, N = T.n, ds = T.ds;
-    const P = { s0: L - 245, s1: L - 170, s2: 100, s3: 180, off: hw + 13, half: 3.8, wallOff: hw + 4.6, side: 0 };
+    const P = {
+      s0: L - 245, s1: L - 170, s2: 100, s3: 180,   // entry starts, speed limit starts, limit ends, back on track
+      off: hw + 9.75,          // centre of the fast lane
+      half: 2.75,              // half width of the fast lane (and of the entry / exit roads)
+      work: 6,                 // working lane (pit boxes) between the fast lane and the garages
+      wallOff: hw + 5,         // pit wall between the track and the pit lane
+      boxOff: hw + 15.5,       // centre of the pit boxes
+      garFront: hw + 19.5, garBack: hw + 31,
+      side: 0
+    };
     let bestSide = 0, bestClear = -Infinity;
     for (const side of [1, -1]) {
       let clear = Infinity;
@@ -414,11 +424,18 @@
     P.side = bestSide;
     T.pit = P;
     T.pitOff = new Float32Array(N).fill(NaN);
+    T.pitWork = new Float32Array(N);
     T.pitWall = new Uint8Array(N);
     T.wallPit = new Float32Array(N);
     const total = wrapS(P.s3 - P.s0, L), entry = wrapS(P.s1 - P.s0, L), exit = wrapS(P.s3 - P.s2, L);
     const edge = hw - 2.5;
     const smooth = function (t) { return t * t * (3 - 2 * t); };
+    // garages: one per team along the straight part of the pit lane
+    const g0 = P.s1 + 12, g1 = L + P.s2 - 12, n = 11, gl = (g1 - g0) / n;
+    P.garages = [];
+    for (let k = 0; k < n; k++) P.garages.push({ s0: wrapS(g0 + k * gl + 0.4, L), s1: wrapS(g0 + (k + 1) * gl - 0.4, L), mid: wrapS(g0 + (k + 0.5) * gl, L) });
+    P.gA = g0; P.gB = g1;                                // garage block (s may run past L)
+    const relG0 = g0 - P.s0, relG1 = g1 - P.s0;
     for (let i = 0; i < N; i++) {
       const rel = wrapS(i * ds - P.s0, L);
       if (rel > total) continue;
@@ -427,16 +444,11 @@
       else if (rel > total - exit) off = edge + (P.off - edge) * smooth((total - rel) / exit);
       T.pitOff[i] = off;
       if (rel > entry + 6 && rel < total - exit - 6) T.pitWall[i] = 1;
-      // barrier on the pit side sits behind the garages (tapered at both ends)
-      const need = P.off + P.half + 12.5;
-      let t = 1;
-      if (rel < entry) t = smooth(rel / entry); else if (rel > total - exit) t = smooth((total - rel) / exit);
-      T.wallPit[i] = Math.max(T.wall[i], T.wall[i] + (need - T.wall[i]) * t);
+      // working lane: full width in front of the garages, tapering in and out over 15 m
+      T.pitWork[i] = P.work * Math.max(0, Math.min(1, (rel - (relG0 - 15)) / 15, ((relG1 + 15) - rel) / 15));
+      // barrier on the pit side: the garage fronts along the garages, otherwise at least clear of the pit road
+      T.wallPit[i] = rel >= relG0 - 1 && rel <= relG1 + 1 ? P.garFront : Math.max(T.wall[i], off + P.half + T.pitWork[i] + 3);
     }
-    // garages: one per team along the straight part of the pit lane
-    const g0 = P.s1 + 6, g1 = L + P.s2 - 6, n = 11, gl = (g1 - g0) / n;
-    P.garages = [];
-    for (let k = 0; k < n; k++) P.garages.push({ s0: wrapS(g0 + k * gl + 1.5, L), s1: wrapS(g0 + (k + 1) * gl - 1.5, L), mid: wrapS(g0 + (k + 0.5) * gl, L) });
   }
 
   /* Barrier distance at sample idx on the side of signed offset d. */
@@ -445,13 +457,13 @@
     return T.wall[idx];
   };
 
-  /* Where a car leaving garage k starts (in the fast lane, facing down the pit lane). */
+  /* Where a player starts in practice: in their team's pit box, facing down the pit lane. */
   F1.pitSpot = function (T, k) {
     const P = T.pit;
     const n = P.garages.length;
     // team order follows the championship: McLaren (first in the list) sits nearest the pit exit
     const g = P.garages[n - 1 - (((k % n) + n) % n)];
-    return F1.trackPoint(T, g.mid, P.side * (P.off - 1.4));
+    return F1.trackPoint(T, g.mid, P.side * P.boxOff);
   };
 
   function computeRacingLine(T) {
@@ -543,7 +555,7 @@
     if (ad <= T.hw + T.kerbW && T.kerb[idx]) return 1;
     if (T.pit) {
       const po = T.pitOff[idx];
-      if (po === po && (d > 0 ? 1 : -1) === T.pit.side && Math.abs(ad - po) <= T.pit.half) return 4;
+      if (po === po && (d > 0 ? 1 : -1) === T.pit.side && ad >= po - T.pit.half && ad <= po + T.pit.half + T.pitWork[idx]) return 4;
     }
     const bit = d < 0 ? 1 : 2;
     if ((T.gravel[idx] & bit) && ad >= T.hw + 1.5) return 3;

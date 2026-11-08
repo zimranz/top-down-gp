@@ -60,6 +60,8 @@
     this.tmpA = {}; this.tmpB = {}; this.tmpC = {};
     this.started = performance.now();
     this.collide = info.type === 'race';
+    this.yellow = [];
+    this.near = [];       // nearby cars (track position) for dirty air on our own car
   }
 
   OnlineGame.prototype.predTick = function (now) {
@@ -86,6 +88,11 @@
     for (let i = 0; i < updates.length; i++) {
       const r = updates[i][0], a = updates[i][1];
       const st = { x: a[1], y: a[2], a: a[3], vx: a[4], vy: a[5], w: a[6], delta: a[7], slide: !!(a[8] & 4) };
+      // rough throttle estimate for the engine sound (from how fast the car is speeding up)
+      if (r.st) {
+        const dts = Math.max(1, m.t - r.t) * DT, acc = (Math.hypot(st.vx, st.vy) - Math.hypot(r.st.vx, r.st.vy)) / dts;
+        r.thr = acc > 1.5 ? 1 : acc < -4 ? 0 : 0.45;
+      }
       if (r.st) {
         const o = extrap(r.st, (P - r.t) * DT, this.tmpA), n = extrap(st, (P - m.t) * DT, this.tmpB);
         let ex = o.x + r.ex - n.x, ey = o.y + r.ey - n.y, ea = F1.wrapAngle(o.a + r.ea - n.a);
@@ -114,6 +121,7 @@
     own.drsOpen = !!(flags & 1); own.locked = !!(flags & 2); own.slide = !!(flags & 4);
     own.drsElig[0] = !!(flags & 8); own.drsElig[1] = !!(flags & 16);
     own.finished = !!(flags & 32);
+    own.blueFlag = !!(flags & 128);
     F1.queryTrack(this.T, own.x, own.y, own.seg, Q);
     own.seg = Q.idx; own.s = Q.s; own.d = Q.d; own.dist = Q.dist;
     for (let k = 0; k < this.pending.length; k++) this.simulate(this.pending[k].inp, k + 1, t);
@@ -134,6 +142,7 @@
     const z = T.drsZone[F1.idxAt(T, own.s)];
     own.drsAllowed = z >= 0 && own.drsElig[z] && this.phase !== 0;
     const sub = DT / F1.SUBSTEPS;
+    own.dirty = this.collide ? this.ownDirty(baseTick + k) : 1;
     for (let i = 0; i < F1.SUBSTEPS; i++) {
       F1.stepCar(own, inp, T, sub);
       if (this.collide && this.phase >= 1) {
@@ -150,6 +159,30 @@
     }
   };
 
+  /* Dirty air on our own car: the same rule as the server, using where the other cars are predicted to be. */
+  OnlineGame.prototype.ownDirty = function (tick) {
+    const own = this.own, T = this.T, near = this.near;
+    if (own.vx * own.vx + own.vy * own.vy < 900) return 1;
+    let n = 0;
+    for (const id in this.remote) {
+      const r = this.remote[id];
+      if (!r.st || r.out) continue;
+      const dx = r.st.x - own.x, dy = r.st.y - own.y;
+      if (dx * dx + dy * dy > 1600) continue;
+      const e = extrap(r.st, (tick - r.t) * DT, this.tmpC);
+      F1.queryTrack(T, e.x, e.y, r.seg === undefined ? -1 : r.seg, Q);
+      r.seg = Q.idx;
+      if (!near[n]) near[n] = { s: 0, d: 0, out: false };
+      near[n].s = Q.s; near[n].d = Q.d; n++;
+    }
+    if (!n) return 1;
+    near.length = n;
+    near.push(own);
+    const f = F1.dirtyAir(own, near, T.length);
+    near.pop();
+    return f;
+  };
+
   OnlineGame.prototype.onTiming = function (t) {
     this.timing = t;
     const rows = {};
@@ -158,6 +191,7 @@
       rows[a[0]] = { laps: a[1], last: a[2] < 0 ? null : a[2], best: a[3] < 0 ? null : a[3], gap: a[4], lapStart: a[5] < 0 ? null : a[5], fin: !!(a[6] & 1), out: !!(a[6] & 2), qdone: !!(a[6] & 4), dist: a[7] };
     }
     this.rows = rows;
+    this.yellow = t.y || [];
   };
 
   OnlineGame.prototype.code = function (id) {
@@ -167,7 +201,12 @@
 
   OnlineGame.prototype.onEvents = function (evs) {
     const self = this;
-    for (let i = 0; i < evs.length; i++) window.HUD.eventMessage(this.msgs, evs[i], this.myId, function (id) { return self.code(id); });
+    for (let i = 0; i < evs.length; i++) {
+      const e = evs[i];
+      if (e.k === 'lap' && e.id === this.myId) e.record = window.PB.offer(this.T.id, e.t, this.code(this.myId));
+      window.HUD.eventMessage(this.msgs, e, this.myId, function (id) { return self.code(id); });
+      window.GameAudio.event(e, this.myId);
+    }
   };
 
   OnlineGame.prototype.step = function () {
@@ -177,6 +216,7 @@
     this.seq++;
     this.net.emit('i', [this.seq, inp.throttle, inp.brake, Math.round(inp.steer * 1000), (inp.drs ? 1 : 0) | (inp.reset ? 2 : 0)]);
     this.pending.push({ seq: this.seq, inp: inp });
+    this.lastInp = inp;
     if (this.pending.length > 90) this.pending.shift();
     this.ownPrev = { x: own.x, y: own.y, a: own.a };
     this.simulate(inp, this.pending.length, this.snapT);
@@ -216,7 +256,7 @@
       const e = extrap(r.st, (P - r.t) * DT, this.tmpA);
       const v = this.carView(id);
       v.x = e.x + r.ex; v.y = e.y + r.ey; v.a = e.a + r.ea; v.vx = e.vx; v.vy = e.vy;
-      v.delta = r.st.delta; v.drsOpen = !!(r.flags & 1); v.me = false; v.ghost = ghost; v.surf = 0;
+      v.delta = r.st.delta; v.drsOpen = !!(r.flags & 1); v.me = false; v.ghost = ghost; v.surf = 0; v.lock = !!(r.flags & 256);
       cars.push(v);
     }
     let focus = null;
@@ -229,7 +269,7 @@
       v.y = p.y + (own.y - p.y) * alpha + this.err.y;
       v.a = window.Renderer.lerpAngle(p.a, own.a, alpha) + this.err.a;
       v.vx = own.vx; v.vy = own.vy; v.delta = own.delta; v.drsOpen = own.drsOpen; v.surf = own.surf;
-      v.me = true; v.ghost = false;
+      v.me = true; v.ghost = false; v.lock = false;
       cars.push(v);
       focus = v;
     } else if (this.timing) {
@@ -239,12 +279,44 @@
       }
     }
     if (!focus && cars.length) focus = cars[0];
-    const frame = { track: this.T, cars: cars, labels: window.Settings.data.labels };
+    const frame = { track: this.T, cars: cars, labels: window.Settings.data.labels, yellow: this.yellow,
+      lights: this.phase === 0 ? this.lights : 0, pitRed: this.phase === 0 && this.type === 'race' };
     R.updateCamera(focus, dt, window.Settings.data.camera === 'rotate');
-    for (let i = 0; i < this.fx.length; i++) R.sparks(this.fx[i][0], this.fx[i][1], this.fx[i][2]);
+    for (let i = 0; i < this.fx.length; i++) {
+      const f = this.fx[i];
+      R.sparks(f[0], f[1], f[2]);
+      if (focus) window.GameAudio.contact(f[2], Math.hypot(f[0] - focus.x, f[1] - focus.y));
+    }
     this.fx = [];
+    this.focus = focus;
+    this.frameCars = cars;
     R.drawWorld(frame, dt);
     R.drawHUD(this.hud(now), frame);
+  };
+
+  /* What the sound system needs this frame. */
+  OnlineGame.prototype.audioState = function () {
+    const f = this.focus;
+    if (!f) return null;
+    const cars = [], list = this.frameCars || [];
+    for (let i = 0; i < list.length; i++) {
+      const v = list[i];
+      if (v.me) continue;
+      const r = this.remote[v.id];
+      cars.push({ id: v.id, x: v.x, y: v.y, vx: v.vx, vy: v.vy, throttle: r && r.thr !== undefined ? r.thr : 0.7 });
+    }
+    const me = this.own && !this.own.out && this.myId !== null ? this.own : null;
+    let own = null;
+    if (me) {
+      const vf = me.vx * Math.cos(me.a) + me.vy * Math.sin(me.a);
+      own = { speed: Math.hypot(me.vx, me.vy), vf: vf, throttle: this.lastInp ? this.lastInp.throttle : 0, inPit: !!me.inPit, surf: me.surf,
+        drsOpen: me.drsOpen, drsAllowed: me.drsAllowed, locked: me.locked };
+    }
+    return {
+      listener: { x: f.x, y: f.y, a: f.a, vx: f.vx, vy: f.vy }, own: own, cars: cars,
+      lights: this.phase === 0 ? this.lights : 0,
+      countdown: this.type === 'quali' && this.phase === 0 ? Math.max(0, Math.ceil(3 - this.serverTime)) : 0
+    };
   };
 
   OnlineGame.prototype.hud = function (now) {
@@ -257,7 +329,8 @@
       timeLeft: tm && tm.tl >= 0 ? tm.tl : -1,
       fastestId: tm && tm.f ? tm.f[0] : null,
       own: this.own, msgs: this.msgs, ping: this.net.ping,
-      started: this.started, wrongT: this.wrongT, stuckT: this.stuckT
+      started: this.started, wrongT: this.wrongT, stuckT: this.stuckT,
+      yellow: this.yellow, blue: !!(this.own && this.own.blueFlag)
     });
   };
 

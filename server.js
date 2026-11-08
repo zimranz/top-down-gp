@@ -175,7 +175,8 @@ function snapshot(room) {
   for (let i = 0; i < S.cars.length; i++) {
     const c = S.cars[i];
     if (c.out) { cars.push([c.id, 0, 0, 0, 0, 0, 0, 0, 64, 0]); continue; }
-    let flags = (c.drsOpen ? 1 : 0) | (c.locked ? 2 : 0) | (c.slide ? 4 : 0) | (c.finished ? 32 : 0);
+    let flags = (c.drsOpen ? 1 : 0) | (c.locked ? 2 : 0) | (c.slide ? 4 : 0) | (c.finished ? 32 : 0) |
+      (c.blue >= 0 ? 128 : 0) | (c.lockFx ? 256 : 0);
     for (let z = 0; z < c.drsElig.length; z++) if (c.drsElig[z]) flags |= 8 << z;
     cars.push([c.id, r2(c.x), r2(c.y), r4(c.a), r2(c.vx), r2(c.vy), r3(c.w), r3(c.delta), flags, room.ack.get(c.id) || 0]);
   }
@@ -192,7 +193,8 @@ function timing(room) {
     }),
     f: S.fastest ? [S.fastest.id, r3(S.fastest.time)] : null,
     tl: isFinite(S.timeLimit) ? Math.max(0, Math.round(S.timeLimit - S.time)) : -1,
-    st: S.startTime
+    st: S.startTime,
+    y: S.yellow.map(function (z) { return [Math.round(z.s), z.id]; })     // yellow flag incidents [track position, car]
   };
 }
 
@@ -207,14 +209,16 @@ function onSessionEnd(room) {
     room.qualiOrder = results.map(function (r) { return r.driverId; });
     room.state = 'qualiResults';
     const raceIn = 12;
-    io.to(room.code).emit('sessionEnd', { type: 'quali', track: S.track.id, results: results, raceIn: raceIn });
+    room.lastResults = { type: 'quali', track: S.track.id, results: results, raceIn: raceIn };
+    io.to(room.code).emit('sessionEnd', room.lastResults);
     room.timer = setTimeout(function () {
       room.timer = null;
       if (rooms.get(room.code) === room && room.state === 'qualiResults' && room.players.size) startSession(room, 'race');
     }, raceIn * 1000);
   } else {
     room.state = 'results';
-    io.to(room.code).emit('sessionEnd', { type: 'race', track: S.track.id, results: results });
+    room.lastResults = { type: 'race', track: S.track.id, results: results };
+    io.to(room.code).emit('sessionEnd', room.lastResults);
   }
   broadcastRoom(room);
 }
@@ -379,7 +383,7 @@ io.on('connection', function (socket) {
       seq: seq,
       throttle: F1.clamp(Number(a[1]) || 0, 0, 1),
       brake: F1.clamp(Number(a[2]) || 0, 0, 1),
-      steer: F1.clamp((Number(a[3]) || 0) / 1000, -1.6, 1.6),
+      steer: F1.clamp((Number(a[3]) || 0) / 1000, -1.8, 1.8),
       drs: !!((a[4] | 0) & 1),
       reset: !!((a[4] | 0) & 2)
     });

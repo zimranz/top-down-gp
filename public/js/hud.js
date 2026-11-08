@@ -10,12 +10,17 @@
     else if (e.k === 'finalLap') msgs.add('FINAL LAP', { color: '#ffffff', key: 'final', dur: 3500 });
     else if (e.k === 'chequered') msgs.add('CHEQUERED FLAG', { sub: codeOf(e.id) + ' WINS', big: true, color: '#ffffff', key: 'cheq', dur: 4500 });
     else if (e.k === 'finish' && e.id === myId) msgs.add('FINISHED  P' + e.pos, { big: true, color: '#ffd600', key: 'fin', dur: 6000 });
-    else if (e.k === 'qualiDone' && e.id === myId) msgs.add('QUALIFYING COMPLETE', { sub: 'Keep driving — waiting for the others', color: '#19c94a', key: 'qd', dur: 6000 });
+    else if (e.k === 'qualiDone' && e.id === myId) {
+      if (e.p) msgs.add('SESSION COMPLETE', { sub: 'Results coming up', color: '#19c94a', key: 'qd', dur: 6000 });
+      else msgs.add('QUALIFYING COMPLETE', { sub: 'Keep driving — waiting for the others', color: '#19c94a', key: 'qd', dur: 6000 });
+    }
     else if (e.k === 'lap') {
       if (e.id === myId) {
+        // e.record = beat the personal best saved for this track
+        const sub = e.fastest && e.record ? 'FASTEST LAP · NEW PERSONAL BEST' : e.fastest ? 'FASTEST LAP OF THE SESSION'
+          : e.record ? 'NEW PERSONAL BEST' : e.pb ? 'SESSION BEST' : null;
         msgs.add('LAP ' + e.n + '   ' + F1.fmtLap(e.t), {
-          sub: e.fastest ? 'FASTEST LAP OF THE SESSION' : e.pb ? 'PERSONAL BEST' : null,
-          subColor: e.fastest ? '#c77dff' : '#19c94a', color: e.fastest ? '#9b30ff' : '#19c94a', key: 'mylap', dur: 4000
+          sub: sub, subColor: e.fastest ? '#c77dff' : '#19c94a', color: e.fastest ? '#9b30ff' : '#19c94a', key: 'mylap', dur: e.record ? 5000 : 4000
         });
       } else if (e.fastest) {
         msgs.add('FASTEST LAP', { sub: codeOf(e.id) + '  ' + F1.fmtLap(e.t), color: '#9b30ff', subColor: '#c77dff', key: 'fl', dur: 3000 });
@@ -25,9 +30,11 @@
 
   /* o = { type, laps, track, order, rows:{id:{laps,last,best,gap,lapStart,fin,out,qdone,dist}}, entries:{id:{driverId}},
            myId, phase (0 countdown, 1 running, 2 finishing, 3 done), lights, time, timeLeft, fastestId,
-           own (car state or null), msgs, ping, started, wrongT, stuckT } */
+           own (car state or null), msgs, ping, started, wrongT, stuckT,
+           yellow: [[track position, car id] of incidents], blue: true when the player is about to be lapped } */
   function buildHud(o) {
     const T = o.track, rows = o.rows, order = o.order, isRace = o.type === 'race', isQuali = o.type === 'quali';
+    const limited = isQuali || (o.type === 'practice' && o.laps > 0);   // a set number of timed laps
     const leader = rows[order[0]] || null;
     const tower = order.map(function (id, i) {
       const e = o.entries[id], r = rows[id] || {};
@@ -50,18 +57,19 @@
       };
     });
     const hud = {
-      title: isRace ? 'RACE' : isQuali ? 'QUALIFYING' : 'PRACTICE',
+      title: o.title || (isRace ? 'RACE' : isQuali ? 'QUALIFYING' : 'PRACTICE'),
       towerRight: isRace ? 'LAP ' + Math.min(o.laps, (leader ? leader.laps : 0) + 1) + '/' + o.laps : (T.short || T.name).toUpperCase(),
       tower: tower,
       msgs: o.msgs.active(),
-      ping: o.ping
+      ping: o.ping,
+      yellow: o.yellow || []
     };
     if (o.phase === 0 && isRace) hud.lights = o.lights;
     if (o.phase === 0 && isQuali) {
       const left = Math.ceil(3 - o.time);
       if (left > 0) hud.centre = { text: String(left), size: 90 };
     }
-    if (isQuali && o.timeLeft >= 0) {
+    if (limited && o.timeLeft >= 0) {
       const m = Math.floor(o.timeLeft / 60), s = Math.floor(o.timeLeft % 60);
       hud.timeLeft = 'SESSION ' + m + ':' + (s < 10 ? '0' : '') + s;
     }
@@ -78,14 +86,24 @@
       hud.posText = 'P' + pos + ' / ' + order.length;
       const has = function (v) { return v !== null && v !== undefined; };
       if (isRace) hud.lapText = r.fin ? 'FINISHED' : 'LAP ' + Math.min(o.laps, (r.laps || 0) + 1) + ' / ' + o.laps;
-      else if (isQuali) hud.lapText = r.qdone ? 'QUALIFYING COMPLETE' : !has(r.lapStart) ? 'OUT LAP' : 'TIMED LAP ' + Math.min(o.laps, (r.laps || 0) + 1) + ' / ' + o.laps;
+      else if (limited) hud.lapText = r.qdone ? (isQuali ? 'QUALIFYING COMPLETE' : 'SESSION COMPLETE') : !has(r.lapStart) ? 'OUT LAP' : 'TIMED LAP ' + Math.min(o.laps, (r.laps || 0) + 1) + ' / ' + o.laps;
       else hud.lapText = 'LAPS COMPLETED  ' + (r.laps || 0);
       if (has(r.lapStart) && o.phase >= 1 && !r.fin) hud.cur = F1.fmtLap(Math.max(0, o.time - r.lapStart));
       else hud.cur = isRace ? null : 'OUT LAP';
       hud.last = has(r.last) ? F1.fmtLap(r.last) : null;
       hud.best = has(r.best) ? F1.fmtLap(r.best) : null;
       hud.bestPurple = o.fastestId === o.myId;
+      const pb = window.PB.get(T.id);
+      hud.pb = pb ? F1.fmtLap(pb.t) : null;
       hud.wrongWay = o.wrongT > 1.2;
+      // flags: blue when about to be lapped, yellow near an incident
+      if (o.blue) hud.flag = 'blue';
+      else if (o.yellow && o.yellow.length && o.phase >= 1) {
+        for (let k = 0; k < o.yellow.length; k++) {
+          const z = o.yellow[k];
+          if (z[1] !== o.myId && F1.wrapS(own.s - z[0] + 200, T.length) < 250) { hud.flag = 'yellow'; break; }
+        }
+      }
       if (performance.now() - o.started < 12000 && (o.phase === 0 || o.type === 'practice')) hud.hint = window.controlsHint();
       if (o.stuckT > 3 || o.wrongT > 4) {
         hud.msgs = hud.msgs.concat([{ text: 'STUCK?', sub: 'Press R to put the car back on track', color: '#ffd600' }]);

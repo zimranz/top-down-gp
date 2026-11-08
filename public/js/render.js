@@ -44,6 +44,154 @@
     this.cam.ready = false;
   };
 
+  // ------------------------------------------------------------- pit complex
+  /* Short names that fit on a garage roof. */
+  const GARAGE_NAMES = { mclaren: 'McLAREN', mercedes: 'MERCEDES', redbull: 'RED BULL', ferrari: 'FERRARI', williams: 'WILLIAMS', rb: 'RACING BULLS',
+    aston: 'ASTON MARTIN', haas: 'HAAS', audi: 'AUDI', alpine: 'ALPINE', cadillac: 'CADILLAC' };
+
+  /* Everything in the pit complex, built once per track. Offsets are measured from the track centre
+     towards the pit side: track edge hw, pit wall, fast lane, working lane with the boxes, garages, paddock. */
+  function buildPit(T, mctx) {
+    const P = T.pit, side = P.side, L = T.length, ds = T.ds, hw = T.hw;
+    const pt = function (s, d) { return F1.trackPoint(T, s, side * d); };
+    const samp = function (arr, s) {
+      s = F1.wrapS(s, L);
+      const f = s / ds, i0 = Math.floor(f) % T.n, i1 = (i0 + 1) % T.n, t = f - Math.floor(f);
+      const a = arr[i0], b = arr[i1];
+      if (a !== a) return b;
+      if (b !== b) return a;
+      return a + (b - a) * t;
+    };
+    const offAt = function (s) { return samp(T.pitOff, s); };
+    const inner = function (s) { return offAt(s) - P.half; };
+    const outer = function (s) { return offAt(s) + P.half + samp(T.pitWork, s); };
+    const konst = function (v) { return function () { return v; }; };
+    const strip = function (sa, sb, fIn, fOut, step) {
+      const path = new Path2D(), n = Math.max(1, Math.ceil((sb - sa) / (step || 2)));
+      for (let k = 0; k <= n; k++) { const sv = sa + (sb - sa) * k / n, p = pt(sv, fIn(sv)); if (!k) path.moveTo(p.x, p.y); else path.lineTo(p.x, p.y); }
+      for (let k = n; k >= 0; k--) { const sv = sa + (sb - sa) * k / n, p = pt(sv, fOut(sv)); path.lineTo(p.x, p.y); }
+      path.closePath();
+      return path;
+    };
+    const along = function (path, sa, sb, f, step) {
+      const n = Math.max(1, Math.ceil((sb - sa) / (step || 2)));
+      for (let k = 0; k <= n; k++) { const sv = sa + (sb - sa) * k / n, p = pt(sv, f(sv)); if (!k) path.moveTo(p.x, p.y); else path.lineTo(p.x, p.y); }
+      return path;
+    };
+    const quad = function (sa, sb, da, db) { return [pt(sa, da), pt(sb, da), pt(sb, db), pt(sa, db)]; };
+    const head = function (sv) { return F1.trackPoint(T, sv, 0).h; };
+    const S0 = P.s0, S1 = P.s1, S2 = L + P.s2, S3 = L + P.s3;
+    const pit = { texts: [], boxes: [], stands: [], garages: [], paddock: [] };
+
+    // ground: concrete apron around the lanes, paddock behind the garages, the pit road itself
+    pit.apron = strip(S1, S2, konst(P.wallOff + 0.3), konst(P.garFront + 0.2), 4);
+    pit.ground = strip(P.gA - 10, P.gB + 10, konst(P.garBack - 0.5), konst(P.garBack + 28), 6);
+    pit.road = strip(S0, S3, inner, outer, 2);
+    let run = false;
+    // pit wall between the track and the pit lane
+    pit.wall = new Path2D();
+    run = false;
+    for (let k = 0; k <= Math.ceil((S3 - S0) / ds); k++) {
+      const sv = S0 + k * ds, i = F1.idxAt(T, sv);
+      if (T.pitWall[i]) { const p = pt(sv, P.wallOff); if (!run) pit.wall.moveTo(p.x, p.y); else pit.wall.lineTo(p.x, p.y); }
+      run = !!T.pitWall[i];
+    }
+    // lane markings
+    pit.lines = new Path2D();
+    along(pit.lines, S0 + 28, S3 - 10, inner, 2);
+    along(pit.lines, S0 + 28, S3 - 28, outer, 2);
+    pit.dash = along(new Path2D(), P.gA - 6, P.gB + 6, function (sv) { return offAt(sv) + P.half; }, 3);
+    pit.limit = [];
+    [S1, S2].forEach(function (sv) { pit.limit.push([pt(sv, inner(sv) + 0.1), pt(sv, outer(sv) - 0.1)]); });
+    // pit exit blend line: keeps the cars leaving the pits apart from the racing line
+    let sb0 = S3;
+    for (let sv = S2; sv < S3; sv += 1) if (inner(sv) < hw + 1.5) { sb0 = sv; break; }
+    pit.blend = along(new Path2D(), sb0, S3 + 25, function (sv) { return sv <= S3 ? Math.min(hw - 0.3, inner(sv)) : hw - 0.3 - Math.min(2.2, (sv - S3) * 0.09); }, 2);
+    pit.texts.push({ p: pt(S1 + 8, P.off), a: head(S1 + 8) + Math.PI / 2, t: '80', size: 3.6, color: 'rgba(255,255,255,0.8)' });
+    pit.texts.push({ p: pt(S0 + 44, offAt(S0 + 44)), a: head(S0 + 44) + Math.PI / 2, t: 'PIT', size: 2.6, color: 'rgba(255,214,0,0.85)' });
+    pit.texts.push({ p: pt(S2 - 8, P.off), a: head(S2 - 8) + Math.PI / 2, t: 'END', size: 2.0, color: 'rgba(255,255,255,0.6)' });
+    // pit exit light (red while the race start is under way)
+    pit.light = { p: pt(S2 + 2, outer(S2 + 2) + 1.4), a: head(S2 + 2) };
+
+    const n = P.garages.length;
+    const cont = function (sv) { return sv < P.gA - 1 ? sv + L : sv; };   // keep s increasing past the line
+    pit.building = strip(P.gA - 1.2, P.gB + 1.2, konst(P.garFront), konst(P.garBack), 4);
+    pit.dividers = new Path2D();
+    pit.ribs = new Path2D();
+    along(pit.ribs, P.gA - 1.2, P.gB + 1.2, konst(P.garBack - 3), 6);
+    F1.TEAMS.forEach(function (team, k) {
+      const g = P.garages[n - 1 - k];
+      const g0 = cont(g.s0), g1 = cont(g.s1), mid = cont(g.mid);
+      const col = F1.teamUiColor(team);
+      // painted box in the working lane: team outline, wheel marks, a stop bar for the front wing
+      pit.boxes.push({
+        color: col,
+        outline: quad(mid - 4.4, mid + 4.4, P.boxOff - 2.5, P.boxOff + 2.5),
+        marks: [[1.55, -0.77], [1.55, 0.77], [-1.95, -0.77], [-1.95, 0.77]].map(function (w) { return quad(mid + w[0] - 0.36, mid + w[0] + 0.36, P.boxOff + w[1] - 0.2, P.boxOff + w[1] + 0.2); }),
+        stop: quad(mid + 2.95, mid + 3.2, P.boxOff - 1.2, P.boxOff + 1.2)
+      });
+      // team stand on the pit wall
+      pit.stands.push({ color: col, body: quad(mid - 3.2, mid + 3.2, P.wallOff + 0.35, P.wallOff + 1.75), roof: quad(mid - 2.8, mid + 2.8, P.wallOff + 0.6, P.wallOff + 1.5) });
+      // garage: coloured front, open door, name on the roof
+      const label = GARAGE_NAMES[team.id] || team.name.toUpperCase();
+      pit.garages.push({
+        color: col,
+        front: quad(g0, g1, P.garFront, P.garFront + 1.7),
+        door: quad(g0 + 2.4, g1 - 2.4, P.garFront - 0.05, P.garFront + 0.7),
+        // name on the roof, sized to the free depth when drawn (the web font may load later)
+        name: { p: pt(mid, (P.garFront + 1.7 + P.garBack) / 2), a: head(mid) + Math.PI / 2, t: label, room: P.garBack - P.garFront - 1.7 - 1.6, color: tint(col, 0.35) }
+      });
+      const a = pt(g1 + 0.4, P.garFront), b = pt(g1 + 0.4, P.garBack);
+      if (k > 0) { pit.dividers.moveTo(a.x, a.y); pit.dividers.lineTo(b.x, b.y); }
+      // paddock: motorhome and two trucks behind the garage
+      pit.paddock.push({ color: col, kind: 'home', q: quad(g0 + 1.6, g1 - 1.6, P.garBack + 4.5, P.garBack + 13.5), roof: quad(g0 + 2.6, g1 - 2.6, P.garBack + 5.5, P.garBack + 12.5) });
+      [P.garBack + 17, P.garBack + 21.6].forEach(function (dd, q) {
+        const t0 = g0 + 2 + q * 2.5;
+        pit.paddock.push({ color: col, kind: 'truck', q: quad(t0, t0 + 13.6, dd, dd + 2.55), cab: quad(t0 + 13.9, t0 + 16.4, dd + 0.05, dd + 2.5) });
+      });
+    });
+    // bounds for culling
+    let sx = 0, sy = 0, cnt = 0;
+    const pts = [];
+    for (let sv = S0; sv <= S3; sv += 20) { pts.push(pt(sv, 0), pt(sv, P.garBack + 30)); }
+    pts.forEach(function (p) { sx += p.x; sy += p.y; cnt++; });
+    pit.cx = sx / cnt; pit.cy = sy / cnt; pit.r = 0;
+    pts.forEach(function (p) { pit.r = Math.max(pit.r, Math.hypot(p.x - pit.cx, p.y - pit.cy)); });
+    pit.r += 30;
+    return pit;
+  }
+
+  /* Overhead start-light gantry just past the line: five light units that match the start sequence. */
+  function buildGantry(T) {
+    const hw = T.hw, s0 = 3.4, s1 = 4.9, span = hw + 3.4;
+    const q = function (sa, sb, da, db) { return [F1.trackPoint(T, sa, da), F1.trackPoint(T, sb, da), F1.trackPoint(T, sb, db), F1.trackPoint(T, sa, db)]; };
+    const g = { beam: q(s0, s1, -span, span), legs: [q(s0 - 0.5, s1 + 0.5, -span - 1.4, -span + 0.2), q(s0 - 0.5, s1 + 0.5, span - 0.2, span + 1.4)], units: [] };
+    for (let k = 0; k < 5; k++) {
+      const d = -4.4 + k * 2.2;
+      g.units.push({ box: q(s0 - 0.25, s1 + 0.25, d - 0.85, d + 0.85), c1: F1.trackPoint(T, (s0 + s1) / 2, d - 0.42), c2: F1.trackPoint(T, (s0 + s1) / 2, d + 0.42) });
+    }
+    const c = F1.trackPoint(T, (s0 + s1) / 2, 0);
+    g.cx = c.x; g.cy = c.y;
+    return g;
+  }
+
+  /* Mix a #rrggbb colour with white (k = 0..1). */
+  function tint(hex, k) {
+    const n = parseInt(hex.slice(1), 16);
+    const r = (n >> 16) & 255, g = (n >> 8) & 255, b = n & 255;
+    const m = function (c) { return Math.round(c + (255 - c) * k); };
+    return 'rgb(' + m(r) + ',' + m(g) + ',' + m(b) + ')';
+  }
+
+  /* World-space text (size in metres). */
+  function worldText(ctx, t) {
+    ctx.save();
+    ctx.translate(t.p.x, t.p.y); ctx.rotate(t.a); ctx.scale(t.size / 40, t.size / 40);
+    ctx.font = '900 40px ' + FONT; ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
+    ctx.fillStyle = t.color; ctx.fillText(t.t, 0, 2);
+    ctx.restore();
+  }
+
   // ------------------------------------------------------------- track prep
   Renderer.prototype.prep = function (T) {
     if (this.tracks[T.id]) return this.tracks[T.id];
@@ -143,58 +291,9 @@
     const wallS = T.wall[0];
     for (let s = -300; s < 200; s += 64) block(s, s + 56, standSide * (wallS + 5), standSide * (wallS + 19), '#2d4f8c', '#e8e8e8');
 
-    // pit lane, pit wall, garages
-    if (T.pit) {
-      const P = T.pit, side = P.side;
-      const pit = { lane: new Path2D(), edges: new Path2D(), wall: new Path2D(), patch: new Path2D(), barrier: new Path2D(), lines: new Path2D(), garages: [], cx: 0, cy: 0, r: 0 };
-      const idx = [];
-      const startI = F1.idxAt(T, P.s0);
-      for (let k = 0; k < N; k++) { const i = (startI + k) % N; if (T.pitOff[i] === T.pitOff[i]) idx.push(i); else if (idx.length) break; }
-      let first = true, firstW = true, sx = 0, sy = 0;
-      const ln = new Path2D(), rn = new Path2D();
-      idx.forEach(function (i, q) {
-        const po = side * T.pitOff[i];
-        const c = off(i, po);
-        if (first) pit.lane.moveTo(c[0], c[1]); else pit.lane.lineTo(c[0], c[1]);
-        const e1 = off(i, po - (P.half - 0.3)), e2 = off(i, po + (P.half - 0.3));
-        if (first) { ln.moveTo(e1[0], e1[1]); rn.moveTo(e2[0], e2[1]); } else { ln.lineTo(e1[0], e1[1]); rn.lineTo(e2[0], e2[1]); }
-        first = false;
-        sx += c[0]; sy += c[1];
-        if (T.pitWall[i]) {
-          const w = off(i, side * P.wallOff);
-          if (firstW) pit.wall.moveTo(w[0], w[1]); else pit.wall.lineTo(w[0], w[1]);
-          firstW = false;
-        }
-      });
-      pit.edges.addPath(ln); pit.edges.addPath(rn);
-      pit.cx = sx / idx.length; pit.cy = sy / idx.length;
-      idx.forEach(function (i) { const c = off(i, side * T.pitOff[i]); pit.r = Math.max(pit.r, Math.hypot(c[0] - pit.cx, c[1] - pit.cy)); });
-      pit.r += 60;
-      // extra run-off behind the garages when the barrier had to move out
-      const ext = idx.filter(function (i) { return T.wallPit[i] > T.wall[i] + 0.1; });
-      if (ext.length > 1) {
-        ext.forEach(function (i, q) { const p = off(i, side * (T.hw + 1)); if (!q) pit.patch.moveTo(p[0], p[1]); else pit.patch.lineTo(p[0], p[1]); });
-        for (let q = ext.length - 1; q >= 0; q--) { const p = off(ext[q], side * T.wallPit[ext[q]]); pit.patch.lineTo(p[0], p[1]); }
-        pit.patch.closePath();
-        ext.forEach(function (i, q) { const p = off(i, side * (T.wallPit[i] - 0.6)); if (!q) pit.barrier.moveTo(p[0], p[1]); else pit.barrier.lineTo(p[0], p[1]); });
-        pit.hasPatch = true;
-      }
-      // limiter lines across the pit lane where the speed limit starts and ends
-      [P.s1, P.s2].forEach(function (sv) {
-        const i = F1.idxAt(T, sv), po = side * T.pitOff[i];
-        const a2 = F1.trackPoint(T, sv, po - P.half + 0.3), b2 = F1.trackPoint(T, sv, po + P.half - 0.3);
-        pit.lines.moveTo(a2.x, a2.y); pit.lines.lineTo(b2.x, b2.y);
-      });
-      // garages (McLaren nearest the exit, like F1.pitSpot)
-      const n = P.garages.length;
-      F1.TEAMS.forEach(function (team, k) {
-        const g = P.garages[n - 1 - k];
-        const d0 = side * (P.off + P.half + 1.2), d1 = side * (P.off + P.half + 10.5), d2 = side * (P.off + P.half + 2.4);
-        const quad = function (sa, sb, da, db) { return [F1.trackPoint(T, sa, da), F1.trackPoint(T, sb, da), F1.trackPoint(T, sb, db), F1.trackPoint(T, sa, db)]; };
-        pit.garages.push({ body: quad(g.s0, g.s1, d0, d1), stripe: quad(g.s0, g.s1, d0, d2), color: F1.teamUiColor(team) });
-      });
-      G.pit = pit;
-    }
+    // pit lane, garages, paddock; start-light gantry over the grid
+    if (T.pit) G.pit = buildPit(T, this.ctx);
+    G.gantry = buildGantry(T);
 
     // trees outside the barriers (spatial hash, 100 m cells)
     const b = T.bounds, pad = 260, sp = 13;
@@ -219,7 +318,7 @@
         const tx = x + (rand() - 0.5) * sp * 0.9, ty = y + (rand() - 0.5) * sp * 0.9;
         const nt = nearTrack(tx, ty);
         if (nt[0] < T.wall[nt[1]] + 9) continue;
-        if (nt[0] < T.maxWall + 30 && (nt[1] * T.ds > T.length - 360 || nt[1] * T.ds < 210)) continue;
+        if (nt[0] < T.maxWall + 44 && (nt[1] * T.ds > T.length - 380 || nt[1] * T.ds < 230)) continue;
         if (rand() < 0.18) continue;
         const key = Math.floor(tx / 100) + ',' + Math.floor(ty / 100);
         if (!G.trees.has(key)) G.trees.set(key, []);
@@ -269,7 +368,7 @@
     const cam = this.cam, W = this.w, H = this.h;
     const sp = focus ? Math.hypot(focus.vx || 0, focus.vy || 0) : 0;
     const base = F1.clamp(Math.min(W, H) / 88, 4.2, 13);
-    const zT = base * (1 - 0.3 * Math.min(1, sp / 85));
+    const zT = this.zoomOverride || base * (1 - 0.3 * Math.min(1, sp / 85));
     const dash = 130;                                   // space taken by the dashboard at the bottom
     if (!cam.ready && focus) {
       cam.x = focus.x; cam.y = focus.y; cam.a = focus.a; cam.z = zT; cam.lx = 0; cam.ly = 0; cam.ready = true;
@@ -354,16 +453,22 @@
     for (const ch of vis) for (const g of ch.runoff) { ctx.strokeStyle = COL.barrier; ctx.lineWidth = 2 * g.w + 1.2; ctx.stroke(g.path); }
     ctx.strokeStyle = G.grassPattern || COL.grassA;
     for (const ch of vis) for (const g of ch.runoff) { ctx.lineWidth = 2 * g.w; ctx.stroke(g.path); }
-    if (G.pit && Math.hypot(G.pit.cx - vc[0], G.pit.cy - vc[1]) < G.pit.r + vr) this.drawPit(ctx, G.pit, T);
+    // the visible track sections are merged into one shape per layer and drawn in one go:
+    // drawing them section by section leaves hairline seams where the sections meet
+    const merge = function (key) { const p = new Path2D(); for (const ch of vis) p.addPath(ch[key]); return p; };
     ctx.fillStyle = G.gravelPattern || COL.gravel;
-    for (const ch of vis) ctx.fill(ch.gravel);
+    ctx.fill(merge('gravel'));
+    if (G.pit && Math.hypot(G.pit.cx - vc[0], G.pit.cy - vc[1]) < G.pit.r + vr) {
+      ctx.save(); this.drawPit(ctx, G.pit, T, frame); ctx.restore();
+    }
     // asphalt
+    ctx.lineJoin = 'round'; ctx.lineCap = 'round';
     ctx.strokeStyle = COL.asphalt; ctx.lineWidth = 2 * T.hw;
-    for (const ch of vis) ctx.stroke(ch.center);
-    ctx.fillStyle = COL.kerbR; for (const ch of vis) ctx.fill(ch.kerbR);
-    ctx.fillStyle = COL.kerbW; for (const ch of vis) ctx.fill(ch.kerbW);
+    ctx.stroke(merge('center'));
+    ctx.fillStyle = COL.kerbR; ctx.fill(merge('kerbR'));
+    ctx.fillStyle = COL.kerbW; ctx.fill(merge('kerbW'));
     ctx.strokeStyle = COL.line; ctx.lineWidth = 0.28; ctx.lineCap = 'butt';
-    for (const ch of vis) ctx.stroke(ch.edges);
+    ctx.stroke(merge('edges'));
     ctx.fillStyle = '#f5f5f5'; ctx.fill(G.chequerW);
     ctx.fillStyle = '#111'; ctx.fill(G.chequerB);
     ctx.strokeStyle = 'rgba(255,255,255,0.85)'; ctx.lineWidth = 0.22; ctx.stroke(G.marks);
@@ -382,6 +487,9 @@
       ctx.stroke(sk);
     }
 
+    // marshal posts waving yellow flags before an incident
+    if (frame.yellow && frame.yellow.length) { ctx.save(); this.drawMarshals(ctx, T, frame.yellow, vc, vr); ctx.restore(); }
+
     // cars
     const cars = frame.cars;
     for (let i = 0; i < cars.length; i++) {
@@ -396,6 +504,8 @@
 
     // particles
     this.updateParticles(ctx, dt);
+    // start-light gantry over the cars
+    if (G.gantry && Math.hypot(G.gantry.cx - vc[0], G.gantry.cy - vc[1]) < vr + T.hw + 10) this.drawGantry(ctx, G.gantry, frame.lights || 0);
 
     // labels in screen space
     ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
@@ -408,27 +518,128 @@
     }
   };
 
-  Renderer.prototype.drawPit = function (ctx, pit, T) {
-    const G = this.tracks[T.id];
-    if (pit.hasPatch) {
-      ctx.fillStyle = G.grassPattern || COL.grassA; ctx.fill(pit.patch);
-      ctx.strokeStyle = COL.armco; ctx.lineWidth = 2.4; ctx.stroke(pit.barrier);
-      ctx.strokeStyle = COL.barrier; ctx.lineWidth = 1.2; ctx.stroke(pit.barrier);
+  /* Flag-waving marshals at the barrier, 200 m and 90 m before each incident (both sides of the track). */
+  Renderer.prototype.drawMarshals = function (ctx, T, zones, vc, vr) {
+    const t = performance.now() / 1000;
+    const on = Math.floor(t * 3) % 2 === 0;
+    for (let k = 0; k < zones.length; k++) {
+      for (const back of [200, 90]) {
+        const s = zones[k][0] - back, i = F1.idxAt(T, s);
+        for (const side of [-1, 1]) {
+          const pitSide = T.pit && side === T.pit.side && T.pitWall[i];   // between the track and the pit wall
+          const d = side * (pitSide ? T.hw + 2.4 : Math.min(T.hw + 6, F1.wallAt(T, i, side) - 1.6));
+          const p = F1.trackPoint(T, s, d);
+          if (Math.abs(p.x - vc[0]) > vr + 10 || Math.abs(p.y - vc[1]) > vr + 10) continue;
+          // marshal post: white box with an orange roof
+          ctx.save();
+          ctx.translate(p.x, p.y); ctx.rotate(p.h); ctx.scale(1.5, 1.5);
+          ctx.fillStyle = 'rgba(0,0,0,0.3)'; ctx.fillRect(-0.9, -0.7, 2, 1.6);
+          ctx.fillStyle = '#f2f2f2'; ctx.fillRect(-1.1, -0.9, 2, 1.6);
+          ctx.fillStyle = '#ff7a00'; ctx.fillRect(-1.1, -0.9, 2, 0.45);
+          // waving flag
+          const wave = Math.sin(t * 9 + k + back) * 0.5;
+          ctx.strokeStyle = '#222'; ctx.lineWidth = 0.12;
+          ctx.beginPath(); ctx.moveTo(0.9, 0); ctx.lineTo(0.9, -side * 2.2); ctx.stroke();
+          ctx.fillStyle = on ? '#ffd600' : '#e6b800';
+          ctx.beginPath();
+          ctx.moveTo(0.9, -side * 2.2); ctx.lineTo(0.9 + 1.5 + wave * 0.3, -side * (2.2 - wave * 0.2));
+          ctx.lineTo(0.9 + 1.5 + wave * 0.3, -side * (1.2 - wave * 0.2)); ctx.lineTo(0.9, -side * 1.2);
+          ctx.closePath(); ctx.fill();
+          ctx.restore();
+        }
+      }
     }
-    ctx.lineJoin = 'round'; ctx.lineCap = 'round';
-    ctx.strokeStyle = '#43464b'; ctx.lineWidth = 2 * T.pit.half; ctx.stroke(pit.lane);
-    ctx.lineCap = 'butt';
-    ctx.strokeStyle = 'rgba(255,255,255,0.85)'; ctx.lineWidth = 0.22; ctx.stroke(pit.edges);
-    ctx.strokeStyle = '#ffd600'; ctx.lineWidth = 0.4; ctx.stroke(pit.lines);
-    for (let i = 0; i < pit.garages.length; i++) {
-      const g = pit.garages[i];
-      ctx.fillStyle = '#26292e'; quadPath(ctx, g.body); ctx.fill();
-      ctx.strokeStyle = 'rgba(255,255,255,0.18)'; ctx.lineWidth = 0.3; ctx.stroke();
-      ctx.fillStyle = g.color; quadPath(ctx, g.stripe); ctx.fill();
+  };
+
+  Renderer.prototype.drawPit = function (ctx, pit, T, frame) {
+    const now = performance.now() / 1000;
+    ctx.lineJoin = 'round'; ctx.lineCap = 'butt';
+    // ground
+    ctx.fillStyle = '#4b5058'; ctx.fill(pit.ground);
+    ctx.fillStyle = '#5e636b'; ctx.fill(pit.apron);
+    ctx.fillStyle = '#3d4045'; ctx.fill(pit.road);
+    // markings
+    ctx.strokeStyle = 'rgba(255,255,255,0.85)'; ctx.lineWidth = 0.22; ctx.stroke(pit.lines);
+    ctx.setLineDash([2.2, 2.2]); ctx.lineWidth = 0.18; ctx.strokeStyle = 'rgba(255,255,255,0.6)'; ctx.stroke(pit.dash); ctx.setLineDash([]);
+    for (let i = 0; i < pit.limit.length; i++) {
+      const a = pit.limit[i][0], b = pit.limit[i][1];
+      ctx.strokeStyle = '#f2f2f2'; ctx.lineWidth = 0.7;
+      ctx.beginPath(); ctx.moveTo(a.x, a.y); ctx.lineTo(b.x, b.y); ctx.stroke();
+      ctx.setLineDash([0.9, 0.9]); ctx.strokeStyle = '#e10600'; ctx.lineWidth = 0.7; ctx.stroke(); ctx.setLineDash([]);
     }
+    ctx.strokeStyle = 'rgba(255,255,255,0.9)'; ctx.lineWidth = 0.3; ctx.stroke(pit.blend);
+    for (let i = 0; i < pit.texts.length; i++) worldText(ctx, pit.texts[i]);
+    // pit boxes
+    for (let i = 0; i < pit.boxes.length; i++) {
+      const b = pit.boxes[i];
+      quadPath(ctx, b.outline); ctx.strokeStyle = b.color; ctx.lineWidth = 0.28; ctx.stroke();
+      ctx.globalAlpha = 0.12; ctx.fillStyle = b.color; ctx.fill(); ctx.globalAlpha = 1;
+      ctx.fillStyle = 'rgba(255,255,255,0.75)';
+      for (let k = 0; k < b.marks.length; k++) { quadPath(ctx, b.marks[k]); ctx.fill(); }
+      ctx.fillStyle = '#ffd600'; quadPath(ctx, b.stop); ctx.fill();
+    }
+    // pit wall with the team stands
     ctx.lineCap = 'round';
     ctx.strokeStyle = '#7d858c'; ctx.lineWidth = 0.9; ctx.stroke(pit.wall);
     ctx.strokeStyle = '#e8e8e8'; ctx.lineWidth = 0.5; ctx.stroke(pit.wall);
+    ctx.lineCap = 'butt';
+    for (let i = 0; i < pit.stands.length; i++) {
+      const st = pit.stands[i];
+      ctx.fillStyle = '#1b1d22'; quadPath(ctx, st.body); ctx.fill();
+      ctx.fillStyle = st.color; quadPath(ctx, st.roof); ctx.fill();
+    }
+    // garages: shadow, roof, team fronts, open doors, names, dividers
+    ctx.save(); ctx.translate(0.7, 0.9); ctx.fillStyle = 'rgba(0,0,0,0.35)'; ctx.fill(pit.building); ctx.restore();
+    ctx.fillStyle = '#2a2d33'; ctx.fill(pit.building);
+    ctx.strokeStyle = '#41464f'; ctx.lineWidth = 0.35; ctx.stroke(pit.building);
+    ctx.strokeStyle = 'rgba(255,255,255,0.07)'; ctx.lineWidth = 0.25; ctx.stroke(pit.ribs);
+    for (let i = 0; i < pit.garages.length; i++) {
+      const g = pit.garages[i];
+      ctx.fillStyle = g.color; quadPath(ctx, g.front); ctx.fill();
+      ctx.fillStyle = '#0d0e11'; quadPath(ctx, g.door); ctx.fill();
+      ctx.font = '900 40px ' + FONT;
+      const w40 = ctx.measureText(g.name.t).width / 40;
+      g.name.size = Math.min(2.4, g.name.room / Math.max(0.1, w40));
+      worldText(ctx, g.name);
+    }
+    ctx.strokeStyle = '#9aa1a8'; ctx.lineWidth = 0.3; ctx.stroke(pit.dividers);
+    // paddock
+    for (let i = 0; i < pit.paddock.length; i++) {
+      const v = pit.paddock[i];
+      ctx.fillStyle = 'rgba(0,0,0,0.3)'; ctx.save(); ctx.translate(0.5, 0.6); quadPath(ctx, v.q); ctx.fill(); ctx.restore();
+      if (v.kind === 'home') {
+        ctx.fillStyle = '#e9ecef'; quadPath(ctx, v.q); ctx.fill();
+        ctx.fillStyle = v.color; quadPath(ctx, v.roof); ctx.fill();
+      } else {
+        ctx.fillStyle = v.color; quadPath(ctx, v.q); ctx.fill();
+        ctx.strokeStyle = 'rgba(0,0,0,0.35)'; ctx.lineWidth = 0.15; ctx.stroke();
+        ctx.fillStyle = '#1d2026'; quadPath(ctx, v.cab); ctx.fill();
+      }
+    }
+    // pit exit light
+    const L = pit.light, red = frame && frame.pitRed;
+    ctx.save(); ctx.translate(L.p.x, L.p.y); ctx.rotate(L.a);
+    ctx.fillStyle = '#111'; ctx.fillRect(-0.7, -0.45, 1.4, 0.9);
+    ctx.fillStyle = red ? '#ff2a1f' : (Math.floor(now * 2) % 2 ? '#2bff6a' : '#19c94a');
+    ctx.beginPath(); ctx.arc(0, 0, 0.32, 0, TAU); ctx.fill();
+    ctx.restore();
+  };
+
+  /* Start-light gantry (drawn over the cars). */
+  Renderer.prototype.drawGantry = function (ctx, g, lights) {
+    ctx.save(); ctx.translate(0.9, 1.1); ctx.fillStyle = 'rgba(0,0,0,0.28)'; quadPath(ctx, g.beam); ctx.fill(); ctx.restore();
+    ctx.fillStyle = '#5a5f67';
+    for (let i = 0; i < g.legs.length; i++) { quadPath(ctx, g.legs[i]); ctx.fill(); }
+    ctx.fillStyle = '#23262b'; quadPath(ctx, g.beam); ctx.fill();
+    ctx.strokeStyle = '#3a3e45'; ctx.lineWidth = 0.15; ctx.stroke();
+    for (let k = 0; k < g.units.length; k++) {
+      const u = g.units[k], on = lights > k;
+      ctx.fillStyle = '#0b0c0e'; quadPath(ctx, u.box); ctx.fill();
+      ctx.fillStyle = on ? '#ff2a1f' : '#3a1210';
+      if (on) { ctx.shadowColor = '#ff2a1f'; ctx.shadowBlur = 14; }
+      ctx.beginPath(); ctx.arc(u.c1.x, u.c1.y, 0.32, 0, TAU); ctx.arc(u.c2.x, u.c2.y, 0.32, 0, TAU); ctx.fill();
+      ctx.shadowBlur = 0;
+    }
   };
   function quadPath(ctx, q) {
     ctx.beginPath(); ctx.moveTo(q[0].x, q[0].y);
@@ -558,6 +769,18 @@
       this.skids.push([prev[0][0], prev[0][1], rl[0], rl[1]], [prev[1][0], prev[1][1], rr[0], rr[1]]);
       if (this.skids.length > 3000) this.skids.splice(0, this.skids.length - 3000);
     }
+    if (c.lock && sp > 6) {
+      // locked front tyres: flat-spot marks and white smoke
+      const fl = [c.x + ca * 1.55 + sa * 0.77, c.y + sa * 1.55 - ca * 0.77];
+      const fr = [c.x + ca * 1.55 - sa * 0.77, c.y + sa * 1.55 + ca * 0.77];
+      const pf = this.wheelPrev['f' + c.id];
+      if (pf) this.skids.push([pf[0][0], pf[0][1], fl[0], fl[1]], [pf[1][0], pf[1][1], fr[0], fr[1]]);
+      this.wheelPrev['f' + c.id] = [fl, fr];
+      if (Math.random() < 0.7) {
+        const w = Math.random() < 0.5 ? fl : fr;
+        this.parts.push({ x: w[0], y: w[1], vx: c.vx * 0.55 + (Math.random() - 0.5) * 2, vy: c.vy * 0.55 + (Math.random() - 0.5) * 2, life: 0.9, max: 0.9, r: 0.5, kind: 'smoke' });
+      }
+    } else if (this.wheelPrev['f' + c.id]) delete this.wheelPrev['f' + c.id];
     if (c.surf >= 2 && sp > 12 && Math.random() < 0.5) {
       this.parts.push({ x: c.x - ca * 2.4, y: c.y - sa * 2.4, vx: c.vx * 0.2 + (Math.random() - 0.5) * 3, vy: c.vy * 0.2 + (Math.random() - 0.5) * 3, life: 0.7, max: 0.7, r: 1.0, kind: c.surf === 3 ? 'gravel' : 'grass' });
     }
@@ -585,6 +808,9 @@
         ctx.strokeStyle = 'rgba(255,' + Math.floor(170 + 80 * t) + ',60,' + t.toFixed(2) + ')';
         ctx.lineWidth = 0.18;
         ctx.beginPath(); ctx.moveTo(p.x, p.y); ctx.lineTo(p.x - p.vx * 0.03, p.y - p.vy * 0.03); ctx.stroke();
+      } else if (p.kind === 'smoke') {
+        ctx.fillStyle = 'rgba(235,235,235,' + (0.42 * t).toFixed(2) + ')';
+        ctx.beginPath(); ctx.arc(p.x, p.y, p.r + (1 - t) * 2.4, 0, TAU); ctx.fill();
       } else {
         ctx.fillStyle = p.kind === 'gravel' ? 'rgba(200,180,130,' + (0.35 * t).toFixed(2) + ')' : 'rgba(90,120,60,' + (0.3 * t).toFixed(2) + ')';
         ctx.beginPath(); ctx.arc(p.x, p.y, p.r + (1 - t) * 1.8, 0, TAU); ctx.fill();
@@ -665,6 +891,21 @@
       roundRect(ctx, mx, my, ms, ms, 8); ctx.fill();
       ctx.drawImage(mm.canvas, mx, my, ms, ms);
       const k = ms / mm.size;
+      if (hud.yellow && hud.yellow.length) {
+        const T = frame.track;
+        ctx.strokeStyle = Math.floor(performance.now() / 300) % 2 ? '#ffd600' : '#ffb000';
+        ctx.lineWidth = 6; ctx.lineCap = 'round'; ctx.lineJoin = 'round';
+        for (let z = 0; z < hud.yellow.length; z++) {
+          ctx.beginPath();
+          for (let ds = -200; ds <= 50; ds += 10) {
+            const p = F1.trackPoint(T, hud.yellow[z][0] + ds, 0);
+            const px = mx + (p.x * mm.sc + mm.ox) * k, py = my + (p.y * mm.sc + mm.oy) * k;
+            if (ds === -200) ctx.moveTo(px, py); else ctx.lineTo(px, py);
+          }
+          ctx.stroke();
+        }
+        ctx.lineCap = 'butt';
+      }
       const cars = frame.cars;
       for (let pass = 0; pass < 2; pass++) {
         for (let i = 0; i < cars.length; i++) {
@@ -676,12 +917,15 @@
           ctx.lineWidth = c.me ? 2 : 1; ctx.strokeStyle = c.me ? '#ffd600' : 'rgba(0,0,0,0.7)'; ctx.stroke();
         }
       }
+      let fy = my + ms + 8;
       if (hud.timeLeft) {
         ctx.fillStyle = 'rgba(10,10,14,0.86)';
-        roundRect(ctx, mx, my + ms + 8, ms, 26, 5); ctx.fill();
+        roundRect(ctx, mx, fy, ms, 26, 5); ctx.fill();
         ctx.fillStyle = '#fff'; ctx.font = '700 13px ' + FONT; ctx.textAlign = 'center';
-        ctx.fillText(hud.timeLeft, mx + ms / 2, my + ms + 21);
+        ctx.fillText(hud.timeLeft, mx + ms / 2, fy + 13);
+        fy += 34;
       }
+      if (hud.flag) this.drawFlagPanel(ctx, hud.flag, mx, fy, ms);
     }
 
     // ---- start lights (top-centre)
@@ -708,8 +952,10 @@
     if (hud.msgs) {
       for (let i = 0; i < hud.msgs.length; i++) {
         const m = hud.msgs[i];
+        ctx.font = '600 14px ' + FONT;
+        const subW = m.sub ? ctx.measureText(m.sub).width : 0;
         ctx.font = '800 ' + (m.big ? 30 : 20) + 'px ' + FONT;
-        const w = Math.max(ctx.measureText(m.text).width, m.sub ? 120 : 0) + 40;
+        const w = Math.max(ctx.measureText(m.text).width, subW) + 40;
         const h = (m.big ? 46 : 34) + (m.sub ? 20 : 0);
         ctx.globalAlpha = m.alpha === undefined ? 1 : m.alpha;
         ctx.fillStyle = 'rgba(10,10,14,0.88)';
@@ -775,16 +1021,16 @@
       ctx.fillText(hud.lapText || '', cx2, by + 54);
       if (compact) {
         ctx.font = '700 13px ' + FONT; ctx.fillStyle = '#fff';
-        ctx.fillText((hud.cur || '--:--.---') + (hud.best ? '   BEST ' + hud.best : ''), cx2, by + 74);
+        ctx.fillText((hud.cur || '--:--.---') + (hud.best ? '   BEST ' + hud.best : hud.pb ? '   PB ' + hud.pb : ''), cx2, by + 74);
       } else {
         const lx = bx + 384, rx = bx + bw - 16;
-        const lines = [['CURRENT', hud.cur], ['LAST', hud.last], ['BEST', hud.best]];
+        const lines = [['CURRENT', hud.cur], ['LAST', hud.last], ['BEST', hud.best], ['PB', hud.pb]];
         for (let i = 0; i < lines.length; i++) {
-          const yy = by + 22 + i * 26;
-          ctx.font = '700 11px ' + FONT; ctx.fillStyle = '#8f96a0'; ctx.textAlign = 'left';
+          const yy = by + 17 + i * 21;
+          ctx.font = '700 11px ' + FONT; ctx.fillStyle = i === 3 ? '#19c94a' : '#8f96a0'; ctx.textAlign = 'left';
           ctx.fillText(lines[i][0], lx, yy);
-          ctx.font = '700 16px ' + FONT; ctx.textAlign = 'right';
-          ctx.fillStyle = i === 2 && hud.bestPurple ? '#c77dff' : '#fff';
+          ctx.font = '700 15px ' + FONT; ctx.textAlign = 'right';
+          ctx.fillStyle = i === 2 && hud.bestPurple ? '#c77dff' : i === 3 ? '#9ff0b4' : '#fff';
           ctx.fillText(lines[i][1] || '--:--.---', rx, yy);
         }
         ctx.fillStyle = 'rgba(255,255,255,0.08)';
@@ -808,6 +1054,39 @@
       ctx.textAlign = 'right';
       ctx.fillText('PING ' + hud.ping + ' ms', W - 92, H - 18);
     }
+  };
+
+  /* Yellow / blue flag board under the minimap. */
+  Renderer.prototype.drawFlagPanel = function (ctx, kind, x, y, w) {
+    const t = performance.now() / 1000;
+    const yellow = kind === 'yellow';
+    const h = 50;
+    ctx.fillStyle = 'rgba(10,10,14,0.9)';
+    roundRect(ctx, x, y, w, h, 6); ctx.fill();
+    ctx.lineWidth = 2;
+    ctx.strokeStyle = yellow ? (Math.floor(t * 3) % 2 ? '#ffd600' : '#a88d00') : (Math.floor(t * 3) % 2 ? '#2f7bff' : '#1747a8');
+    roundRect(ctx, x + 1, y + 1, w - 2, h - 2, 6); ctx.stroke();
+    // waving flag icon
+    const fx = x + 12, fy = y + 10, wave = Math.sin(t * 8) * 2;
+    ctx.strokeStyle = '#d0d4d9'; ctx.lineWidth = 2;
+    ctx.beginPath(); ctx.moveTo(fx, fy - 2); ctx.lineTo(fx, fy + 32); ctx.stroke();
+    ctx.fillStyle = yellow ? '#ffd600' : '#1f6bff';
+    ctx.beginPath();
+    ctx.moveTo(fx + 1, fy); ctx.quadraticCurveTo(fx + 12, fy - 3 + wave, fx + 24, fy + wave * 0.6);
+    ctx.lineTo(fx + 24, fy + 17 + wave * 0.6); ctx.quadraticCurveTo(fx + 12, fy + 14 + wave, fx + 1, fy + 17);
+    ctx.closePath(); ctx.fill();
+    if (!yellow) { ctx.strokeStyle = '#ffd600'; ctx.lineWidth = 2; ctx.beginPath(); ctx.moveTo(fx + 2, fy + 13); ctx.lineTo(fx + 23, fy + 4 + wave * 0.6); ctx.stroke(); }
+    ctx.textAlign = 'left';
+    const room = w - 52;
+    let fs = w < 150 ? 12 : 15;
+    ctx.fillStyle = '#fff'; ctx.font = '800 ' + fs + 'px ' + FONT;
+    ctx.fillText(yellow ? 'YELLOW FLAG' : 'BLUE FLAG', x + 44, y + 18);
+    const sub = yellow ? 'SLOW DOWN · NO OVERTAKING' : 'LET THE LEADER THROUGH';
+    fs = w < 150 ? 9 : 11;
+    ctx.font = '700 ' + fs + 'px ' + FONT;
+    while (fs > 7 && ctx.measureText(sub).width > room) { fs -= 0.5; ctx.font = '700 ' + fs + 'px ' + FONT; }
+    ctx.fillStyle = yellow ? '#ffe680' : '#9cc0ff';
+    ctx.fillText(sub, x + 44, y + 35);
   };
 
   /* Small car preview for menus. */

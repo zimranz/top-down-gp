@@ -6,6 +6,16 @@
 
   Settings.load();
   Input.init();
+  const GameAudio = window.GameAudio;
+  GameAudio.load();
+  // menu clicks: a rising sound for the big red buttons, a falling one for going back, a tap for the rest
+  document.addEventListener('click', function (e) {
+    const b = e.target.closest && e.target.closest('button, .track-card, .driver-btn');
+    if (!b || b.id === 'set-engine-test') return;
+    const kind = b.classList.contains('red') ? 'go' : (b.dataset.go === 'home' || /quit|menu|leave/.test(b.id)) ? 'back' : 'tap';
+    GameAudio.click(kind);
+  }, true);
+  document.addEventListener('change', function (e) { if (e.target.matches && e.target.matches('select, input[type=checkbox]')) GameAudio.click('tap'); }, true);
   const R = new Renderer($('game'));
 
   let game = null;
@@ -15,10 +25,11 @@
   let resultsTimer = null;
   let lastResults = null;
   const practiceOpts = Object.assign({ track: 'monza', driverId: 'NOR', aiCount: 10, aiLevel: 'medium', collisions: true }, Settings.data.practice || {});
-  const gpOpts = Object.assign({ track: 'monza', driverId: 'NOR', aiCount: 15, aiLevel: 'medium', qualiLaps: 2, raceLaps: 5 }, Settings.data.gp || {});
+  const gpOpts = Object.assign({ track: 'monza', driverId: 'NOR', aiCount: 15, aiLevel: 'medium', p1: 0, p2: 0, p3: 0, qualiLaps: 2, raceLaps: 5 }, Settings.data.gp || {});
   if (!F1.TRACK_DEFS[practiceOpts.track]) practiceOpts.track = 'monza';
   if (!F1.TRACK_DEFS[gpOpts.track]) gpOpts.track = 'monza';
-  let gp = null;               // current Grand Prix weekend { opts, aiDrivers, grid, stage }
+  let gp = null;               // current Grand Prix weekend { opts, aiDrivers, grid, stages, idx }
+  const STAGE_NAME = { p1: 'Practice 1', p2: 'Practice 2', p3: 'Practice 3', quali: 'Qualifying', race: 'Race' };
   let resultsCtx = 'online';   // which buttons the results screen shows
 
   // ------------------------------------------------------------- helpers
@@ -71,7 +82,9 @@
       const T = F1.getTrack(id);
       const b = el('button', 'track-card' + (id === selected ? ' on' : ''));
       const cv = el('canvas');
-      b.append(cv, el('div', 'tname', T.name), el('div', 'tlen', (T.length / 1000).toFixed(3) + ' km · ' + T.country));
+      const pb = window.PB.get(id);
+      b.append(cv, el('div', 'tname', T.name), el('div', 'tlen', (T.length / 1000).toFixed(3) + ' km · ' + T.country),
+        el('div', 'tpb' + (pb ? '' : ' none'), pb ? 'PB ' + F1.fmtLap(pb.t) : 'No personal best yet'));
       b.dataset.id = id;
       b.disabled = !!disabled;
       b.addEventListener('click', function () {
@@ -137,6 +150,7 @@
     mode = 'practice';
     game = new window.LocalGame(Object.assign({ type: 'practice' }, practiceOpts));
     R.resetEffects();
+    GameAudio.newSession();
     show(null);
   }
   $('practice-start').addEventListener('click', startPractice);
@@ -155,6 +169,10 @@
     $('gp-ai-val').textContent = gpOpts.aiCount;
     $('gp-ai').oninput = function () { gpOpts.aiCount = Number(this.value); $('gp-ai-val').textContent = this.value; };
     segInit($('gp-level'), gpOpts.aiLevel, function (v) { gpOpts.aiLevel = v; });
+    ['p1', 'p2', 'p3'].forEach(function (k) {
+      lapOptions($('gp-' + k), 1, 3, gpOpts[k], 'Skip');
+      $('gp-' + k).onchange = function () { gpOpts[k] = Number(this.value); };
+    });
     lapOptions($('gp-quali'), 1, 5, gpOpts.qualiLaps, 'None (random grid)');
     lapOptions($('gp-race'), 1, 7, gpOpts.raceLaps);
     $('gp-quali').onchange = function () { gpOpts.qualiLaps = Number(this.value); };
@@ -166,35 +184,49 @@
     for (let i = a.length - 1; i > 0; i--) { const j = Math.floor(Math.random() * (i + 1)); const t = a[i]; a[i] = a[j]; a[j] = t; }
     return a;
   }
+  /* A weekend is a list of stages: optional P1-P3, optional qualifying, then the race. */
   function startGp() {
     Settings.data.gp = Object.assign({}, gpOpts);
     Settings.save();
     const pool = F1.DRIVERS.map(function (d) { return d.id; }).filter(function (id) { return id !== gpOpts.driverId; });
-    gp = { opts: Object.assign({}, gpOpts), aiDrivers: shuffled(pool).slice(0, gpOpts.aiCount), grid: null };
-    if (gp.opts.qualiLaps > 0) startGpSession('quali');
-    else { gp.grid = shuffled([gp.opts.driverId].concat(gp.aiDrivers)); startGpSession('race'); }
+    gp = { opts: Object.assign({}, gpOpts), aiDrivers: shuffled(pool).slice(0, gpOpts.aiCount), grid: null, stages: [], idx: 0 };
+    ['p1', 'p2', 'p3'].forEach(function (k) { if (gp.opts[k] > 0) gp.stages.push(k); });
+    if (gp.opts.qualiLaps > 0) gp.stages.push('quali');
+    gp.stages.push('race');
+    startGpStage(0);
   }
-  function startGpSession(type) {
-    const o = gp.opts;
-    gp.stage = type;
+  function startGpStage(i) {
+    const o = gp.opts, stage = gp.stages[i];
+    const type = stage === 'quali' ? 'quali' : stage === 'race' ? 'race' : 'practice';
+    gp.idx = i;
+    gp.stage = stage;
+    if (type === 'race' && !gp.grid) gp.grid = shuffled([o.driverId].concat(gp.aiDrivers));   // no qualifying: random grid
     mode = 'gp';
     clearInterval(resultsTimer);
     game = new window.LocalGame({
       type: type, track: o.track, driverId: o.driverId, aiDrivers: gp.aiDrivers,
-      grid: type === 'race' ? gp.grid : null, aiLevel: o.aiLevel,
-      laps: type === 'race' ? o.raceLaps : o.qualiLaps,
+      grid: type === 'race' ? gp.grid : null, aiLevel: o.aiLevel, collisions: true,
+      laps: type === 'race' ? o.raceLaps : type === 'quali' ? o.qualiLaps : o[stage],
+      title: type === 'practice' ? STAGE_NAME[stage].toUpperCase() : null,
       onEnd: function (results) {
         if (mode !== 'gp' || game.S.results !== results) return;
         if (type === 'quali') gp.grid = results.map(function (r) { return r.driverId; });
-        showResults({ type: type, track: o.track, results: results }, 'gp');
+        showResults({ type: type, stage: stage, track: o.track, results: results }, 'gp');
       }
     });
     R.resetEffects();
+    GameAudio.newSession();
     show(null);
   }
   $('gp-start').addEventListener('click', startGp);
-  $('results-next').addEventListener('click', function () { if (gp) startGpSession('race'); });
-  $('results-again').addEventListener('click', function () { if (gp) { gp.opts = Object.assign({}, gp.opts); if (gp.opts.qualiLaps > 0) startGpSession('quali'); else { gp.grid = shuffled(gp.grid); startGpSession('race'); } } });
+  $('results-next').addEventListener('click', function () { if (gp && gp.idx + 1 < gp.stages.length) startGpStage(gp.idx + 1); });
+  $('results-again').addEventListener('click', function () { if (gp) startGpStage(gp.stages.length - 1); });   // same grid
+  $('results-restart').addEventListener('click', function () {
+    if (!gp) return;
+    if (gp.opts.qualiLaps > 0) gp.grid = null;
+    else gp.grid = shuffled(gp.grid);
+    startGpStage(0);
+  });
   $('results-menu').addEventListener('click', function () { goHome(); });
 
   // ------------------------------------------------------------- navigation
@@ -218,6 +250,21 @@
     segInit($('set-camera'), d.camera, function (v) { d.camera = v; Settings.save(); });
     $('set-labels').checked = !!d.labels;
     $('set-labels').onchange = function () { d.labels = this.checked; Settings.save(); };
+    ['master', 'engine', 'effects'].forEach(function (k) {
+      const inp = $('set-vol-' + k), out = $('set-vol-' + k + '-val');
+      inp.value = Math.round(GameAudio.vol[k] * 100); out.textContent = inp.value;
+      inp.oninput = function () { out.textContent = this.value; GameAudio.setVolume(k, Number(this.value) / 100); };
+    });
+    $('set-mute').checked = !!GameAudio.vol.muted;
+    $('set-mute').onchange = function () { if (!!GameAudio.vol.muted !== this.checked) GameAudio.toggleMute(); };
+    $('set-engine').value = GameAudio.vol.style;
+    $('set-engine').onchange = function () { GameAudio.setStyle(this.value); };
+    $('set-engine-test').onclick = function () { GameAudio.demo(); setTimeout(engineNote, 300); };
+    function engineNote() {
+      $('set-engine-note').textContent = GameAudio.ready && !GameAudio.onboardAvailable() && window.isSecureContext === false
+        ? 'Onboard sound needs a secure page (https or localhost), so the TV camera sound is used here.' : '';
+    }
+    engineNote();
     $('settings').classList.remove('hidden');
     Input.active = false;
   }
@@ -234,6 +281,7 @@
     if (game && game.kind === 'local') game.paused = true;
     $('pause-restart').style.display = mode === 'practice' || mode === 'gp' ? '' : 'none';
     $('pause-restart').textContent = mode === 'gp' ? 'Restart this session' : 'Restart practice';
+    $('pause-end').style.display = mode === 'gp' && gp && game && game.type === 'practice' ? '' : 'none';
     updatePauseBtn();
     $('pause-note').textContent = mode === 'online' ? 'The session keeps running while this menu is open.' : '';
     $('pause-quit').textContent = mode === 'online' ? 'Leave the room' : 'Quit to menu';
@@ -251,12 +299,23 @@
   $('pause-resume').addEventListener('click', resume);
   $('pause-restart').addEventListener('click', function () {
     resume();
-    if (mode === 'gp' && gp) startGpSession(gp.stage); else startPractice();
+    if (mode === 'gp' && gp) startGpStage(gp.idx); else startPractice();
+  });
+  $('pause-end').addEventListener('click', function () {
+    resume();
+    if (mode === 'gp' && game && game.kind === 'local' && game.S.phase !== 'done') game.S.finish();
   });
   $('pause-quit').addEventListener('click', function () {
     if (mode === 'online') leaveRoom(); else goHome();
   });
   window.addEventListener('keydown', function (e) {
+    const tg = e.target && e.target.tagName;
+    if (e.code === 'KeyM' && !e.repeat && tg !== 'INPUT' && tg !== 'SELECT') {
+      const muted = GameAudio.toggleMute();
+      toast(muted ? 'Sound off (M to turn it back on)' : 'Sound on');
+      if ($('set-mute')) $('set-mute').checked = muted;
+      return;
+    }
     if (e.code !== 'Escape' && e.code !== 'KeyP') return;
     const tag = e.target && e.target.tagName;
     if (e.code === 'KeyP' && (tag === 'INPUT' || tag === 'SELECT')) return;
@@ -264,6 +323,7 @@
     if (pauseOpen()) resume(); else openPause();
   });
   document.addEventListener('visibilitychange', function () {
+    GameAudio.suspend(document.hidden);
     if (document.hidden && (mode === 'practice' || mode === 'gp') && !pauseOpen()) openPause();
     if (document.hidden) {
       Input.keys = {};
@@ -437,6 +497,7 @@
     $('settings').classList.add('hidden');
     game = new window.OnlineGame(net, info);
     R.resetEffects();
+    GameAudio.newSession();
     show(null);
   }
 
@@ -449,9 +510,10 @@
     lastResults = m;
     resultsCtx = ctx;
     const T = F1.getTrack(m.track);
-    $('results-title').textContent = (m.type === 'quali' ? 'Qualifying' : 'Race') + ' results — ' + T.name;
+    $('results-title').textContent = (m.stage ? STAGE_NAME[m.stage] : m.type === 'quali' ? 'Qualifying' : 'Race') + ' results — ' + T.name;
     const body = $('results-body');
     body.innerHTML = '';
+    $('results-table').classList.toggle('no-pts', m.type !== 'race');
     const me = net && net.id();
     const myPlayer = ctx === 'gp' ? { driverId: gp && gp.opts.driverId } : room && room.players.find(function (p) { return p.id === me; });
     let fastest = null;
@@ -468,12 +530,15 @@
       tr.appendChild(el('td', 'r', r.gap));
       tr.appendChild(el('td', 'r' + (r.best !== null && r.best === fastest && m.type === 'race' ? ' purple' : ''), r.best !== null ? F1.fmtLap(r.best) : '—'));
       tr.appendChild(el('td', 'r', String(r.laps)));
+      tr.appendChild(el('td', 'r pts-col' + (r.pts ? ' pts' : ''), r.pts ? String(r.pts) : ''));
       body.appendChild(tr);
     });
     clearInterval(resultsTimer);
     if (ctx === 'gp') {
       const mine = m.results.find(function (r) { return !r.isAI; });
-      $('results-note').textContent = m.type === 'quali' ? (mine ? 'You start the race from P' + mine.pos : '') : (mine ? 'You finished P' + mine.pos : '');
+      if (m.type === 'practice') $('results-note').textContent = mine && mine.best !== null ? 'Your best lap ' + F1.fmtLap(mine.best) + ' — P' + mine.pos : 'No lap time set';
+      else if (m.type === 'quali') $('results-note').textContent = mine ? 'You start the race from P' + mine.pos : '';
+      else $('results-note').textContent = mine ? 'You finished P' + mine.pos + (mine.pts ? ' — ' + mine.pts + (mine.pts === 1 ? ' point' : ' points') : '') : '';
     } else if (m.type === 'quali' && m.raceIn) {
       let left = m.raceIn;
       $('results-note').textContent = 'The race starts in ' + left + ' s — you start from your qualifying position';
@@ -494,8 +559,11 @@
     const isHost = !isGp && room && net && room.hostId === net.id();
     const raceDone = lastResults && lastResults.type === 'race';
     $('results-lobby').style.display = !isGp && isHost && raceDone ? '' : 'none';
-    $('results-next').style.display = isGp && lastResults && lastResults.type === 'quali' ? '' : 'none';
+    const next = isGp && gp && !raceDone ? gp.stages[gp.idx + 1] : null;
+    $('results-next').style.display = next ? '' : 'none';
+    if (next) $('results-next').textContent = next === 'race' ? 'Start the race' : 'Start ' + STAGE_NAME[next];
     $('results-again').style.display = isGp && raceDone ? '' : 'none';
+    $('results-restart').style.display = isGp && raceDone && gp && gp.stages.length > 1 ? '' : 'none';
     $('results-menu').style.display = isGp ? '' : 'none';
     if (!isGp && raceDone && !isHost) $('results-note').textContent = 'Waiting for the host to return to the lobby…';
   }
@@ -505,7 +573,7 @@
   const params = new URLSearchParams(location.search);
   if (params.get('room')) openOnline(params.get('room').toUpperCase().slice(0, 4));
 
-  if (params.get('debug') === '1') window.__tdgp = { onSessionEnd: onSessionEnd, net: function () { return net; }, game: function () { return game; } };
+  if (params.get('debug') === '1') window.__tdgp = { onSessionEnd: onSessionEnd, net: function () { return net; }, game: function () { return game; }, R: R };
 
   let last = performance.now(), acc = 0;
   function frame(now) {
@@ -517,6 +585,10 @@
     while (acc >= F1.DT && steps < 6) { game.step(); acc -= F1.DT; steps++; }
     if (steps >= 6) acc = 0;
     try { game.render(R, acc / F1.DT, dt); } catch (err) { console.error(err); }
+    // sound: only while a session is on screen (not in menus, pause or results)
+    const audioOn = mode !== 'menu' && game.kind !== 'attract' && $('overlay').classList.contains('hidden') && $('pause').classList.contains('hidden');
+    GameAudio.setActive(audioOn);
+    if (audioOn && game.audioState) { try { const st = game.audioState(); if (st) GameAudio.update(st, dt); } catch (err) { console.error(err); } }
     requestAnimationFrame(frame);
   }
   requestAnimationFrame(frame);

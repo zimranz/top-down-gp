@@ -28,6 +28,7 @@
     { grip: 1.0, traction: 1.0, roll: 0, drag2: 0 }           // pit lane (80 km/h limiter)
   ];
   const PIT_LIMIT = (F1.PIT_LIMIT = 80 / 3.6);
+  const POINTS = (F1.POINTS = [25, 18, 15, 12, 10, 8, 6, 4, 2, 1]);
   F1.DT = 1 / 60;
   F1.SUBSTEPS = 2;
   F1.NEUTRAL = { throttle: 0, brake: 0, steer: 0, drs: false, reset: false };
@@ -62,7 +63,7 @@
       x: g.x, y: g.y, a: g.h, vx: 0, vy: 0, w: 0, delta: 0,
       seg: -1, s: 0, d: 0, dist: 0, surf: 0,
       slide: false, drsOpen: false, drsAllowed: false, locked: false,
-      resetCd: 0, wallHit: 0, out: false,
+      resetCd: 0, wallHit: 0, out: false, dirty: 1, blue: -1, lockFx: false,
       px: g.x, py: g.y, pa: g.h
     };
     F1.queryTrack(T, c.x, c.y, -1, Q);
@@ -159,7 +160,7 @@
     }
   }
 
-  /* One physics sub-step for one car. inp: {throttle 0..1, brake 0..1, steer -1.6..1.6, drs, reset} */
+  /* One physics sub-step for one car. inp: {throttle 0..1, brake 0..1, steer -1.8..1.8, drs, reset} */
   F1.stepCar = function (c, inp, T, dt) {
     if (c.out) return;
     if (c.resetCd > 0) c.resetCd -= dt;
@@ -188,6 +189,7 @@
 
     let thr = clamp(inp.throttle || 0, 0, 1);
     const brk = clamp(inp.brake || 0, 0, 1);
+    c.lockFx = !!inp.lock && brk > 0.05 && sp > 8;   // locked front tyres (smoke)
     if (inp.drs && c.drsAllowed) c.drsOpen = true;
     if (!c.drsAllowed || brk > 0.05) c.drsOpen = false;
 
@@ -196,11 +198,12 @@
     let vl = -c.vx * sa + c.vy * ca;
     const latRef = Math.min(P.LAT_MAX, P.LAT0 + P.LAT_K * sp * sp);
     let latAvail = latRef * grip;
+    if (c.dirty < 1) latAvail *= c.dirty;          // dirty air behind another car
     if (brk > 0 && vf > 2) latAvail *= 1 - 0.28 * brk;
     const vfa = Math.abs(vf);
 
     // steering is a proportion of the grip-limited angle, so keyboard steering works at any speed
-    const steer = clamp(inp.steer || 0, -1.6, 1.6);
+    const steer = clamp(inp.steer || 0, -1.8, 1.8);
     const maxDelta = Math.min(P.STEER_MAX, Math.atan(CAR.WB * latRef / Math.max(vfa * vfa, 1)) * 1.05);
     const delta = clamp(steer * maxDelta, -P.STEER_MAX, P.STEER_MAX);
     c.delta = delta;
@@ -350,18 +353,22 @@
   };
 
   // ---------------------------------------------------------------- AI
-  // mistake = chance per car per lap of braking too late or running wide (across a full grid that is
-  // roughly: easy one a lap, medium one every ~4 laps, hard one every ~10 laps)
+  // mistake  = chance per car per lap of a driving error: locking up, running wide, snapping sideways on
+  //            the exit or hitting a kerb too hard (more likely with a car right behind, or in dirty air)
+  // divebomb = chance that an overtake into a corner is braked for too late
+  // gap      = following distance in seconds when stuck behind someone
   const AI_LEVELS = (F1.AI_LEVELS = {
-    easy: { lat: 0.8, brake: 0.72, pace: 0.965, mistake: 0.05 },
-    medium: { lat: 0.88, brake: 0.84, pace: 0.985, mistake: 0.012 },
-    hard: { lat: 0.95, brake: 0.93, pace: 1.0, mistake: 0.005 }
+    easy: { lat: 0.8, brake: 0.72, pace: 0.965, mistake: 0.34, divebomb: 0.05, gap: 0.2 },
+    medium: { lat: 0.88, brake: 0.84, pace: 0.985, mistake: 0.18, divebomb: 0.025, gap: 0.16 },
+    hard: { lat: 0.95, brake: 0.93, pace: 1.0, mistake: 0.1, divebomb: 0.015, gap: 0.13 }
   });
+  const LIMIT = { lat: 1, brake: 1 };   // what the car can really do (used when an AI overdoes it)
+  const MK_MIX = [0.3, 0.55, 0.78];     // share of lock-ups / running wide / snaps (the rest: kerb strikes)
 
   F1.speedProfile = function (T, level) {
     T._prof = T._prof || {};
     if (T._prof[level]) return T._prof[level];
-    const Lv = AI_LEVELS[level] || AI_LEVELS.medium;
+    const Lv = level === 'limit' ? LIMIT : AI_LEVELS[level] || AI_LEVELS.medium;
     const N = T.n, K = T.rlK, ds = T.ds;
     const v = new Float64Array(N);
     for (let i = 0; i < N; i++) {
@@ -383,7 +390,8 @@
     return v;
   };
 
-  /* Points where the AI starts braking for a corner (speed drops by more than 12 m/s). */
+  /* Braking zones: where the AI starts braking for a real corner (speed drops by more than 12 m/s),
+     with the slowest point (apex) and the direction of the corner (+1 right, -1 left). */
   F1.brakeZones = function (T, level) {
     T._bz = T._bz || {};
     if (T._bz[level]) return T._bz[level];
@@ -391,10 +399,14 @@
     for (let i = 0; i < N; i++) {
       const a = v[(i - 1 + N) % N], b = v[i], c = v[(i + 1) % N];
       if (!(b >= a && b > c + 0.05)) continue;          // local peak: braking starts here
-      let minV = b, minI = i;
-      for (let k = 1; k < 140; k++) { const j = (i + k) % N; if (v[j] < minV) { minV = v[j]; minI = j; } }
+      let minV = b, minK = 0;
+      for (let k = 1; k < 140; k++) { const j = (i + k) % N; if (v[j] < minV) { minV = v[j]; minK = k; } }
       if (b - minV < 12) continue;
-      out.push({ s: i * T.ds, turn: T.curv[minI] });
+      // middle of the slowest stretch = apex
+      let k1 = minK;
+      while (k1 < minK + 60 && v[(i + k1 + 1) % N] < minV + 0.6) k1++;
+      const apexI = (i + Math.round((minK + k1) / 2)) % N;
+      out.push({ s: i * T.ds, apex: apexI * T.ds, turn: T.curv[apexI] >= 0 ? 1 : -1, vMin: minV });
     }
     T._bz[level] = out;
     return out;
@@ -418,53 +430,211 @@
     return t;
   };
 
+  function wrapD(d, L) { return d < -L / 2 ? d + L : d > L / 2 ? d - L : d; }
+
+  /* Dirty air: following closely through a corner costs grip (up to 7%). Same for players and AI. */
+  const DIRTY = 0.07;
+  F1.dirtyAir = function (c, cars, L) {
+    if (c.vx * c.vx + c.vy * c.vy < 900) return 1;    // only matters above ~110 km/h
+    let f = 1;
+    for (let q = 0; q < cars.length; q++) {
+      const o = cars[q];
+      if (o === c || o.out) continue;
+      const dS = wrapD(o.s - c.s, L);
+      if (dS < 4 || dS > 30.4) continue;
+      const dD = o.d - c.d;
+      if (dD > 2.2 || dD < -2.2) continue;
+      const g = 1 - DIRTY * Math.min(1, (30.4 - dS) / 25);
+      if (g < f) f = g;
+    }
+    return f;
+  };
+
+  /* How far a car reaches sideways across the track (more when it is at an angle to the track). */
+  function halfWidthOnTrack(c, T) {
+    const phi = c.a - T.hd[c.seg];
+    return CAR.HW * Math.abs(Math.cos(phi)) + CAR.HL * Math.min(0.6, Math.abs(Math.sin(phi)));
+  }
+
+  /* Distance along the track between two cars, measured where they actually are: on the inside of a
+     tight corner the cars are much closer together than the centre line suggests. */
+  function realDS(T, c, o, dS) {
+    const k = T.curv[F1.idxAt(T, c.s + dS * 0.5)];
+    const f = 1 - k * (c.d + o.d) * 0.5;
+    return dS * (f < 0.4 ? 0.4 : f > 1.6 ? 1.6 : f);
+  }
+
+  /* Is the line `lat` free of other cars from `from` to `to` metres ahead of car c? */
+  function laneClear(S, c, lat, skipId, from, to) {
+    const cars = S.cars, L = S.track.length;
+    for (let q = 0; q < cars.length; q++) {
+      const o = cars[q];
+      if (o === c || o.out || o.id === skipId) continue;
+      const dS = realDS(S.track, c, o, wrapD(o.s - c.s, L));
+      if (dS < from || dS > to) continue;
+      if (Math.abs(o.d - lat) < 2.5) return false;
+    }
+    return true;
+  }
+
+  /* Fresh AI driver state for car c. */
+  F1.newAI = function (c, lvl, rng) {
+    return {
+      inp: { throttle: 0, brake: 0, steer: 0, drs: false, reset: false, lock: false },
+      bias: 0, stuck: 0, backward: 0, wait: 0,
+      latT: c.d, gridLane: c.d, along: {}, pass: null, mk: null, lastMk: -99, dispT: -99,
+      pace: lvl.pace * (1 - rng() * 0.012),
+      react: 0.12 + rng() * 0.25
+    };
+  };
+
   F1.aiDrive = function (c, S) {
-    const T = S.track, ai = c.ai, inp = ai.inp;
-    inp.reset = false; inp.drs = false;
+    const T = S.track, ai = c.ai, inp = ai.inp, L = T.length, now = S.time;
+    inp.reset = false; inp.drs = false; inp.lock = false;
     if (S.phase === 'countdown' || c.locked) { inp.throttle = 0; inp.brake = 1; inp.steer = 0; return inp; }
+    const lvl = AI_LEVELS[S.aiLevel] || AI_LEVELS.medium;
     const sp = Math.hypot(c.vx, c.vy);
     const prof = F1.speedProfile(T, S.aiLevel);
     const look = 8 + sp * 0.3;
     const i = F1.idxAt(T, c.s + look);
-    const room = T.hw - 1.1;
+    const room = T.hw - 1.05;
+    const cv = c.vx * T.tx[c.seg] + c.vy * T.ty[c.seg];      // speed along the track
+    const zones = F1.brakeZones(T, S.aiLevel);
+    const yellow = S.yellowAt(c.s);
+    const race = S.type === 'race';
+    const iv = F1.idxAt(T, c.s + sp * 0.12);
+    const vFree = prof[iv] * ai.pace;
 
-    // traffic: move off the racing line to pass, or follow
-    let vCap = Infinity;
+    // next corner: which side is the inside?
+    let inside = 0, toCorner = Infinity;
+    for (let z = 0; z < zones.length; z++) {
+      const dz = F1.wrapS(zones[z].apex - c.s, L);
+      if (dz < toCorner) { toCorner = dz; inside = zones[z].turn; }
+    }
+
+    // ---- traffic: who is alongside, who is ahead in our path, who is behind
+    let lo = -99, hi = 99;                          // limits set by cars alongside (leave a car's width)
+    let lead = null, leadGap = Infinity, leadV = 0, yieldV = Infinity;
+    let chased = false, rejoinBlocked = false, carComing = false;
+    const offTrack = c.dist > T.hw + 0.8;
+    const myExt = halfWidthOnTrack(c, T);
     if (S.collisions) {
-      let ahead = null, bestDs = 42;
-      for (let q = 0; q < S.cars.length; q++) {
-        const o = S.cars[q];
+      const cars = S.cars;
+      for (let q = 0; q < cars.length; q++) {
+        const o = cars[q];
         if (o === c || o.out) continue;
-        let dS = o.s - c.s;
-        if (dS < -T.length / 2) dS += T.length; else if (dS > T.length / 2) dS -= T.length;
-        if (dS <= 0 || dS > bestDs) continue;
-        if (Math.abs(o.d - c.d) > 3.4) continue;
-        ahead = o; bestDs = dS;
-      }
-      if (ahead) {
-        const osp = Math.hypot(ahead.vx, ahead.vy);
-        const closing = sp - osp;
-        if (closing > -1.5) {
-          const leftLat = ahead.d - 3.1, rightLat = ahead.d + 3.1;
-          const canL = leftLat > -room, canR = rightLat < room;
-          let passLat = null;
-          if (canL && canR) passLat = Math.abs(leftLat - c.d) < Math.abs(rightLat - c.d) ? leftLat : rightLat;
-          else if (canL) passLat = leftLat;
-          else if (canR) passLat = rightLat;
-          ai.biasTarget = passLat !== null ? passLat - T.rlOff[i] : 0;
-          const safe = 7 + Math.max(0, closing) * 0.9;
-          if (bestDs < safe && (passLat === null || Math.abs(c.d - passLat) > 1.3)) {
-            vCap = Math.max(0, osp - 0.5 + (bestDs - 6) * 0.5);
+        let dS = wrapD(o.s - c.s, L);
+        if (dS < -130 || dS > 110) continue;
+        const dD = o.d - c.d;
+        if (dD > 9 || dD < -9) continue;
+        dS = realDS(T, c, o, dS);
+        const ov = o.vx * T.tx[o.seg] + o.vy * T.ty[o.seg];
+        if (dS < 0) {
+          if (dS > -30 && dD < 4 && dD > -4) chased = true;
+          if (dS > -130 && ov > 20) carComing = true;
+          if (offTrack && dS > -80 && ov - cv > 3) {
+            const edge = (c.d > 0 ? 1 : -1) * (T.hw - 1.6);
+            if (Math.abs(o.d - edge) < 3.6) rejoinBlocked = true;
           }
-        } else ai.biasTarget = 0;
-      } else ai.biasTarget = 0;
-    } else ai.biasTarget = 0;
-    if (ai.mistakeUntil > S.time && ai.mistakeType === 1) ai.biasTarget = ai.mistakeSide * 4.5;
-    const db = ai.biasTarget - ai.bias, mx = 2.5 * F1.DT;
-    ai.bias += db > mx ? mx : db < -mx ? -mx : db;
+        }
+        // side by side: never turn into a car that is alongside (cars at an angle need more room)
+        const wasAlong = ai.along[o.id] !== undefined && ai.along[o.id] > now - 0.5;
+        if ((dS > -5.2 || (wasAlong && dS > -8.5)) && dS < 7.5 && (dD > 0.5 || dD < -0.5)) {
+          ai.along[o.id] = now;
+          const sep = myExt + halfWidthOnTrack(o, T) + 0.6;
+          if (dD > 0) { const lim = o.d - sep; if (lim < hi) hi = lim; }
+          else { const lim = o.d + sep; if (lim > lo) lo = lim; }
+          // too close and mostly behind it: back off and let it go (the car behind gives way)
+          if (dS > 1 && Math.abs(dD) < sep - 0.2) { const yv = ov - 1.5; if (yv < yieldV) yieldV = yv; }
+          continue;
+        }
+        if (dS <= 0) continue;
+        // ahead: will we run into it on our current line?
+        const gap = dS - CAR.length;
+        const dNow = Math.abs(dD), dTgt = Math.abs(o.d - ai.latT);
+        let inPath = dTgt < 2.4;
+        if (!inPath && dNow < 2.4) {
+          const tReach = gap > 0 ? gap / Math.max(0.5, cv - ov) : 0;
+          inPath = tReach < (2.4 - dNow) / 3 + 0.25;
+        }
+        if (inPath && gap < leadGap) { lead = o; leadGap = gap; leadV = ov; }
+      }
+    }
 
-    // pure pursuit towards the (biased) racing line
-    const latT = clamp(T.rlOff[i] + ai.bias, -room, room);
+    // ---- where on the track do we want to be?
+    let want = T.rlOff[i];
+    // lap 1: hold the grid lane until the first braking zone, then merge
+    if (race && c.lapsDone === 0 && S.firstBrake !== null) {
+      const w = clamp((S.firstBrake - 30 - c.raceDist) / 170, 0, 1);
+      if (w > 0) want = want * (1 - w) + ai.gridLane * w;
+    }
+    // blue flag: move off the racing line and let the faster car through
+    let blueNear = false;
+    if (c.blue >= 0) {
+      const o = S.byId[c.blue];
+      if (o) { const dS = wrapD(o.s - c.s, L); if (dS < 0 && dS > -110) blueNear = true; }
+    }
+    if (blueNear && vFree > 55) want = (T.rlOff[i] > 0 ? -1 : 1) * (room - 0.8);
+
+    // overtaking, or getting round a slow / stopped car
+    let passing = false, urgent = false;
+    if (ai.pass) {
+      const o = S.byId[ai.pass.id];
+      const dS = o && !o.out ? wrapD(o.s - c.s, L) : 999;
+      if (dS < -9 || dS > 80 || now - ai.pass.t > 12 || (yellow && !ai.pass.urgent && dS > 7.5) || blueNear) ai.pass = null;
+      else {
+        const lane = clamp(o.d + ai.pass.side * 2.9, -room - 0.3, room + 0.3);
+        if (Math.abs(lane - o.d) < 2.6 || !laneClear(S, c, lane, o.id, -6, Math.max(12, dS + 25))) ai.pass = null;
+        else { want = lane; passing = true; urgent = ai.pass.urgent; }
+      }
+    }
+    if (!ai.pass && lead && !blueNear) {
+      const closing = cv - leadV;
+      const slow = leadV < Math.max(8, cv * 0.6);
+      if (leadGap < (slow ? 90 : 38) && (slow || (!yellow && (closing > 1 || (leadGap < 14 && vFree > leadV + 2))))) {
+        let best = 0, bestScore = -Infinity;
+        for (let side = -1; side <= 1; side += 2) {
+          const lane = lead.d + side * 2.9;
+          if (lane > room + 0.3 || lane < -room - 0.3 || lane < lo || lane > hi) continue;
+          if (!laneClear(S, c, lane, lead.id, -6, leadGap + 30)) continue;
+          let score = -Math.abs(lane - c.d) * 0.25;
+          if (toCorner < 260 && side === inside) score += 1.5;
+          if (score > bestScore) { bestScore = score; best = side; }
+        }
+        if (best) {
+          ai.pass = { id: lead.id, side: best, t: now, urgent: slow };
+          want = clamp(lead.d + best * 2.9, -room - 0.3, room + 0.3);
+          passing = true; urgent = slow;
+        }
+      }
+    }
+
+    // ---- mistakes (armed at a braking zone, see below)
+    let mkType = null, mkRel = 0, edge = room + 0.3;
+    const mk = ai.mk;
+    if (mk) {
+      mkRel = F1.wrapS(c.s - mk.s, L);                  // metres since the braking point
+      if (mkRel > mk.end || now > mk.until) ai.mk = null;
+      else {
+        mkType = mk.type;
+        if (mkType === 'wide' && mkRel > mk.apexRel - 5) { want -= mk.turn * (3.5 + 5 * mk.sev); edge = T.hw + 4; }
+        if (mkType === 'kerb' && mkRel > mk.apexRel - 35 && mkRel < mk.apexRel + 12) { want = mk.turn * (T.hw + 0.7); edge = T.hw + 1.3; }
+        if (mkType === 'lockup' || mkType === 'dive') edge = T.hw + 4;
+      }
+    }
+
+    // ---- steering: pure pursuit towards the chosen line
+    const r = (urgent ? 6 : passing ? 3.4 : 2.6) * F1.DT;
+    const db = want - T.rlOff[i] - ai.bias;
+    ai.bias += db > r ? r : db < -r ? -r : db;
+    let latT = T.rlOff[i] + ai.bias;
+    if (lo > hi) lo = hi = (lo + hi) / 2;               // squeezed between two cars: hold the middle
+    if (latT < lo) latT = lo; else if (latT > hi) latT = hi;
+    // squeezed towards the edge by a car alongside: we get forced wide onto the kerb / grass
+    if (lo > edge || hi < -edge) edge = Math.min(Math.max(lo, -hi), T.hw + 1.6);
+    if (offTrack && rejoinBlocked) latT = c.d;          // wait at the edge until the cars have gone past
+    latT = clamp(latT, -Math.max(edge, c.dist), Math.max(edge, c.dist));
+    ai.latT = latT;
     const tx = T.x[i] + T.nx[i] * latT, ty = T.y[i] + T.ny[i] * latT;
     const ca = Math.cos(c.a), sa = Math.sin(c.a);
     const dx = tx - c.x, dy = ty - c.y;
@@ -477,39 +647,101 @@
     if (lx < 0) steer = ly > 0 ? 1 : -1;
     inp.steer = clamp(steer, -1, 1);
 
-    // speed
-    let vt = prof[F1.idxAt(T, c.s + sp * 0.12)] * ai.pace;
-    if (vCap < vt) vt = vCap;
-    // occasional human-like mistake: brake too late (runs deep) or run wide on the exit
-    if (ai.mistakeUntil > S.time) {
-      if (ai.mistakeType === 0) vt = vt * 1.1 + 3;
-      else vt = vt * 1.04;
+    // ---- speed
+    let vt = vFree;
+    if (c.dirty < 1 && vt < 80) vt *= Math.sqrt(c.dirty);            // lift a touch in dirty air
+    const offLine = Math.abs(latT - T.rlOff[i]);
+    if (offLine > 1.5 && vt < 70) vt *= 1 - Math.min(0.08, (offLine - 1.5) * 0.015);   // off line = less grip
+    if (yellow) vt *= 0.92;                                            // yellow flag: lift
+    if (blueNear) vt *= vFree > 55 ? 0.97 : 0.93;
+    const lim = F1.speedProfile(T, 'limit')[iv];
+    if (mkType === 'wide' && mkRel > mk.apexRel - 40 && mkRel < mk.apexRel + 40) vt = Math.max(vt, lim * (1.03 + 0.07 * mk.sev));
+    if (lead) {   // keep a safe gap to the car in front: always able to slow to its speed in time
+      const gd = 1.5 + Math.max(0, cv) * lvl.gap;
+      const lv = Math.max(0, leadV);
+      const b = 0.55 * Math.min(P.BRAKE_MAX, P.BRAKE0 + P.BRAKE_K * lv * lv);
+      const vCap = leadGap > gd ? Math.sqrt(lv * lv + 2 * b * (leadGap - gd)) : lv - (gd - leadGap) * 0.8;
+      if (vCap < vt) vt = Math.max(0, vCap);
     }
-    if (c.dist > T.hw + 1) vt = Math.min(vt, 30);
+    const diving = mkType === 'dive';                  // committed to a lunge: no backing out
+    if (yieldV < vt && !diving) vt = Math.max(0, yieldV);
+    // can we actually make the turn towards our target at this speed? if not, slow down
+    // (only when we are well away from where we want to be: on the line the speed plan already covers it)
+    // (only after traffic has pushed us off our line; on a clean lap the speed plan already covers it)
+    if (passing || lo > -98 || hi < 98 || Math.abs(ai.bias) > 1) ai.dispT = now;
+    const kArc = Math.abs(curv), mArc = Math.min(1, lvl.lat + 0.08);
+    const offTarget = Math.abs(c.d - T.rlOff[c.seg] - ai.bias);
+    if (!diving && now - ai.dispT < 2.5 && offTarget > 1.5 && kArc > P.LAT_K * mArc) {
+      const vArc = Math.sqrt((P.LAT0 * mArc) / (kArc - P.LAT_K * mArc));
+      if (vArc < vt) vt = vArc;
+    }
+    if (offTrack) { vt = Math.min(vt, 30); if (rejoinBlocked) vt = Math.min(vt, 12); }
+    if (F1.DEBUG_AI) { ai.dbg = { lo: lo, hi: hi, want: want, latT: latT, vt: vt, vFree: vFree, lead: lead ? lead.id : -1, leadGap: leadGap, leadV: leadV, pass: ai.pass ? ai.pass.id + (ai.pass.side > 0 ? 'R' : 'L') : '', mk: mkType || '', yellow: yellow, blue: blueNear, chased: chased }; }
     if (sp > vt + 1.0) { inp.throttle = 0; inp.brake = Math.min(1, (sp - vt) / 5 + 0.3); }
     else if (sp > vt - 0.5) { inp.throttle = 0.35; inp.brake = 0; }
     else { inp.throttle = 1; inp.brake = 0; }
-    // one dice roll per braking zone (fixed points on the track where the AI starts braking for a corner)
-    const zones = F1.brakeZones(T, S.aiLevel);
-    if (ai.lastS !== undefined && zones.length && S.phase !== 'countdown') {
+
+    // ---- mistakes in action
+    if (mkType === 'lockup' && mkRel < mk.apexRel + 15 && (inp.brake > 0 || mk.locked)) {
+      // fronts lock: the car barely slows and won't turn, so it slides on towards the outside
+      mk.locked = true;
+      inp.throttle = 0; inp.brake = 1; inp.lock = true;
+      inp.steer *= 0.25;
+      if (sp > 4) {
+        const f = (P.BRAKE0 * (0.45 + 0.35 * (1 - mk.sev))) / Math.max(1, P.BRAKE0 + P.BRAKE_K * sp * sp);
+        inp.brake = Math.min(1, f);
+      }
+      if (sp < mk.vMin * 0.85) mk.locked = false;
+    }
+    if (mkType === 'dive' && mkRel < mk.apexRel + 10 && sp > 4) {
+      // divebomb: brakes far too late up the inside, still turning, and slides wide at the apex
+      const f = (P.BRAKE0 * (0.75 + 0.35 * (1 - mk.sev))) / Math.max(1, P.BRAKE0 + P.BRAKE_K * sp * sp);
+      if (inp.brake > f) inp.brake = f;
+      if (inp.brake > 0) inp.lock = true;
+    }
+    if (mkType === 'snap' && mkRel > mk.apexRel + 4) {
+      // too much throttle on the exit: the rear steps out
+      if (!mk.kicked) { mk.kicked = true; mk.kickT = now; c.w += mk.turn * (0.9 + 1.9 * mk.sev); }
+      if (now - mk.kickT < 0.6) { inp.throttle = 1; inp.brake = 0; }
+    }
+    if (mkType === 'kerb' && !mk.kicked && c.surf >= 1 && mkRel > mk.apexRel - 25) {
+      // hits the sausage kerb: the car is thrown sideways and twitches
+      mk.kicked = true;
+      const ca2 = Math.cos(c.a), sa2 = Math.sin(c.a), push = -mk.turn * (1 + 3 * mk.sev);
+      c.vx += -sa2 * push; c.vy += ca2 * push;
+      c.w += (S.rng() < 0.5 ? mk.turn : -mk.turn) * (0.8 + 1.8 * mk.sev);
+    }
+    // one dice roll per braking zone
+    if (ai.lastS !== undefined && !ai.mk && (now - ai.lastMk > 6 || F1.FORCE_MK)) {
       for (let z = 0; z < zones.length; z++) {
-        if (passed(ai.lastS, c.s, zones[z].s, T.length) && ai.mistakeUntil < S.time - 4) {
-          if (S.rng() < (AI_LEVELS[S.aiLevel] || AI_LEVELS.medium).mistake / zones.length) {
-            ai.mistakeType = S.rng() < 0.55 ? 0 : 1;
-            ai.mistakeUntil = S.time + (ai.mistakeType === 0 ? 1.6 : 2.6);
-            ai.mistakeSide = zones[z].turn > 0 ? -1 : 1;   // run wide = towards the outside of the corner
-          }
+        const Z = zones[z];
+        if (!passed(ai.lastS, c.s, Z.s, L)) continue;
+        const attacking = ai.pass && !ai.pass.urgent && ai.pass.side === Z.turn && race;
+        let p = attacking ? lvl.divebomb : lvl.mistake / zones.length;
+        if (race && c.lapsDone === 0) p *= 0.6;                 // a bit more careful in the opening-lap pack
+        else if (chased) p *= 1.5;                              // pressure from the car behind
+        if (c.dirty < 0.99) p *= 1.4;                           // fighting dirty air
+        if (F1.FORCE_MK || S.rng() < p) {
+          const x = S.rng();
+          const apexRel = F1.wrapS(Z.apex - Z.s, L);
+          const type = F1.FORCE_MK || (attacking ? 'dive' : x < MK_MIX[0] ? 'lockup' : x < MK_MIX[1] ? 'wide' : x < MK_MIX[2] ? 'snap' : 'kerb');
+          ai.mk = { type: type, s: Z.s, apexRel: apexRel, end: apexRel + 100, turn: Z.turn, vMin: Z.vMin, sev: S.rng(), until: now + 9, kicked: false, kickT: 0, locked: false };
+          ai.lastMk = now;
         }
+        break;
       }
     }
     ai.lastS = c.s;
-    if (S.type === 'race' && S.startTime !== null && S.time < S.startTime + ai.react) { inp.throttle = 0; inp.brake = 0; }
+    if (race && S.startTime !== null && now < S.startTime + ai.react) { inp.throttle = 0; inp.brake = 0; }
     inp.drs = c.drsAllowed;
 
-    // get unstuck
+    // ---- get unstuck (but wait for a gap if cars are coming)
     if (sp < 1.5) ai.stuck += F1.DT; else ai.stuck = 0;
     if (F1.isWrongWay(c, T) || (Math.abs(F1.wrapAngle(c.a - T.hd[c.seg])) > 2.2 && sp < 10)) ai.backward += F1.DT; else ai.backward = 0;
-    if (ai.stuck > 3.0 || ai.backward > 2.5) { inp.reset = true; ai.stuck = 0; ai.backward = 0; }
+    if (ai.stuck > 3.0 || ai.backward > 2.5) {
+      if (carComing && ai.wait < 6) ai.wait += F1.DT;
+      else { inp.reset = true; ai.stuck = 0; ai.backward = 0; ai.wait = 0; }
+    }
     return inp;
   };
 
@@ -551,9 +783,14 @@
     this.loopFirst = [];
     this.detLast = T.drs.map(function () { return null; });
     this.results = null;
+    this.yellow = [];                     // yellow flag zones: {id, s, until}
+    // first braking zone after the start line (AI hold their grid lanes until then on lap 1)
+    const bz = F1.brakeZones(T, this.aiLevel).filter(function (z) { return z.s > 30; });
+    this.firstBrake = bz.length ? bz[0].s : null;
     const ref = F1.refLapTime(T);
     this.refLap = ref;
-    this.timeLimit = opts.type === 'quali' ? 3 + ref * 1.3 + this.laps * ref * 1.6 + 60
+    // practice with a lap limit (Grand Prix P1-P3) works like qualifying: N timed laps after an out lap
+    this.timeLimit = opts.type === 'quali' || (opts.type === 'practice' && this.laps > 0) ? 3 + ref * 1.3 + this.laps * ref * 1.6 + 60
       : opts.type === 'race' ? 8 + this.laps * ref * 2.2 + 120 : Infinity;
     const self = this;
     const lvl = AI_LEVELS[this.aiLevel];
@@ -568,15 +805,7 @@
       c.drsElig = T.drs.map(function () { return opts.type !== 'race'; });
       c.input = F1.NEUTRAL;
       c.prevS = c.s;
-      if (c.isAI) {
-        c.ai = {
-          inp: { throttle: 0, brake: 0, steer: 0, drs: false, reset: false },
-          bias: 0, biasTarget: 0, stuck: 0, backward: 0,
-          mistakeUntil: -99, mistakeType: 0, mistakeSide: 1, wasBraking: false,
-          pace: lvl.pace * (1 - self.rng() * 0.012),
-          react: 0.12 + self.rng() * 0.25
-        };
-      }
+      if (c.isAI) c.ai = F1.newAI(c, lvl, self.rng);
       self.cars.push(c);
       self.byId[c.id] = c;
     });
@@ -610,6 +839,7 @@
       F1.queryTrack(T, c.x, c.y, -1, Q);
       c.seg = Q.idx; c.s = Q.s; c.d = Q.d; c.dist = Q.dist; c.prevS = c.s;
       c.raceDist = c.s;
+      if (c.ai) { c.ai.latT = c.d; c.ai.bias = c.d - T.rlOff[c.seg]; }
     }
   };
 
@@ -618,11 +848,13 @@
     this.tick++;
     this.time += dt;
     this.updatePhase();
-    const cars = this.cars;
+    if (this.tick % 6 === 0) this.updateFlags();
+    const cars = this.cars, L = T.length;
     for (let i = 0; i < cars.length; i++) {
       const c = cars[i];
       c.px = c.x; c.py = c.y; c.pa = c.a; c.prevS = c.s;
       if (c.out) continue;
+      c.dirty = this.collisions ? F1.dirtyAir(c, cars, L) : 1;
       c.locked = this.phase === 'countdown';
       if (c.isAI) c.input = F1.aiDrive(c, this);
       else if (inputs && inputs[c.id]) c.input = inputs[c.id];
@@ -659,6 +891,46 @@
         if (imp > 1500) this.fx.push([Math.round(F1.lastContact.x * 10) / 10, Math.round(F1.lastContact.y * 10) / 10, Math.round(imp)]);
       }
     }
+  };
+
+  /* Yellow flags where a car has stopped, spun or is crawling off the track; blue flags for cars about
+     to be lapped. Runs 10 times a second. */
+  Session.prototype.updateFlags = function () {
+    const T = this.track, L = T.length, now = this.time, cars = this.cars;
+    if (this.phase === 'countdown') return;
+    const started = this.type !== 'race' || (this.startTime !== null && now > this.startTime + 4);
+    for (let i = 0; i < cars.length; i++) {
+      const c = cars[i];
+      if (c.out || c.inPit || !started) continue;
+      const sp = Math.hypot(c.vx, c.vy);
+      const ang = Math.abs(F1.wrapAngle(c.a - T.hd[c.seg]));
+      if ((ang > 0.9 && sp < 35) || sp < 6 || (c.dist > T.hw + 2.5 && sp < 30)) {
+        let z = null;
+        for (let k = 0; k < this.yellow.length; k++) if (this.yellow[k].id === c.id) z = this.yellow[k];
+        if (!z) { z = { id: c.id, s: c.s, until: 0 }; this.yellow.push(z); }
+        z.s = c.s; z.until = now + 3;
+      }
+    }
+    this.yellow = this.yellow.filter(function (z) { return z.until > now; });
+    for (let i = 0; i < cars.length; i++) {
+      const c = cars[i];
+      c.blue = -1;
+      if (this.type !== 'race' || c.out || c.finished || this.phase === 'countdown') continue;
+      for (let j = 0; j < cars.length; j++) {
+        const o = cars[j];
+        if (o === c || o.out || o.raceDist - c.raceDist < L * 0.5) continue;
+        const dS = wrapD(c.s - o.s, L);              // o is behind c on the road...
+        if (dS > 0 && dS < 150) { c.blue = o.id; break; }   // ...but a lap ahead in the race
+      }
+    }
+  };
+
+  /* Is track position s inside a yellow flag zone (from 200 m before the incident to 50 m after)? */
+  Session.prototype.yellowAt = function (s) {
+    for (let k = 0; k < this.yellow.length; k++) {
+      if (F1.wrapS(s - this.yellow[k].s + 200, this.track.length) < 250) return true;
+    }
+    return false;
   };
 
   Session.prototype.updatePhase = function () {
@@ -725,10 +997,10 @@
     if (c.lapStart !== null) {
       this.recordLap(c, t - c.lapStart);
       c.lapsDone++;
-      if (this.type === 'quali' && c.lapsDone >= this.laps) {
+      if ((this.type === 'quali' || this.laps > 0) && c.lapsDone >= this.laps) {
         c.qualiDone = true;
         c.lapStart = null;
-        this.events.push({ k: 'qualiDone', id: c.id });
+        this.events.push({ k: 'qualiDone', id: c.id, p: this.type === 'practice' });
         if (!c.isAI && this.humansDoneAt === null && this.cars.every(function (o) { return o.isAI || o.out || o.qualiDone; })) this.humansDoneAt = this.time;
         return;
       }
@@ -788,14 +1060,15 @@
   };
 
   Session.prototype.checkEnd = function () {
-    if (this.phase === 'done' || this.type === 'practice') return;
+    if (this.phase === 'done' || (this.type === 'practice' && !this.laps)) return;
     const active = this.cars.filter(function (c) { return !c.out; });
     const humans = active.filter(function (c) { return !c.isAI; });
     let end = false;
-    if (this.type === 'quali') {
+    if (this.type === 'quali' || this.type === 'practice') {
       if (this.phase === 'running') {
-        if (active.every(function (c) { return c.qualiDone; })) end = true;
-        if (this.humansDoneAt !== null && this.time - this.humansDoneAt > 20) end = true;
+        if (this.type === 'quali' && active.every(function (c) { return c.qualiDone; })) end = true;
+        // practice ends as soon as you have done your laps; qualifying waits up to 20 s for the AI
+        if (this.humansDoneAt !== null && this.time - this.humansDoneAt > (this.type === 'practice' ? 2.5 : 20)) end = true;
       }
     } else if (this.leaderFinishTime !== null) {
       if (active.every(function (c) { return c.finished; })) end = true;
@@ -830,7 +1103,8 @@
           if (behind <= 0) gap = '+' + c.gap.toFixed(3) + 's';
           else gap = '+' + behind + (behind === 1 ? ' LAP' : ' LAPS');
         }
-        return { pos: i + 1, id: c.id, driverId: c.driverId, isAI: c.isAI, name: c.name, laps: c.lapsDone, best: c.bestLap, gap: gap, out: c.out };
+        const pts = c.out ? 0 : POINTS[i] || 0;
+        return { pos: i + 1, id: c.id, driverId: c.driverId, isAI: c.isAI, name: c.name, laps: c.lapsDone, best: c.bestLap, gap: gap, out: c.out, pts: pts };
       });
     }
     const pole = order.length && order[0].bestLap !== null ? order[0].bestLap : null;

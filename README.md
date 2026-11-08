@@ -4,15 +4,20 @@ A top-down F1 racing game you can play in the browser, alone or online with up t
 
 - **2026 grid**: all 11 teams and 22 drivers with their race numbers and team colours
 - **Five real circuits**: Monza, Silverstone, Abu Dhabi (Yas Marina), Spa-Francorchamps and Interlagos, built from the real track outlines at real scale
-- **Practice mode**: you drive out of your team's garage in the pit lane (80 km/h limiter) while AI cars are already lapping
-- **Grand Prix mode** (single player): pick your track, driver, number of opponents and difficulty, then qualifying (none, or 1–5 laps) decides the grid, five start lights, and a race of 1–7 laps
+- **Practice mode**: you drive out of your team's pit box (80 km/h limiter) while AI cars are already lapping
+- **Grand Prix mode** (single player): pick your track, driver, number of opponents and difficulty, then a weekend of optional Practice 1, 2 and 3 (skip, or 1–3 timed laps each), qualifying (none, or 1–5 laps) for the grid, five start lights, and a race of 1–7 laps with F1 points (25-18-15-12-10-8-6-4-2-1)
 - **Online mode**: room codes, a lobby, qualifying (none, or 1–5 laps), then a race (1–7 laps) with up to 8 friends
-- **AI drivers** fill the empty seats (easy / medium / hard). They make occasional, realistic mistakes (running wide, braking too late), and they follow exactly the same physics as you.
+- **AI drivers** fill the empty seats (easy / medium / hard). They keep a safe gap, leave a car's width when side by side, only pass when there is room, and make occasional human mistakes: locking up, running wide, too much throttle on the exit, hitting a kerb, a late lunge up the inside. Mistakes are more likely with a car right behind them or in dirty air. Across a full grid that is roughly 2–2.5 incidents a lap on easy, 1.5–2 on medium and about 1 on hard. They follow exactly the same physics as you.
+- **Flags**: yellow flags (marshals at the trackside, a yellow section on the minimap) where a car has stopped, spun or gone off; the AI lift and do not overtake there. Blue flags when you are about to be lapped; lapped AI cars move aside.
+- **Dirty air**: following closely through a corner costs grip (for you and the AI)
 - **Realistic contact**: cars bump with real momentum, but tyres resist being shoved. Rubbing costs time, a hard punt on a rear corner can spin you, and nobody gets thrown off the track by a light touch. There is no damage.
+- **Pit lane**: fast lane and working lane, a painted box for every team, garages with team colours, pit-wall stands, a paddock, and the start-light gantry over the grid
 - **Track limits**: grass and gravel slow you down hard if you arrive fast, but you can drive back out (about 100 km/h on grass, 65 km/h in gravel). There are no penalties.
 - **DRS**: in a DRS zone, press Shift or Space. In races you need to be within 1 second of the car ahead at the detection line, from lap 2 onwards.
-- **HUD**: timing tower with your row highlighted, position, lap, current/last/best lap, speed, gear, DRS / pit limiter light, minimap, a "YOU" marker over your car, and an on-screen **Pause (P)** button
-- **Steering sensitivity** setting, available on the home screen and in the pause menu
+- **HUD**: timing tower with your row highlighted, position, lap, current/last/best lap, your personal best, speed, gear, DRS / pit limiter light, flag board, minimap, a "YOU" marker over your car, and an on-screen **Pause (P)** button
+- **Personal bests**: your best lap on each track is saved in your browser and shown on the track cards
+- **Sound**: your engine is modelled from the V6's exhaust pulses (every cylinder firing, pipe resonances, ignition cut on upshifts, crackles when you lift off). Choose **Onboard** or **TV camera** in Settings and press **Test engine** to hear it. Also: the cars around you (panned, with Doppler as they pass), start lights, contact, DRS, pit limiter, chequered flag, fastest lap and menu clicks. Master / engine / effects volume and mute in Settings, or press M. (The onboard engine needs https or localhost; on a plain local network address the TV camera sound is used.)
+- **Settings** (home screen and pause menu): steering sensitivity 1–12, camera, driver names, sound
 
 ## Controls
 
@@ -24,6 +29,7 @@ A top-down F1 racing game you can play in the browser, alone or online with up t
 | Shift or Space | Open DRS (when it is available) |
 | R | Reset the car onto the track (if you're stuck) |
 | Esc or P | Pause menu / settings |
+| M | Sound on / off |
 
 ## Run it on your computer
 
@@ -66,7 +72,9 @@ shared/tracks.js     circuit outlines, kerbs, gravel, barriers, pit lane, DRS zo
 shared/sim.js        car physics, collisions, AI drivers, practice/qualifying/race rules
 public/index.html    menus and screens
 public/css/style.css styling
-public/js/render.js  canvas drawing: track, cars, HUD, minimap
+public/js/render.js  canvas drawing: track, pit lane, cars, HUD, minimap, flags
+public/js/audio.js   synthesised sound (engines and effects, no audio files)
+public/js/engine-worklet.js  the onboard V6 engine sound (runs in the browser's audio thread)
 public/js/hud.js     timing tower / dashboard data shared by every mode
 public/js/game-local.js   practice + Grand Prix (run in the browser)
 public/js/game-online.js  online client: instant local response + smoothing of other cars

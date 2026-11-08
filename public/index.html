@@ -66,6 +66,15 @@
         <h2>Grand Prix</h2>
         <button class="btn red" id="gp-start">Start weekend</button>
       </div>
+      <div class="weekend-bar">
+        <span class="wk-title">Weekend</span>
+        <label>Practice 1<select id="gp-p1"></select></label>
+        <label>Practice 2<select id="gp-p2"></select></label>
+        <label>Practice 3<select id="gp-p3"></select></label>
+        <label>Qualifying<select id="gp-quali"></select></label>
+        <label>Race<select id="gp-race"></select></label>
+        <span class="wk-note">Practice starts in your pit box and ends after your timed laps</span>
+      </div>
       <div class="cols">
         <div class="col narrow">
           <h3>Track</h3>
@@ -76,10 +85,6 @@
           <h3>AI difficulty</h3>
           <div class="seg" id="gp-level">
             <button data-v="easy">Easy</button><button data-v="medium" class="on">Medium</button><button data-v="hard">Hard</button>
-          </div>
-          <div class="settings-grid gp-laps">
-            <label>Qualifying<select id="gp-quali"></select></label>
-            <label>Race<select id="gp-race"></select></label>
           </div>
         </div>
         <div class="col wide">
@@ -148,8 +153,8 @@
         <span></span>
       </div>
       <div class="results-wrap">
-        <table class="results">
-          <thead><tr><th>Pos</th><th>Driver</th><th>Team</th><th class="r">Time / Gap</th><th class="r">Best lap</th><th class="r">Laps</th></tr></thead>
+        <table class="results" id="results-table">
+          <thead><tr><th>Pos</th><th>Driver</th><th>Team</th><th class="r">Time / Gap</th><th class="r">Best lap</th><th class="r">Laps</th><th class="r pts-col">Pts</th></tr></thead>
           <tbody id="results-body"></tbody>
         </table>
       </div>
@@ -157,6 +162,7 @@
         <span id="results-note"></span>
         <div class="foot-btns">
           <button class="btn ghost" id="results-menu">Back to menu</button>
+          <button class="btn" id="results-restart">Restart weekend</button>
           <button class="btn" id="results-again">Race again</button>
           <button class="btn red" id="results-next">Start the race</button>
           <button class="btn red" id="results-lobby">Back to lobby</button>
@@ -173,6 +179,7 @@
       <button class="btn red big" id="pause-resume">Resume</button>
       <button class="btn" data-act="settings">Settings</button>
       <button class="btn" id="pause-restart">Restart</button>
+      <button class="btn" id="pause-end">End session now</button>
       <button class="btn ghost" id="pause-quit">Quit to menu</button>
     </div>
   </div>
@@ -182,7 +189,7 @@
     <div class="modal-box">
       <h2>Settings</h2>
       <label class="slider"><span class="slider-title">Steering sensitivity <b id="set-steer-val">5</b></span>
-        <input type="range" id="set-steer" min="1" max="10" step="1">
+        <input type="range" id="set-steer" min="1" max="12" step="1">
         <span class="hint-row"><span>Smooth</span><span>Sharp</span></span>
       </label>
       <label>Camera
@@ -191,6 +198,17 @@
         </div>
       </label>
       <label class="check"><input type="checkbox" id="set-labels"> Show driver names above cars</label>
+      <div class="sound-box">
+        <div class="sound-head"><span>Sound</span><label class="check"><input type="checkbox" id="set-mute"> Mute (M)</label></div>
+        <label class="slider small"><span class="slider-title">Master <b id="set-vol-master-val">80</b></span><input type="range" id="set-vol-master" min="0" max="100" step="5"></label>
+        <label class="slider small"><span class="slider-title">Engines <b id="set-vol-engine-val">80</b></span><input type="range" id="set-vol-engine" min="0" max="100" step="5"></label>
+        <label class="slider small"><span class="slider-title">Effects <b id="set-vol-effects-val">80</b></span><input type="range" id="set-vol-effects" min="0" max="100" step="5"></label>
+        <div class="engine-row">
+          <label>Your engine<select id="set-engine"><option value="onboard">Onboard (realistic)</option><option value="tv">TV camera</option></select></label>
+          <button class="btn small" id="set-engine-test">▶ Test engine</button>
+        </div>
+        <p class="note" id="set-engine-note"></p>
+      </div>
       <button class="btn red" id="settings-close">Done</button>
     </div>
   </div>
@@ -207,6 +225,7 @@
   <script src="/shared/tracks.js"></script>
   <script src="/shared/sim.js"></script>
   <script src="js/util.js"></script>
+  <script src="js/audio.js"></script>
   <script src="js/render.js"></script>
   <script src="js/hud.js"></script>
   <script src="js/game-local.js"></script>
