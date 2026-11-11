@@ -159,6 +159,18 @@ table.results .purple { color: #c77dff; }
 #pausebtn button:hover { background: rgba(225,6,0,0.85); }
 #pausebtn button span { display: block; width: 6px; height: 22px; background: #fff; border-radius: 2px; }
 #pausebtn .lbl { font-size: 12px; font-weight: 800; color: #fff; text-shadow: 0 1px 3px rgba(0,0,0,0.9); letter-spacing: 0.5px; }
+/* sound on / off: bottom-right of the home screen, and next to the pause button while driving */
+#soundbtn { position: fixed; right: 16px; bottom: 14px; display: flex; flex-direction: column; align-items: center; gap: 4px; z-index: 6; }
+#soundbtn.ingame { right: 84px; }
+#soundbtn.hidden { display: none; }
+#soundbtn button { width: 52px; height: 52px; border-radius: 12px; border: 1px solid rgba(255,255,255,0.25); background: rgba(10,10,14,0.85);
+  cursor: pointer; display: flex; align-items: center; justify-content: center; padding: 0; }
+#soundbtn button:hover { background: rgba(255,255,255,0.16); }
+#soundbtn .cross { display: none; }
+#soundbtn.muted .cross { display: inline; }
+#soundbtn.muted .wave { display: none; }
+#soundbtn.muted button { border-color: rgba(255,75,69,0.7); }
+#soundbtn .lbl { font-size: 12px; font-weight: 800; color: #fff; text-shadow: 0 1px 3px rgba(0,0,0,0.9); letter-spacing: 0.5px; white-space: nowrap; }
 
 .foot-btns { display: flex; gap: 10px; flex-wrap: wrap; justify-content: flex-end; }
 .gp-laps { margin-top: 14px; }
@@ -167,7 +179,23 @@ table.results .purple { color: #c77dff; }
 .track-card .tname { font-size: 14px; }
 
 /* points column (races only) */
-table.results.no-pts .pts-col { display: none; }
+table.results.no-pts .pts-col, table.results.no-pts .race-col { display: none; }
+table.results .up { color: #19c94a; font-size: 13px; margin-left: 6px; }
+table.results .down { color: #ff5a4f; font-size: 13px; margin-left: 6px; }
+table.results .pen { display: inline-block; background: #e10600; color: #fff; font-size: 11px; font-weight: 800; border-radius: 3px; padding: 1px 5px; margin-left: 6px; vertical-align: 1px; }
+table.results .fl-pt { display: inline-block; background: #9b30ff; color: #fff; font-size: 11px; font-weight: 800; border-radius: 3px; padding: 1px 5px; margin-left: 6px; vertical-align: 1px; }
+/* after a race: Driver of the day, fastest lap, most overtakes, biggest climber */
+.race-stats { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 10px; margin: 6px 0 12px; }
+.race-stats.hidden { display: none; }
+.stat-card { background: rgba(255,255,255,0.05); border: 1px solid var(--line); border-radius: 8px; padding: 9px 12px; min-width: 0; }
+.stat-card .lbl { font-size: 11px; letter-spacing: 1px; text-transform: uppercase; color: var(--muted); font-weight: 800; }
+.stat-card .who { font-size: 16px; font-weight: 900; margin-top: 3px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.stat-card .who .bar { display: inline-block; width: 4px; height: 15px; margin-right: 7px; vertical-align: -2px; border-radius: 2px; }
+.stat-card .det { font-size: 13px; color: #cfd3d8; font-weight: 600; margin-top: 2px; }
+.stat-card.dotd { border-color: rgba(255,214,0,0.55); background: rgba(255,214,0,0.09); }
+.stat-card.fl { border-color: rgba(155,48,255,0.55); }
+.stat-card.mine .who { color: var(--yellow); }
+@media (max-width: 900px) { .race-stats { grid-template-columns: repeat(2, minmax(0, 1fr)); } }
 table.results td.pts { color: var(--yellow); font-weight: 900; }
 .track-card .tpb { font-size: 12px; font-weight: 800; color: #19c94a; margin-top: 2px; }
 .track-card .tpb.none { color: #6b7280; font-weight: 600; }
@@ -222,3 +250,24 @@ table.standings td.rd.p3 { color: #e0a060; font-weight: 900; }
 table.standings td.rd.dnf { color: #ff6b6b; font-size: 12px; }
 table.standings td.big { font-weight: 900; font-size: 17px; }
 @media (max-width: 900px) { .standings-wrap { flex-direction: column; } }
+
+/* warning before ending qualifying early */
+.confirm-box { max-width: 440px; text-align: center; }
+.confirm-box p { color: #dfe3e8; font-weight: 600; line-height: 1.45; margin: 4px 0 16px; }
+.warn-sign { width: 0; height: 0; margin: 2px auto 10px; border-left: 34px solid transparent; border-right: 34px solid transparent;
+  border-bottom: 58px solid #ffd400; position: relative; }
+.warn-sign span { position: absolute; left: -10px; top: 14px; width: 20px; text-align: center; font-size: 34px; font-weight: 900; color: #111; line-height: 1; }
+#busy { position: fixed; inset: 0; display: flex; align-items: center; justify-content: center; z-index: 30; background: rgba(0,0,0,0.35); }
+#busy.hidden { display: none; }
+.busy-box { background: rgb(12,12,16); border: 1px solid var(--line); border-radius: 12px; padding: 20px 26px; min-width: 320px; text-align: center; }
+#busy-text { font-size: 20px; font-weight: 900; font-style: italic; text-transform: uppercase; }
+.busy-sub { color: var(--muted); font-weight: 600; margin: 4px 0 14px; }
+.busy-bar { height: 8px; border-radius: 4px; background: rgba(255,255,255,0.1); overflow: hidden; }
+.busy-bar span { display: block; height: 100%; width: 0; background: #e10600; transition: width 0.15s; }
+
+/* time trial */
+table.tt-board { margin-bottom: 6px; }
+table.tt-board td { padding: 6px 8px; font-size: 15px; }
+table.tt-board tr.best td { color: #c77dff; }
+table.tt-board td.empty { color: var(--muted); font-weight: 600; text-align: center; padding: 18px 8px; }
+.tt-note { color: var(--muted); font-size: 13px; font-weight: 600; line-height: 1.45; margin: 8px 0 14px; }

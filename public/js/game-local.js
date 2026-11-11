@@ -8,6 +8,7 @@
   function LocalGame(opts) {
     this.kind = opts.attract ? 'attract' : 'local';
     this.type = opts.type || 'practice';
+    this.tt = !!opts.tt;               // time trial: just you and your ghost
     this.opts = opts;
     this.T = F1.getTrack(opts.track);
     const rng = F1.rng((Math.random() * 1e9) | 0);
@@ -36,7 +37,7 @@
     this.S = new F1.Session({
       type: this.type, track: this.T, entries: entries, laps: opts.laps || 0,
       aiLevel: opts.aiLevel || 'medium', collisions: this.type === 'practice' ? opts.collisions !== false : true,
-      seed: (rng() * 1e9) | 0, startMode: this.type === 'practice' && !opts.attract ? 'pit' : 'grid'
+      seed: (rng() * 1e9) | 0, startMode: this.tt ? 'flying' : this.type === 'practice' && !opts.attract ? 'pit' : 'grid'
     });
     this.me = this.myId !== null ? this.S.byId[this.myId] : null;
     this.entries = {};
@@ -57,7 +58,7 @@
 
   /* The saved ghost lap to show in this session (practice only, if switched on in Settings). */
   LocalGame.prototype.ghostLap = function () {
-    if (this.type !== 'practice' || !this.me || !window.Settings.data.ghost) return null;
+    if (this.type !== 'practice' || !this.me || (!this.tt && !window.Settings.data.ghost)) return null;
     if (this.ghost === undefined) this.ghost = window.Ghost.load(this.T.id);
     return this.ghost;
   };
@@ -76,8 +77,26 @@
     this.ghostView = null;
   };
 
-  LocalGame.prototype.step = function () {
-    if (this.paused) return;
+  /* End your practice or qualifying now. Qualifying: your best lap stands and the other drivers finish their
+     runs at high speed in the background (onProgress gets 0..1). */
+  LocalGame.prototype.endEarly = function (onProgress) {
+    const S = this.S, self = this;
+    if (S.phase === 'done' || this.ff) return;
+    if (this.type !== 'quali') { S.finish(); return; }
+    S.park(this.myId);
+    this.ff = true;
+    const ai = S.cars.filter(function (c) { return c.isAI && !c.out; });
+    const chunk = function () {
+      const t0 = performance.now();
+      while (S.phase !== 'done' && performance.now() - t0 < 25) self.step(true);
+      if (onProgress) onProgress(ai.length ? ai.filter(function (c) { return c.qualiDone; }).length / ai.length : 1);
+      if (S.phase !== 'done') setTimeout(chunk, 0);
+    };
+    chunk();
+  };
+
+  LocalGame.prototype.step = function (fast) {
+    if (this.paused || (this.ff && !fast)) return;
     const inputs = {};
     if (this.me) inputs[this.myId] = window.Input.sample(F1.DT);
     this.S.step(inputs);
@@ -86,7 +105,7 @@
     const self = this;
     for (let i = 0; i < evs.length; i++) {
       const e = evs[i];
-      if (this.kind === 'attract') continue;
+      if (this.kind === 'attract' || (this.ff && e.k !== 'end')) continue;
       if (e.k === 'end') {
         if (!this.ended) {
           this.ended = true;
@@ -96,6 +115,7 @@
       }
       if (e.k === 'lap' && e.id === this.myId) {
         e.record = window.PB.offer(this.T.id, e.t, this.me.driverId);
+        if (this.tt) e.ttRank = window.TTBoard.offer(this.T.id, e.t, this.me.driverId);
         this.saveGhost(e.t);
       }
       window.HUD.eventMessage(this.msgs, e, this.myId, function (id) { return self.S.byId[id].driverId; });
@@ -159,10 +179,13 @@
     const S = this.S, me = this.me && !this.me.out ? this.me : null, f = this.focus || me;
     if (!f) return null;
     const cars = [];
+    const grid = S.type === 'race' && S.phase === 'countdown';
     for (let i = 0; i < S.cars.length; i++) {
       const c = S.cars[i];
       if (c === me || c.out) continue;
-      cars.push({ id: c.id, x: c.x, y: c.y, vx: c.vx, vy: c.vy, throttle: c.input ? c.input.throttle : 0.7 });
+      // on the grid the other cars rev their engines while the lights come on
+      const thr = grid ? window.GameAudio.gridRev(c.id, S.time) : c.input ? c.input.throttle : 0.7;
+      cars.push({ id: c.id, x: c.x, y: c.y, vx: c.vx, vy: c.vy, throttle: thr });
     }
     let own = null;
     if (me) {
@@ -182,10 +205,17 @@
     const rows = {};
     for (let i = 0; i < S.cars.length; i++) {
       const c = S.cars[i];
-      rows[c.id] = { laps: c.lapsDone, last: c.lastLap, best: c.bestLap, gap: c.gap, lapStart: c.lapStart, fin: c.finished, out: c.out, qdone: c.qualiDone, dist: c.raceDist };
+      rows[c.id] = { laps: c.lapsDone, last: c.lastLap, best: c.bestLap, gap: c.gap, lapStart: c.lapStart, fin: c.finished, out: c.out, qdone: c.qualiDone, dist: c.raceDist, pen: c.penalty };
+    }
+    // live gap to the ghost (time trial, and practice when the ghost is on)
+    let delta = null;
+    const me = this.me, g = this.ghostLap();
+    if (g && me && !me.out && !me.inPit && me.lapStart !== null) {
+      const lapT = S.time - me.lapStart;
+      if (lapT > 1.5 && !(me.s > this.T.length * 0.8 && lapT < 10)) delta = lapT - window.ghostTimeAtS(g, this.T, me.s);
     }
     return window.HUD.build({
-      type: this.type, laps: S.laps, track: this.T, order: S.order, rows: rows, entries: this.entries, title: this.opts.title,
+      type: this.type, laps: S.laps, track: this.T, order: S.order, rows: rows, entries: this.entries, title: this.opts.title, delta: delta,
       myId: this.myId, phase: PH[S.phase], lights: S.lights, time: S.time,
       timeLeft: isFinite(S.timeLimit) ? Math.max(0, S.timeLimit - S.time) : -1,
       fastestId: S.fastest ? S.fastest.id : null, own: this.me, msgs: this.msgs, ping: null,

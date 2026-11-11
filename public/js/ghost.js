@@ -75,7 +75,57 @@
     return out;
   }
 
+  /* How long the ghost took to reach distance s round the lap (for the live gap in time trial). */
+  function ghostTimeAtS(g, T, s) {
+    if (!g._s) {
+      const n = g.p.length / 3, arr = new Float32Array(n), Q = {};
+      let hint = -1, last = 0;
+      for (let i = 0; i < n; i++) {
+        window.F1.queryTrack(T, g.p[i * 3], g.p[i * 3 + 1], hint, Q);
+        hint = Q.idx;
+        let v = Q.s;
+        if (i < n / 2 && v > T.length * 0.75) v -= T.length;             // just before the line at the start
+        else if (i > n / 2 && v < T.length * 0.25) v += T.length;        // just past it at the end
+        last = Math.max(last, v);
+        arr[i] = last;                                                   // never goes backwards
+      }
+      g._s = arr;
+    }
+    const a = g._s, n = a.length;
+    if (s <= a[0]) return 0;
+    if (s >= a[n - 1]) return g.t;
+    let lo = 0, hi = n - 1;
+    while (hi - lo > 1) { const m = (lo + hi) >> 1; if (a[m] < s) lo = m; else hi = m; }
+    const f = a[hi] > a[lo] ? (s - a[lo]) / (a[hi] - a[lo]) : 0;
+    return (lo + f) / RATE;
+  }
+
+  /* Time trial: your 10 best laps on each track, kept in this browser. */
+  const TTBoard = {
+    key: 'topdowngp.tt',
+    data: null,
+    load: function () {
+      if (this.data) return this.data;
+      try { this.data = JSON.parse(window.localStorage.getItem(this.key) || '{}') || {}; } catch (e) { this.data = {}; }
+      return this.data;
+    },
+    list: function (track) { return (this.load()[track] || []).slice(); },
+    /* Returns where the lap lands in your list (1 = your best), or 0 if it is not in the top 10. */
+    offer: function (track, t, driverId) {
+      const d = this.load(), l = d[track] || (d[track] = []);
+      const e = { t: Math.round(t * 1000) / 1000, d: driverId, at: Date.now() };
+      l.push(e);
+      l.sort(function (a, b) { return a.t - b.t; });
+      if (l.length > 10) l.length = 10;
+      const rank = l.indexOf(e) + 1;
+      if (rank) { try { window.localStorage.setItem(this.key, JSON.stringify(d)); } catch (err) { /* ignore */ } }
+      return rank;
+    }
+  };
+
   window.Ghost = Ghost;
   window.GhostRecorder = Recorder;
   window.ghostAt = ghostAt;
+  window.ghostTimeAtS = ghostTimeAtS;
+  window.TTBoard = TTBoard;
 })();

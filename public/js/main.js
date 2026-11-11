@@ -8,7 +8,9 @@
   Input.init();
   const GameAudio = window.GameAudio;
   $('version').textContent = 'Version ' + F1.VERSION;
+  document.querySelector('#home .tag').textContent = '2026 grid · 11 teams · 22 drivers · ' + Object.keys(F1.TRACK_DEFS).length + ' circuits';
   GameAudio.load();
+  syncSoundUI();
   // menu clicks: a rising sound for the big red buttons, a falling one for going back, a tap for the rest
   document.addEventListener('click', function (e) {
     const b = e.target.closest && e.target.closest('button, .track-card, .driver-btn');
@@ -20,7 +22,7 @@
   const R = new Renderer($('game'));
 
   let game = null;
-  let mode = 'menu';          // 'menu' | 'practice' | 'gp' | 'online'
+  let mode = 'menu';          // 'menu' | 'practice' | 'tt' | 'gp' | 'online'
   let net = null;
   let room = null;
   let resultsTimer = null;
@@ -47,6 +49,23 @@
   function updatePauseBtn() {
     const inGame = mode !== 'menu' && $('overlay').classList.contains('hidden') && $('pause').classList.contains('hidden') && game && game.kind !== 'attract';
     $('pausebtn').classList.toggle('hidden', !inGame);
+    // the sound button: on the home screen and while driving (next to the pause button)
+    const home = $('home').classList.contains('active') && !$('overlay').classList.contains('hidden');
+    $('soundbtn').classList.toggle('hidden', !inGame && !home);
+    $('soundbtn').classList.toggle('ingame', !!inGame);
+  }
+  /* Show the real sound state everywhere it appears. */
+  function syncSoundUI() {
+    const muted = !!GameAudio.vol.muted;
+    $('soundbtn').classList.toggle('muted', muted);
+    $('soundbtn').querySelector('button').setAttribute('aria-pressed', muted ? 'true' : 'false');
+    $('soundbtn').querySelector('.lbl').textContent = muted ? 'Sound off (M)' : 'Sound on (M)';
+    if ($('set-mute')) $('set-mute').checked = muted;
+  }
+  function toggleSound() {
+    const muted = GameAudio.toggleMute();
+    syncSoundUI();
+    toast(muted ? 'Sound off (M to turn it back on)' : 'Sound on');
   }
   let toastT = null;
   function toast(msg) {
@@ -71,6 +90,8 @@
     R.resetEffects();
   }
   function goHome() {
+    $('busy').classList.add('hidden');
+    $('confirm').classList.add('hidden');
     mode = 'menu';
     gp = null;
     clearInterval(resultsTimer);
@@ -160,6 +181,55 @@
   }
   $('practice-start').addEventListener('click', startPractice);
 
+  // ------------------------------------------------------------- time trial
+  const ttOpts = Object.assign({ track: 'monza', driverId: 'NOR' }, Settings.data.tt || {});
+  if (!F1.TRACK_DEFS[ttOpts.track]) ttOpts.track = 'monza';
+  function showTTBoard(track) {
+    const list = window.TTBoard.list(track), body = $('tt-board');
+    $('tt-board-title').textContent = 'Your best laps — ' + F1.getTrack(track).name;
+    body.innerHTML = '';
+    if (!list.length) {
+      const tr = el('tr'), td = el('td', 'empty', 'No laps yet — set the first time on this track');
+      td.colSpan = 5; tr.appendChild(td); body.appendChild(tr);
+      return;
+    }
+    list.forEach(function (e, i) {
+      const d = F1.driver(e.d) || F1.driver('NOR'), t = F1.team(d.team);
+      const tr = el('tr', i === 0 ? 'best' : '');
+      tr.appendChild(el('td', 'pos', String(i + 1)));
+      tr.appendChild(el('td', 'r', F1.fmtLap(e.t)));
+      tr.appendChild(el('td', 'r', i === 0 ? '' : '+' + (e.t - list[0].t).toFixed(3)));
+      const td = el('td', 'drv'), bar = el('span', 'bar');
+      bar.style.background = teamColor(t);
+      td.append(bar, document.createTextNode(d.name + ' · ' + t.name));
+      tr.appendChild(td);
+      tr.appendChild(el('td', 'r', new Date(e.at).toLocaleDateString(undefined, { day: 'numeric', month: 'short', year: 'numeric' })));
+      body.appendChild(tr);
+    });
+  }
+  function openTT() {
+    buildTrackCards($('tt-tracks'), ttOpts.track, function (id) { ttOpts.track = id; showTTBoard(id); });
+    // the cards show your best time trial lap on each track
+    $('tt-tracks').querySelectorAll('.track-card').forEach(function (card) {
+      const l = window.TTBoard.list(card.dataset.id), pb = card.querySelector('.tpb');
+      pb.textContent = l.length ? 'Best ' + F1.fmtLap(l[0].t) : 'No time yet';
+      pb.classList.toggle('none', !l.length);
+    });
+    buildDrivers($('tt-drivers'), { selected: ttOpts.driverId, onPick: function (id) { ttOpts.driverId = id; } });
+    showTTBoard(ttOpts.track);
+    show('tt');
+  }
+  function startTT() {
+    Settings.data.tt = Object.assign({}, ttOpts);
+    Settings.save();
+    mode = 'tt';
+    game = new window.LocalGame({ type: 'practice', tt: true, track: ttOpts.track, driverId: ttOpts.driverId, aiCount: 0, title: 'TIME TRIAL' });
+    R.resetEffects();
+    GameAudio.newSession();
+    show(null);
+  }
+  $('tt-start').addEventListener('click', startTT);
+
   // ------------------------------------------------------------- grand prix
   function lapOptions(sel, min, max, value, noneLabel) {
     const opts = [];
@@ -218,11 +288,11 @@
       grid: type === 'race' ? gp.grid : null, aiLevel: o.aiLevel, collisions: true,
       laps: type === 'race' ? o.raceLaps : type === 'quali' ? o.qualiLaps : o[stage],
       title: round ? 'R' + round + ' ' + STAGE_NAME[stage].toUpperCase() : type === 'practice' ? STAGE_NAME[stage].toUpperCase() : null,
-      onEnd: function (results) {
+      onEnd: function (results, g) {
         if (mode !== 'gp' || game.S.results !== results) return;
         if (type === 'quali') gp.grid = results.map(function (r) { return r.driverId; });
         if (type === 'race' && gp.champ && !gp.recorded) recordRound(gp.champ, o.track, results);
-        showResults({ type: type, stage: stage, track: o.track, results: results, round: round }, gp.champ ? 'champ' : 'gp');
+        showResults({ type: type, stage: stage, track: o.track, results: results, round: round, stats: g && g.S.stats }, gp.champ ? 'champ' : 'gp');
       }
     });
     R.resetEffects();
@@ -381,7 +451,7 @@
     head.innerHTML = '';
     const hr = el('tr');
     hr.append(el('th', null, 'Pos'), el('th', null, 'Driver'));
-    const CODES = { monza: 'ITA', silverstone: 'GBR', abudhabi: 'UAE', spa: 'BEL', interlagos: 'BRA' };
+    const CODES = { jeddah: 'KSA', monaco: 'MON', redbullring: 'AUT', silverstone: 'GBR', spa: 'BEL', monza: 'ITA', interlagos: 'BRA', abudhabi: 'UAE' };
     c.calendar.forEach(function (id) { const th = el('th', 'rd', CODES[id] || id.slice(0, 3).toUpperCase()); th.title = F1.getTrack(id).name; hr.appendChild(th); });
     hr.appendChild(el('th', 'r', 'Pts'));
     head.appendChild(hr);
@@ -439,6 +509,7 @@
       if (go === 'practice') openPractice();
       else if (go === 'gp') openGp();
       else if (go === 'champ') openChamp();
+      else if (go === 'tt') openTT();
       else if (go === 'online') openOnline();
       else show(go);
     });
@@ -463,7 +534,7 @@
       inp.oninput = function () { out.textContent = this.value; GameAudio.setVolume(k, Number(this.value) / 100); };
     });
     $('set-mute').checked = !!GameAudio.vol.muted;
-    $('set-mute').onchange = function () { if (!!GameAudio.vol.muted !== this.checked) GameAudio.toggleMute(); };
+    $('set-mute').onchange = function () { if (!!GameAudio.vol.muted !== this.checked) GameAudio.setMuted(this.checked); syncSoundUI(); };
     $('set-engine').value = GameAudio.vol.style;
     $('set-engine').onchange = function () { GameAudio.setStyle(this.value); };
     $('set-engine-test').onclick = function () { GameAudio.demo(); setTimeout(engineNote, 300); };
@@ -486,12 +557,17 @@
     if (mode === 'menu' || !$('overlay').classList.contains('hidden')) return;
     $('pause').classList.remove('hidden');
     if (game && game.kind === 'local') game.paused = true;
-    $('pause-restart').style.display = mode === 'practice' || mode === 'gp' ? '' : 'none';
-    $('pause-restart').textContent = mode === 'gp' ? 'Restart this session' : 'Restart practice';
-    $('pause-end').style.display = mode === 'gp' && gp && game && game.type === 'practice' ? '' : 'none';
+    $('pause-restart').style.display = mode === 'practice' || mode === 'gp' || mode === 'tt' ? '' : 'none';
+    $('pause-restart').textContent = mode === 'gp' ? 'Restart this session' : mode === 'tt' ? 'Restart time trial' : 'Restart practice';
+    // end practice or qualifying early (online: the host ends it for everyone)
+    const live = game && (game.kind === 'online' ? !game.ended && game.phase !== 3 : game.S && game.S.phase !== 'done');
+    const canEnd = live && (game.type === 'practice' || game.type === 'quali') &&
+      ((mode === 'gp' && gp && game.kind === 'local') || (mode === 'online' && game.kind === 'online' && room && net && room.hostId === net.id()));
+    $('pause-end').style.display = canEnd ? '' : 'none';
+    $('pause-end').textContent = game && game.type === 'quali' ? 'End qualifying now' : 'End session now';
     updatePauseBtn();
     $('pause-note').textContent = mode === 'online' ? 'The session keeps running while this menu is open.' : '';
-    $('pause-quit').textContent = mode === 'online' ? 'Leave the room' : 'Quit to menu';
+    $('pause-quit').textContent = mode === 'online' ? 'Leave the room' : mode === 'tt' ? 'Quit time trial' : 'Quit to menu';
     Input.active = false;
   }
   function resume() {
@@ -506,21 +582,53 @@
   $('pause-resume').addEventListener('click', resume);
   $('pause-restart').addEventListener('click', function () {
     resume();
-    if (mode === 'gp' && gp) startGpStage(gp.idx); else startPractice();
+    if (mode === 'gp' && gp) startGpStage(gp.idx); else if (mode === 'tt') startTT(); else startPractice();
   });
+  function sessionLive() { return game && (game.kind === 'online' ? !game.ended && game.phase !== 3 : game.S && game.S.phase !== 'done'); }
   $('pause-end').addEventListener('click', function () {
-    resume();
-    if (mode === 'gp' && game && game.kind === 'local' && game.S.phase !== 'done') game.S.finish();
+    if (!sessionLive()) { resume(); return; }
+    if (game.type !== 'quali') { resume(); endSessionNow(); return; }
+    // qualifying: a warning first
+    let text;
+    if (game.kind === 'online') text = 'This ends qualifying for everyone. Drivers who haven\'t set a lap time will start the race from the back of the grid.';
+    else {
+      const me = game.me, n = game.S.cars.length;
+      text = me && me.bestLap !== null
+        ? 'You keep your best lap (' + F1.fmtLap(me.bestLap) + '), which is P' + me.pos + ' right now. The other drivers will finish their laps, so you could drop back if they go faster.'
+        : 'You haven\'t set a lap time yet, so you will start the race from the back of the grid (P' + n + ').';
+    }
+    $('confirm-text').textContent = text;
+    $('pause').classList.add('hidden');
+    $('confirm').classList.remove('hidden');
   });
+  function closeConfirm(backToPause) {
+    $('confirm').classList.add('hidden');
+    if (backToPause) $('pause').classList.remove('hidden'); else resume();
+  }
+  $('confirm-no').addEventListener('click', function () { closeConfirm(false); });
+  $('confirm-yes').addEventListener('click', function () { closeConfirm(false); endSessionNow(); });
+  function endSessionNow() {
+    if (!sessionLive()) return;
+    if (game.kind === 'online') { if (net) net.emit('endSession'); return; }
+    if (game.type === 'quali') {
+      $('busy-fill').style.width = '0%';
+      $('busy').classList.remove('hidden');
+      game.endEarly(function (f) { $('busy-fill').style.width = Math.round(f * 100) + '%'; });
+    } else game.endEarly();
+  }
   $('pause-quit').addEventListener('click', function () {
-    if (mode === 'online') leaveRoom(); else goHome();
+    if (mode === 'online') leaveRoom(); else if (mode === 'tt') { goHome(); openTT(); } else goHome();
   });
+  $('soundbtn').querySelector('button').addEventListener('click', function (e) { e.currentTarget.blur(); toggleSound(); });
+  // the game open in another tab, or brought back from the browser's cache: use the saved sound settings
+  window.addEventListener('storage', function (e) { if (e.key === 'topdowngp.settings') { GameAudio.reload(); syncSoundUI(); } });
+  window.addEventListener('pageshow', function () { GameAudio.reload(); syncSoundUI(); });
   window.addEventListener('keydown', function (e) {
     const tg = e.target && e.target.tagName;
-    if (e.code === 'KeyM' && !e.repeat && tg !== 'INPUT' && tg !== 'SELECT') {
-      const muted = GameAudio.toggleMute();
-      toast(muted ? 'Sound off (M to turn it back on)' : 'Sound on');
-      if ($('set-mute')) $('set-mute').checked = muted;
+    // M works everywhere except while typing (your name, a room code)
+    const typing = tg === 'TEXTAREA' || tg === 'SELECT' || (tg === 'INPUT' && !/^(checkbox|radio|range|button|submit)$/i.test(e.target.type || ''));
+    if (e.code === 'KeyM' && !e.repeat && !typing) {
+      toggleSound();
       return;
     }
     // C: camera distance (close / normal / far) while driving
@@ -535,11 +643,13 @@
     const tag = e.target && e.target.tagName;
     if (e.code === 'KeyP' && (tag === 'INPUT' || tag === 'SELECT')) return;
     if (!$('settings').classList.contains('hidden')) { $('settings-close').click(); return; }
+    if (!$('confirm').classList.contains('hidden')) { closeConfirm(true); return; }
     if (pauseOpen()) resume(); else openPause();
   });
   document.addEventListener('visibilitychange', function () {
+    if (!document.hidden) { GameAudio.reload(); syncSoundUI(); }
     GameAudio.suspend(document.hidden);
-    if (document.hidden && (mode === 'practice' || mode === 'gp') && !pauseOpen()) openPause();
+    if (document.hidden && (mode === 'practice' || mode === 'gp' || mode === 'tt') && !pauseOpen()) openPause();
     if (document.hidden) {
       Input.keys = {};
       if (game && game.kind === 'online') game.sendNeutral();
@@ -652,6 +762,7 @@
     });
     const s = r.settings;
     fillSelect($('set-track'), Object.keys(F1.TRACK_DEFS).map(function (id) { return [id, F1.TRACK_DEFS[id].name]; }), s.track);
+    ['p1', 'p2', 'p3'].forEach(function (k) { fillSelect($('set-' + k), [[0, 'Skip'], [1, '1 lap'], [2, '2 laps'], [3, '3 laps']], s[k] || 0); });
     fillSelect($('set-quali'), [[0, 'None (random grid)'], [1, '1 lap'], [2, '2 laps'], [3, '3 laps'], [4, '4 laps'], [5, '5 laps']], s.qualiLaps);
     const raceOpts = []; for (let i = 1; i <= 7; i++) raceOpts.push([i, i + (i === 1 ? ' lap' : ' laps')]);
     fillSelect($('set-race'), raceOpts, Math.min(7, s.raceLaps));
@@ -659,10 +770,11 @@
     for (let i = 0; i <= 21; i++) aiOpts.push([i, i > aiMax ? i + ' (max ' + aiMax + ')' : (i === aiMax ? i + ' (full grid)' : String(i))]);
     fillSelect($('set-ai'), aiOpts, s.aiCount);
     $('set-level').value = s.aiLevel;
-    ['set-track', 'set-quali', 'set-race', 'set-ai', 'set-level'].forEach(function (id) { $(id).disabled = !isHost; });
+    ['set-track', 'set-p1', 'set-p2', 'set-p3', 'set-quali', 'set-race', 'set-ai', 'set-level'].forEach(function (id) { $(id).disabled = !isHost; });
     $('lobby-hostnote').textContent = isHost ? '' : '(host decides)';
     $('lobby-start').style.display = isHost ? '' : 'none';
-    $('lobby-start').textContent = s.qualiLaps > 0 ? 'Start qualifying' : 'Start race';
+    const first = ['p1', 'p2', 'p3'].find(function (k) { return s[k] > 0; }) || (s.qualiLaps > 0 ? 'quali' : 'race');
+    $('lobby-start').textContent = first === 'race' ? 'Start race' : 'Start ' + STAGE_NAME[first];
     $('lobby-waiting').style.display = isHost ? 'none' : '';
     const mine = r.players.find(function (p) { return p.id === me; });
     const takenBy = {};
@@ -677,9 +789,9 @@
       });
     }
   }
-  ['set-track', 'set-quali', 'set-race', 'set-ai', 'set-level'].forEach(function (id) {
+  ['set-track', 'set-p1', 'set-p2', 'set-p3', 'set-quali', 'set-race', 'set-ai', 'set-level'].forEach(function (id) {
     $(id).addEventListener('change', function () {
-      const map = { 'set-track': 'track', 'set-quali': 'qualiLaps', 'set-race': 'raceLaps', 'set-ai': 'aiCount', 'set-level': 'aiLevel' };
+      const map = { 'set-track': 'track', 'set-p1': 'p1', 'set-p2': 'p2', 'set-p3': 'p3', 'set-quali': 'qualiLaps', 'set-race': 'raceLaps', 'set-ai': 'aiCount', 'set-level': 'aiLevel' };
       const v = this.value, msg = {};
       msg[map[id]] = (id === 'set-track' || id === 'set-level') ? v : Number(v);
       if (net) net.socket.emit('settings', msg);
@@ -722,6 +834,8 @@
     showResults(m, 'online');
   }
   function showResults(m, ctx) {
+    $('busy').classList.add('hidden');
+    $('confirm').classList.add('hidden');
     lastResults = m;
     resultsCtx = ctx;
     const T = F1.getTrack(m.track);
@@ -743,25 +857,39 @@
       td.append(bar, document.createTextNode(d.name + (r.isAI ? '' : '  (' + (local ? 'You' : r.name || 'Player') + ')')));
       tr.appendChild(td);
       tr.appendChild(el('td', null, t.name));
-      tr.appendChild(el('td', 'r', r.gap));
+      const gapTd = el('td', 'r', r.gap);
+      if (r.pen) gapTd.appendChild(el('span', 'pen', '+' + r.pen + 's pen'));
+      tr.appendChild(gapTd);
       tr.appendChild(el('td', 'r' + (r.best !== null && r.best === fastest && m.type === 'race' ? ' purple' : ''), r.best !== null ? F1.fmtLap(r.best) : '—'));
       tr.appendChild(el('td', 'r', String(r.laps)));
-      tr.appendChild(el('td', 'r pts-col' + (r.pts ? ' pts' : ''), r.pts ? String(r.pts) : ''));
+      // grid slot and places gained / lost
+      const gridTd = el('td', 'r race-col', r.grid ? 'P' + r.grid : '');
+      if (r.grid && !r.out && r.gained) gridTd.appendChild(el('span', r.gained > 0 ? 'up' : 'down', (r.gained > 0 ? '▲' : '▼') + Math.abs(r.gained)));
+      tr.appendChild(gridTd);
+      tr.appendChild(el('td', 'r race-col', r.ovt !== undefined ? String(r.ovt) : ''));
+      const ptsTd = el('td', 'r pts-col' + (r.pts ? ' pts' : ''), r.pts ? String(r.pts) : '');
+      if (r.flPt) ptsTd.title = 'Includes 1 point for the fastest lap';
+      tr.appendChild(ptsTd);
       body.appendChild(tr);
     });
+    showRaceStats(m, myPlayer, local);
     clearInterval(resultsTimer);
     if (local) {
       const mine = m.results.find(function (r) { return !r.isAI; });
       if (m.type === 'practice') $('results-note').textContent = mine && mine.best !== null ? 'Your best lap ' + F1.fmtLap(mine.best) + ' — P' + mine.pos : 'No lap time set';
       else if (m.type === 'quali') $('results-note').textContent = mine ? 'You start the race from P' + mine.pos : '';
       else $('results-note').textContent = mine ? 'You finished P' + mine.pos + (mine.pts ? ' — ' + mine.pts + (mine.pts === 1 ? ' point' : ' points') : '') : '';
-    } else if (m.type === 'quali' && m.raceIn) {
-      let left = m.raceIn;
-      $('results-note').textContent = 'The race starts in ' + left + ' s — you start from your qualifying position';
+    } else if (m.next && m.nextIn) {
+      let left = m.nextIn;
+      const say = function () {
+        return (m.next === 'race' ? 'The race' : STAGE_NAME[m.next]) + ' starts in ' + left + ' s' +
+          (m.next === 'race' && m.type === 'quali' ? ' — you start from your qualifying position' : '');
+      };
+      $('results-note').textContent = say();
       resultsTimer = setInterval(function () {
         left--;
         if (left <= 0) { clearInterval(resultsTimer); $('results-note').textContent = 'Starting…'; return; }
-        $('results-note').textContent = 'The race starts in ' + left + ' s — you start from your qualifying position';
+        $('results-note').textContent = say();
       }, 1000);
     } else {
       $('results-note').textContent = '';
@@ -769,6 +897,36 @@
     $('pause').classList.add('hidden');
     show('results');
     updateResultsButtons();
+  }
+  /* Race stat cards: Driver of the day, fastest lap, most overtakes, biggest climber. */
+  function showRaceStats(m, myPlayer, local) {
+    const box = $('race-stats'), st = m.stats;
+    box.innerHTML = '';
+    box.classList.toggle('hidden', !(m.type === 'race' && st));
+    if (m.type !== 'race' || !st) return;
+    const nameOf = function (driverId) {
+      const r = m.results.find(function (x) { return x.driverId === driverId; });
+      return F1.driver(driverId).name + (r && !r.isAI ? (local ? ' (You)' : ' (' + (r.name || 'Player') + ')') : '');
+    };
+    const card = function (cls, label, driverId, detail) {
+      const c = el('div', 'stat-card ' + cls + (myPlayer && myPlayer.driverId === driverId ? ' mine' : ''));
+      c.appendChild(el('div', 'lbl', label));
+      const who = el('div', 'who');
+      if (driverId) {
+        const bar = el('span', 'bar'); bar.style.background = teamColor(F1.team(F1.driver(driverId).team));
+        who.append(bar, document.createTextNode(nameOf(driverId)));
+      } else who.textContent = '—';
+      c.append(who, el('div', 'det', detail));
+      box.appendChild(c);
+    };
+    const d = st.dotd;
+    card('dotd', 'Driver of the day', d && d.driverId, d ? 'P' + d.grid + ' → P' + d.pos + (d.ovt ? ' · ' + d.ovt + (d.ovt === 1 ? ' overtake' : ' overtakes') : '') + (d.fl ? ' · fastest lap' : '') : '');
+    const f = st.fastest;
+    card('fl', 'Fastest lap', f && f.driverId, f ? F1.fmtLap(f.time) + (f.point ? ' · +1 point' : ' · no point (outside the top 10)') : 'No laps completed');
+    const o = st.mostOvertakes;
+    card('', 'Most overtakes', o && o.driverId, o ? o.n + (o.n === 1 ? ' overtake' : ' overtakes') : 'No overtakes');
+    const c2 = st.climber;
+    card('', 'Biggest climber', c2 && c2.driverId, c2 ? 'P' + c2.from + ' → P' + c2.to + ' (+' + c2.n + ')' : 'Nobody gained places');
   }
   function updateResultsButtons() {
     const isChamp = resultsCtx === 'champ', isGp = resultsCtx === 'gp' || isChamp;

@@ -8,7 +8,9 @@
     forest: '#173d24', tree1: '#1f5530', tree2: '#2a6a3b', treeHi: 'rgba(255,255,255,0.06)',
     grassA: '#3f8a46', grassB: '#3a8141', barrier: '#c9ced3', armco: '#7d858c',
     asphalt: '#3a3c40', line: '#f2f2f2', kerbR: '#d62b2b', kerbW: '#f4f4f4',
-    gravel: '#cdb98d', gravelDot: '#b9a476'
+    gravel: '#cdb98d', gravelDot: '#b9a476',
+    // street circuits
+    city: '#25272c', runoffSt: '#5d6168', bld: ['#3a3d44', '#444851', '#4f535c'], roof: 'rgba(255,255,255,0.07)'
   };
 
   function lerpAngle(a, b, t) { return a + F1.wrapAngle(b - a) * t; }
@@ -323,9 +325,30 @@
         if (nt[0] < T.wall[nt[1]] + 9) continue;
         if (nt[0] < T.maxWall + 44 && (nt[1] * T.ds > T.length - 380 || nt[1] * T.ds < 230)) continue;
         if (rand() < 0.18) continue;
+        if (T.street) continue;              // street circuits get buildings instead (below)
         const key = Math.floor(tx / 100) + ',' + Math.floor(ty / 100);
         if (!G.trees.has(key)) G.trees.set(key, []);
         G.trees.get(key).push([tx, ty, 3.2 + rand() * 3.6, rand() < 0.5 ? 0 : 1]);
+      }
+    }
+    // street circuits: city blocks lined up with the nearest street, clear of the walls and the pits
+    G.blocks = new Map();
+    if (T.street) {
+      const bs = 30;
+      for (let x = b.minX - pad; x < b.maxX + pad; x += bs) {
+        for (let y = b.minY - pad; y < b.maxY + pad; y += bs) {
+          const cx = x + (rand() - 0.5) * 6, cy = y + (rand() - 0.5) * 6;
+          const nt = nearTrack(cx, cy);
+          const w = 12 + rand() * 12, h = 10 + rand() * 12, r = Math.hypot(w, h) / 2;
+          if (nt[0] < T.wall[nt[1]] + 4 + r) continue;
+          if (T.pit && nt[0] < T.pit.garBack + 14 && (nt[1] * T.ds > T.length - 420 || nt[1] * T.ds < 360)) continue;
+          if (rand() < 0.12) continue;
+          const a = T.hd[nt[1]], ca = Math.cos(a), sa = Math.sin(a);
+          const pts = [[-w / 2, -h / 2], [w / 2, -h / 2], [w / 2, h / 2], [-w / 2, h / 2]].map(function (q) { return [cx + q[0] * ca - q[1] * sa, cy + q[0] * sa + q[1] * ca]; });
+          const key = Math.floor(cx / 100) + ',' + Math.floor(cy / 100);
+          if (!G.blocks.has(key)) G.blocks.set(key, []);
+          G.blocks.get(key).push({ pts: pts, shade: Math.floor(rand() * 3) });
+        }
       }
     }
 
@@ -418,7 +441,7 @@
   Renderer.prototype.drawWorld = function (frame, dt) {
     const ctx = this.ctx, T = frame.track, G = this.prep(T), cam = this.cam, dpr = this.dpr;
     ctx.setTransform(1, 0, 0, 1, 0, 0);
-    ctx.fillStyle = COL.forest;
+    ctx.fillStyle = T.street ? COL.city : COL.forest;
     ctx.fillRect(0, 0, this.cv.width, this.cv.height);
     ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
     ctx.translate(cam.ax, cam.ay);
@@ -445,6 +468,24 @@
     ctx.fillStyle = COL.tree1; ctx.fill(p1);
     ctx.fillStyle = COL.tree2; ctx.fill(p2);
     ctx.fillStyle = COL.treeHi; ctx.fill(ph);
+    // city blocks (street circuits)
+    if (G.blocks.size) {
+      const bp = [new Path2D(), new Path2D(), new Path2D()], roof = new Path2D();
+      for (let gx = tx0; gx <= tx1; gx++) for (let gy = ty0; gy <= ty1; gy++) {
+        const list = G.blocks.get(gx + ',' + gy);
+        if (!list) continue;
+        for (let q = 0; q < list.length; q++) {
+          const k = list[q], p = k.pts, path = bp[k.shade];
+          path.moveTo(p[0][0], p[0][1]); path.lineTo(p[1][0], p[1][1]); path.lineTo(p[2][0], p[2][1]); path.lineTo(p[3][0], p[3][1]); path.closePath();
+          // a lighter roof panel
+          const mx = (p[0][0] + p[2][0]) / 2, my = (p[0][1] + p[2][1]) / 2;
+          for (let v = 0; v < 4; v++) { const x = mx + (p[v][0] - mx) * 0.62, y = my + (p[v][1] - my) * 0.62; if (v) roof.lineTo(x, y); else roof.moveTo(x, y); }
+          roof.closePath();
+        }
+      }
+      for (let v = 0; v < 3; v++) { ctx.fillStyle = COL.bld[v]; ctx.fill(bp[v]); }
+      ctx.fillStyle = COL.roof; ctx.fill(roof);
+    }
 
     // decorations
     G.deco.forEach(function (d) {
@@ -457,7 +498,7 @@
     // barriers + run-off
     for (const ch of vis) for (const g of ch.runoff) { ctx.strokeStyle = COL.armco; ctx.lineWidth = 2 * g.w + 2.4; ctx.stroke(g.path); }
     for (const ch of vis) for (const g of ch.runoff) { ctx.strokeStyle = COL.barrier; ctx.lineWidth = 2 * g.w + 1.2; ctx.stroke(g.path); }
-    ctx.strokeStyle = G.grassPattern || COL.grassA;
+    ctx.strokeStyle = T.street ? COL.runoffSt : G.grassPattern || COL.grassA;
     for (const ch of vis) for (const g of ch.runoff) { ctx.lineWidth = 2 * g.w; ctx.stroke(g.path); }
     // the visible track sections are merged into one shape per layer and drawn in one go:
     // drawing them section by section leaves hairline seams where the sections meet
@@ -752,7 +793,7 @@
         this.parts.push({ x: w[0], y: w[1], vx: c.vx * 0.55 + (Math.random() - 0.5) * 2, vy: c.vy * 0.55 + (Math.random() - 0.5) * 2, life: 0.9, max: 0.9, r: 0.5, kind: 'smoke' });
       }
     } else if (this.wheelPrev['f' + c.id]) delete this.wheelPrev['f' + c.id];
-    if (c.surf >= 2 && sp > 12 && Math.random() < 0.5) {
+    if ((c.surf === 2 || c.surf === 3) && sp > 12 && Math.random() < 0.5) {
       this.parts.push({ x: c.x - ca * 2.4, y: c.y - sa * 2.4, vx: c.vx * 0.2 + (Math.random() - 0.5) * 3, vy: c.vy * 0.2 + (Math.random() - 0.5) * 3, life: 0.7, max: 0.7, r: 1.0, kind: c.surf === 3 ? 'gravel' : 'grass' });
     }
   };
@@ -841,6 +882,12 @@
         ctx.fillStyle = r.me ? '#111' : (r.out ? '#777' : '#fff');
         ctx.font = '800 ' + Math.round(rh * 0.62) + 'px ' + FONT;
         ctx.fillText(r.code, x0 + 37, y + rh / 2);
+        if (r.pen) {
+          const pw2 = Math.round(rh * 1.45), px2 = x0 + (compact ? 70 : 92);
+          ctx.fillStyle = '#e10600'; roundRect(ctx, px2, y + 3, pw2, rh - 7, 3); ctx.fill();
+          ctx.fillStyle = '#fff'; ctx.font = '800 ' + Math.round(rh * 0.5) + 'px ' + FONT; ctx.textAlign = 'center';
+          ctx.fillText('+' + r.pen + 's', px2 + pw2 / 2, y + rh / 2);
+        }
         ctx.textAlign = 'right';
         ctx.font = '600 ' + Math.round(rh * 0.56) + 'px ' + FONT;
         ctx.fillStyle = r.me ? '#111' : (r.purple ? '#c77dff' : (r.out ? '#777' : '#d7dbe0'));
@@ -900,10 +947,15 @@
           ctx.fill(); ctx.shadowBlur = 0;
         }
       }
+      if (hud.lightsNote) {
+        ctx.font = '800 13px ' + FONT; ctx.textAlign = 'center'; ctx.fillStyle = '#fff';
+        ctx.lineWidth = 4; ctx.strokeStyle = 'rgba(0,0,0,0.75)';
+        ctx.strokeText(hud.lightsNote, W / 2, ly + 100); ctx.fillText(hud.lightsNote, W / 2, ly + 100);
+      }
     }
 
     // ---- centre messages
-    let my2 = hud.lights !== undefined && hud.lights !== null ? 120 : 26;
+    let my2 = hud.lights !== undefined && hud.lights !== null ? 128 : 26;
     if (hud.msgs) {
       for (let i = 0; i < hud.msgs.length; i++) {
         const m = hud.msgs[i];
@@ -913,13 +965,31 @@
         const w = Math.max(ctx.measureText(m.text).width, subW) + 40;
         const h = (m.big ? 46 : 34) + (m.sub ? 20 : 0);
         ctx.globalAlpha = m.alpha === undefined ? 1 : m.alpha;
-        ctx.fillStyle = 'rgba(10,10,14,0.88)';
-        roundRect(ctx, W / 2 - w / 2, my2, w, h, 6); ctx.fill();
-        ctx.fillStyle = m.color || '#e10600'; ctx.fillRect(W / 2 - w / 2, my2, 4, h);
-        ctx.textAlign = 'center';
-        ctx.fillStyle = '#fff';
-        ctx.fillText(m.text, W / 2, my2 + (m.big ? 24 : 18));
-        if (m.sub) { ctx.font = '600 14px ' + FONT; ctx.fillStyle = m.subColor || '#cfd3d8'; ctx.fillText(m.sub, W / 2, my2 + h - 14); }
+        if (m.sign) {
+          // a warning sign: yellow (warning) or red (penalty) with a hazard triangle
+          const sw = w + 56, sx = W / 2 - sw / 2, pen = m.sign === 'pen';
+          ctx.fillStyle = pen ? '#d40a00' : '#ffd400';
+          roundRect(ctx, sx, my2, sw, h, 7); ctx.fill();
+          ctx.lineWidth = 3; ctx.strokeStyle = pen ? '#ffffff' : '#111111';
+          roundRect(ctx, sx + 4, my2 + 4, sw - 8, h - 8, 5); ctx.stroke();
+          const tx = sx + 30, ty = my2 + h / 2, ts = Math.min(17, h / 2 - 6);
+          ctx.beginPath(); ctx.moveTo(tx, ty - ts); ctx.lineTo(tx + ts * 1.1, ty + ts * 0.85); ctx.lineTo(tx - ts * 1.1, ty + ts * 0.85); ctx.closePath();
+          ctx.fillStyle = pen ? '#ffffff' : '#111111'; ctx.fill();
+          ctx.fillStyle = pen ? '#d40a00' : '#ffd400'; ctx.font = '900 ' + Math.round(ts * 1.15) + 'px ' + FONT; ctx.textAlign = 'center';
+          ctx.fillText('!', tx, ty + ts * 0.25);
+          ctx.fillStyle = pen ? '#ffffff' : '#111111';
+          ctx.font = '900 ' + (m.big ? 30 : 21) + 'px ' + FONT;
+          ctx.fillText(m.text, W / 2 + 16, my2 + (m.big ? 24 : 18));
+          if (m.sub) { ctx.font = '700 14px ' + FONT; ctx.fillText(m.sub, W / 2 + 16, my2 + h - 14); }
+        } else {
+          ctx.fillStyle = 'rgba(10,10,14,0.88)';
+          roundRect(ctx, W / 2 - w / 2, my2, w, h, 6); ctx.fill();
+          ctx.fillStyle = m.color || '#e10600'; ctx.fillRect(W / 2 - w / 2, my2, 4, h);
+          ctx.textAlign = 'center';
+          ctx.fillStyle = '#fff';
+          ctx.fillText(m.text, W / 2, my2 + (m.big ? 24 : 18));
+          if (m.sub) { ctx.font = '600 14px ' + FONT; ctx.fillStyle = m.subColor || '#cfd3d8'; ctx.fillText(m.sub, W / 2, my2 + h - 14); }
+        }
         ctx.globalAlpha = 1;
         my2 += h + 8;
       }
@@ -940,6 +1010,18 @@
     if (hud.speed !== undefined) {
       const bw = compact ? Math.min(W - 24, 400) : 560, bh = compact ? 84 : 96;
       const bx = W / 2 - bw / 2, by = H - bh - 14;
+      // gap to the ghost, just above the dashboard
+      if (hud.delta) {
+        ctx.font = '900 26px ' + FONT;
+        const dw = ctx.measureText(hud.delta.text).width + 92;
+        ctx.fillStyle = 'rgba(10,10,14,0.88)';
+        roundRect(ctx, W / 2 - dw / 2, by - 50, dw, 40, 8); ctx.fill();
+        ctx.fillStyle = hud.delta.color; ctx.fillRect(W / 2 - dw / 2, by - 50, 4, 40);
+        ctx.textAlign = 'left'; ctx.font = '800 11px ' + FONT; ctx.fillStyle = '#9aa1a8';
+        ctx.fillText('GHOST', W / 2 - dw / 2 + 14, by - 30);
+        ctx.textAlign = 'right'; ctx.font = '900 26px ' + FONT; ctx.fillStyle = hud.delta.color;
+        ctx.fillText(hud.delta.text, W / 2 + dw / 2 - 14, by - 29);
+      }
       ctx.fillStyle = 'rgba(10,10,14,0.88)';
       roundRect(ctx, bx, by, bw, bh, 10); ctx.fill();
       // gear + speed

@@ -30,6 +30,8 @@
     this.net = net;
     this.kind = 'online';
     this.type = info.type;
+    this.stage = info.stage || info.type;
+    this.title = info.title || null;
     this.T = F1.getTrack(info.track);
     this.laps = info.laps;
     this.entries = {};
@@ -186,7 +188,7 @@
     const rows = {};
     for (let i = 0; i < t.r.length; i++) {
       const a = t.r[i];
-      rows[a[0]] = { laps: a[1], last: a[2] < 0 ? null : a[2], best: a[3] < 0 ? null : a[3], gap: a[4], lapStart: a[5] < 0 ? null : a[5], fin: !!(a[6] & 1), out: !!(a[6] & 2), qdone: !!(a[6] & 4), dist: a[7] };
+      rows[a[0]] = { laps: a[1], last: a[2] < 0 ? null : a[2], best: a[3] < 0 ? null : a[3], gap: a[4], lapStart: a[5] < 0 ? null : a[5], fin: !!(a[6] & 1), out: !!(a[6] & 2), qdone: !!(a[6] & 4), dist: a[7], pen: a[8] || 0 };
     }
     this.rows = rows;
   };
@@ -319,7 +321,7 @@
   OnlineGame.prototype.hud = function (now) {
     const tm = this.timing;
     return window.HUD.build({
-      type: this.type, laps: this.laps, track: this.T,
+      type: this.type, laps: this.laps, track: this.T, title: this.title,
       order: tm ? tm.o : Object.keys(this.entries).map(Number),
       rows: this.rows, entries: this.entries, myId: this.myId, phase: this.phase, lights: this.lights,
       time: this.serverTime + Math.min(1, (now - this.snapRecv) / 1000),

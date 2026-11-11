@@ -1,6 +1,6 @@
 'use strict';
 /* Top-Down GP — game server.
-   Serves the game files and runs online sessions: rooms with codes, lobby, qualifying -> race.
+   Serves the game files and runs online sessions: rooms with codes, lobby, practice -> qualifying -> race.
    The server simulates every car 60 times a second (authoritative), sends snapshots 20x/s. */
 const path = require('path');
 const http = require('http');
@@ -17,6 +17,8 @@ const MAX_HUMANS = 8;
 const GRID_SIZE = 22;
 const MAX_ROOMS = 200;
 const PHASE_CODE = { countdown: 0, running: 1, finishing: 2, done: 3 };
+const STAGE_TITLE = { p1: 'PRACTICE 1', p2: 'PRACTICE 2', p3: 'PRACTICE 3', quali: 'QUALIFYING', race: 'RACE' };
+const NEXT_IN = 12;      // seconds between the sessions of a weekend
 
 const app = express();
 app.use(express.static(path.join(__dirname, 'public')));
@@ -89,6 +91,8 @@ function sessionInfo(room) {
   const S = room.session;
   return {
     type: S.type,
+    stage: room.stage,
+    title: STAGE_TITLE[room.stage] || null,
     track: S.track.id,
     laps: S.laps,
     aiLevel: S.aiLevel,
@@ -98,8 +102,10 @@ function sessionInfo(room) {
   };
 }
 
-function startSession(room, type) {
+/* stage: 'p1' | 'p2' | 'p3' | 'quali' | 'race' */
+function startSession(room, stage) {
   if (room.timer) { clearTimeout(room.timer); room.timer = null; }
+  const type = stage === 'quali' || stage === 'race' ? stage : 'practice';
   const T = F1.getTrack(room.settings.track);
   const humans = Array.from(room.players.values());
   if (!humans.length) return;
@@ -117,16 +123,17 @@ function startSession(room, type) {
   });
   const aiCount = intIn(room.settings.aiCount, 0, GRID_SIZE - humans.length, 0);
   let aiDrivers;
-  if (type === 'race' && room.qualiOrder && room.qualiAI) {
-    // race after qualifying: keep the same AI drivers that qualified
-    aiDrivers = room.qualiAI.filter(function (id) { return !taken.has(id); }).map(function (id) { return F1.driver(id); });
+  if (room.weekendAI) {
+    // the same AI drivers all weekend (practice, qualifying and the race)
+    aiDrivers = room.weekendAI.filter(function (id) { return !taken.has(id); }).map(function (id) { return F1.driver(id); });
     const extra = shuffle(F1.DRIVERS.filter(function (d) { return !taken.has(d.id) && aiDrivers.indexOf(d) < 0; }));
     while (aiDrivers.length < aiCount && extra.length) aiDrivers.push(extra.pop());
     aiDrivers = aiDrivers.slice(0, aiCount);
   } else {
     aiDrivers = shuffle(F1.DRIVERS.filter(function (d) { return !taken.has(d.id); })).slice(0, aiCount);
   }
-  room.qualiAI = type === 'quali' ? aiDrivers.map(function (d) { return d.id; }) : room.qualiAI;
+  room.weekendAI = aiDrivers.map(function (d) { return d.id; });
+  room.stage = stage;
   let entries = humans.map(function (p) { return { driverId: p.driverId, isAI: false, name: p.name, owner: p.id }; })
     .concat(aiDrivers.map(function (d) { return { driverId: d.id, isAI: true }; }));
   if (type === 'race' && room.qualiOrder) {
@@ -144,10 +151,11 @@ function startSession(room, type) {
     type: type,
     track: T,
     entries: entries,
-    laps: type === 'race' ? room.settings.raceLaps : room.settings.qualiLaps,
+    laps: type === 'race' ? room.settings.raceLaps : type === 'quali' ? room.settings.qualiLaps : room.settings[stage],
     aiLevel: room.settings.aiLevel,
     collisions: true,
-    seed: Math.floor(Math.random() * 1e9)
+    seed: Math.floor(Math.random() * 1e9),
+    startMode: type === 'practice' ? 'pit' : 'grid'      // practice: you start in your team's garage
   });
   room.session = S;
   room.state = type;
@@ -188,7 +196,7 @@ function timing(room) {
     o: S.order,
     r: S.cars.map(function (c) {
       return [c.id, c.lapsDone, c.lastLap === null ? -1 : r3(c.lastLap), c.bestLap === null ? -1 : r3(c.bestLap), r3(c.gap),
-        c.lapStart === null ? -1 : r3(c.lapStart), (c.finished ? 1 : 0) | (c.out ? 2 : 0) | (c.qualiDone ? 4 : 0), Math.round(c.raceDist)];
+        c.lapStart === null ? -1 : r3(c.lapStart), (c.finished ? 1 : 0) | (c.out && !c.parked ? 2 : 0) | (c.qualiDone ? 4 : 0), Math.round(c.raceDist), c.penalty];
     }),
     f: S.fastest ? [S.fastest.id, r3(S.fastest.time)] : null,
     tl: isFinite(S.timeLimit) ? Math.max(0, Math.round(S.timeLimit - S.time)) : -1,
@@ -203,19 +211,24 @@ function onSessionEnd(room) {
   io.to(room.code).emit('timing', timing(room));
   room.session = null;
   room.carOf = new Map();
-  if (S.type === 'quali') {
-    room.qualiOrder = results.map(function (r) { return r.driverId; });
-    room.state = 'qualiResults';
-    const raceIn = 12;
-    room.lastResults = { type: 'quali', track: S.track.id, results: results, raceIn: raceIn };
+  if (S.type === 'quali') room.qualiOrder = results.map(function (r) { return r.driverId; });
+  const stages = room.stages || [S.type];
+  const next = room.stageIdx + 1 < stages.length ? stages[room.stageIdx + 1] : null;
+  if (next) {
+    // practice or qualifying done: show the results, then the next session starts by itself
+    room.state = 'stageResults';
+    room.lastResults = { type: S.type, stage: room.stage, track: S.track.id, results: results, next: next, nextIn: NEXT_IN };
     io.to(room.code).emit('sessionEnd', room.lastResults);
     room.timer = setTimeout(function () {
       room.timer = null;
-      if (rooms.get(room.code) === room && room.state === 'qualiResults' && room.players.size) startSession(room, 'race');
-    }, raceIn * 1000);
+      if (rooms.get(room.code) === room && room.state === 'stageResults' && room.players.size) {
+        room.stageIdx++;
+        startSession(room, next);
+      }
+    }, NEXT_IN * 1000);
   } else {
     room.state = 'results';
-    room.lastResults = { type: 'race', track: S.track.id, results: results };
+    room.lastResults = { type: 'race', stage: 'race', track: S.track.id, results: results, stats: S.stats || null };
     io.to(room.code).emit('sessionEnd', room.lastResults);
   }
   broadcastRoom(room);
@@ -255,7 +268,7 @@ function joinRoom(socket, room, name) {
   if (room.session) {
     socket.emit('session', sessionInfo(room));
     socket.emit('timing', timing(room));
-  } else if (room.lastResults && (room.state === 'results' || room.state === 'qualiResults')) {
+  } else if (room.lastResults && (room.state === 'results' || room.state === 'stageResults')) {
     socket.emit('sessionEnd', room.lastResults);
   }
 }
@@ -300,11 +313,11 @@ io.on('connection', function (socket) {
       code: newCode(),
       hostId: socket.id,
       players: new Map(),
-      settings: { track: 'monza', qualiLaps: 2, raceLaps: 5, aiCount: 21, aiLevel: 'medium' },
+      settings: { track: 'monza', p1: 0, p2: 0, p3: 0, qualiLaps: 2, raceLaps: 5, aiCount: 21, aiLevel: 'medium' },
       state: 'lobby',
       session: null,
       carOf: new Map(), ownerOf: new Map(), inputQ: new Map(), lastIn: new Map(), ack: new Map(), lastSeq: new Map(),
-      qualiOrder: null, timer: null, lastResults: null
+      qualiOrder: null, weekendAI: null, stages: null, stageIdx: 0, stage: null, timer: null, lastResults: null
     };
     rooms.set(room.code, room);
     joinRoom(socket, room, msg && msg.name);
@@ -338,6 +351,7 @@ io.on('connection', function (socket) {
     if (!room || room.hostId !== socket.id || !s || (room.state !== 'lobby' && room.state !== 'results')) return;
     const st = room.settings;
     if (s.track && F1.TRACK_DEFS[s.track]) st.track = s.track;
+    ['p1', 'p2', 'p3'].forEach(function (k) { if (s[k] !== undefined) st[k] = intIn(s[k], 0, 3, st[k]); });
     if (s.qualiLaps !== undefined) st.qualiLaps = intIn(s.qualiLaps, 0, 5, st.qualiLaps);
     if (s.raceLaps !== undefined) st.raceLaps = intIn(s.raceLaps, 1, 7, st.raceLaps);
     if (s.aiCount !== undefined) st.aiCount = intIn(s.aiCount, 0, GRID_SIZE - 1, st.aiCount);
@@ -349,9 +363,27 @@ io.on('connection', function (socket) {
     const room = rooms.get(socket.data.room);
     if (!room || room.hostId !== socket.id || (room.state !== 'lobby' && room.state !== 'results')) return;
     room.qualiOrder = null;
-    room.qualiAI = null;
+    room.weekendAI = null;
     room.lastResults = null;
-    startSession(room, room.settings.qualiLaps > 0 ? 'quali' : 'race');
+    // the weekend: practice sessions the host picked, qualifying (if any), then the race
+    const st = room.settings;
+    room.stages = ['p1', 'p2', 'p3'].filter(function (k) { return st[k] > 0; });
+    if (st.qualiLaps > 0) room.stages.push('quali');
+    room.stages.push('race');
+    room.stageIdx = 0;
+    startSession(room, room.stages[0]);
+  });
+
+  // the host ends practice or qualifying early for everyone
+  socket.on('endSession', function () {
+    const room = rooms.get(socket.data.room);
+    if (!room || room.hostId !== socket.id || !room.session) return;
+    const S = room.session;
+    if ((S.type === 'practice' || S.type === 'quali') && S.phase !== 'done') {
+      S.finish();
+      S.drainEvents();
+      onSessionEnd(room);
+    }
   });
 
   socket.on('backToLobby', function () {

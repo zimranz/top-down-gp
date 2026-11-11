@@ -14,13 +14,28 @@
       if (e.p) msgs.add('SESSION COMPLETE', { sub: 'Results coming up', color: '#19c94a', key: 'qd', dur: 6000 });
       else msgs.add('QUALIFYING COMPLETE', { sub: 'Keep driving — waiting for the others', color: '#19c94a', key: 'qd', dur: 6000 });
     }
+    else if (e.k === 'tl') {
+      // corner cutting: a warning sign for you, penalties for everyone in the race
+      if (e.id === myId) {
+        if (e.pen) msgs.add('5 SECOND PENALTY', { sub: e.lap ? 'Track limits: 5 seconds added to this lap' : 'Track limits: added to your race time', sign: 'pen', key: 'tl', dur: 5500 });
+        else if (e.n === 0) msgs.add('TRACK LIMITS', { sub: "Don't cut corners", sign: 'warn', key: 'tl', dur: 3500 });
+        else msgs.add('TRACK LIMITS — WARNING ' + e.n + ' OF 3', { sub: e.n < 3 ? 'Stop cutting corners: after 3 warnings each cut is a 5-second penalty' : 'Last warning: the next cut is a 5-second penalty', sign: 'warn', key: 'tl', dur: 5000 });
+      } else if (e.pen && !e.lap) msgs.add('PENALTY  ' + codeOf(e.id), { sub: '5 seconds for track limits', color: '#ffd600', key: 'pen', dur: 3000 });
+    }
+    else if (e.k === 'jump') {
+      if (e.id === myId) msgs.add('JUMP START', { sub: '5-second penalty: wait for the lights to go out', sign: 'pen', big: true, key: 'jump', dur: 6000 });
+      else msgs.add('JUMP START  ' + codeOf(e.id), { sub: '5-second penalty', color: '#ffd600', key: 'pen', dur: 3500 });
+    }
     else if (e.k === 'lap') {
       if (e.id === myId) {
-        // e.record = beat the personal best saved for this track
-        const sub = e.fastest && e.record ? 'FASTEST LAP · NEW PERSONAL BEST' : e.fastest ? 'FASTEST LAP OF THE SESSION'
+        // e.record = beat the personal best saved for this track; e.ttRank = place in your time trial best laps
+        const nth = function (n) { return n + (n === 2 ? 'nd' : n === 3 ? 'rd' : 'th'); };
+        const sub = e.ttRank > 1 ? 'YOUR ' + nth(e.ttRank).toUpperCase() + ' BEST LAP HERE'
+          : e.fastest && e.record ? 'FASTEST LAP · NEW PERSONAL BEST' : e.fastest && !e.ttRank ? 'FASTEST LAP OF THE SESSION'
           : e.record ? 'NEW PERSONAL BEST' : e.pb ? 'SESSION BEST' : null;
         msgs.add('LAP ' + e.n + '   ' + F1.fmtLap(e.t), {
-          sub: sub, subColor: e.fastest ? '#c77dff' : '#19c94a', color: e.fastest ? '#9b30ff' : '#19c94a', key: 'mylap', dur: e.record ? 5000 : 4000
+          sub: e.pen ? 'Includes ' + e.pen + ' s penalty for track limits' + (sub ? ' · ' + sub : '') : sub,
+          subColor: e.pen ? '#ffd600' : e.fastest ? '#c77dff' : '#19c94a', color: e.fastest ? '#9b30ff' : '#19c94a', key: 'mylap', dur: e.record ? 5000 : 4000
         });
       } else if (e.fastest) {
         msgs.add('FASTEST LAP', { sub: codeOf(e.id) + '  ' + F1.fmtLap(e.t), color: '#9b30ff', subColor: '#c77dff', key: 'fl', dur: 3000 });
@@ -51,7 +66,7 @@
         }
       } else info = r.best !== null && r.best !== undefined ? F1.fmtLap(r.best) : 'NO TIME';
       return {
-        pos: i + 1, code: e.driverId, color: F1.teamUiColor(t), info: info,
+        pos: i + 1, code: e.driverId, color: F1.teamUiColor(t), info: info, pen: isRace && r.pen ? r.pen : 0,
         me: Number(id) === o.myId, out: !!r.out, done: isRace ? !!r.fin : !!r.qdone, purple: !isRace && Number(id) === o.fastestId
       };
     });
@@ -62,7 +77,10 @@
       msgs: o.msgs.active(),
       ping: o.ping
     };
-    if (o.phase === 0 && isRace) hud.lights = o.lights;
+    if (o.delta !== null && o.delta !== undefined && isFinite(o.delta)) {
+      hud.delta = { text: (o.delta >= 0 ? '+' : '−') + Math.abs(o.delta).toFixed(3), color: o.delta > 0.0005 ? '#ff5a4f' : '#19c94a' };
+    }
+    if (o.phase === 0 && isRace) { hud.lights = o.lights; hud.lightsNote = 'GO WHEN THE LIGHTS GO OUT'; }
     if (o.phase === 0 && isQuali) {
       const left = Math.ceil(3 - o.time);
       if (left > 0) hud.centre = { text: String(left), size: 90 };

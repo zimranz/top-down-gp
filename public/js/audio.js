@@ -74,7 +74,14 @@
     load: function () {
       const d = window.Settings.data.audio;
       if (d) Object.assign(this.vol, d);
+      this.vol.muted = this.vol.muted === true;
       if (this.vol.style !== 'tv') this.vol.style = 'onboard';
+    },
+    /* Pick up the saved sound settings again (another tab changed them, or the page came back from the browser's cache). */
+    reload: function () {
+      window.Settings.load();
+      this.load();
+      this.applyVolumes(true);
     },
     save: function () {
       window.Settings.data.audio = Object.assign({}, this.vol);
@@ -88,11 +95,14 @@
       if (!AC) return;
       const ac = this.ac = new AC();
       this.master = ac.createGain();
+      this.master.gain.value = this.vol.muted ? 0 : this.vol.master;     // muted from the very first sound
       this.comp = ac.createDynamicsCompressor();
       this.comp.threshold.value = -12; this.comp.ratio.value = 3.5; this.comp.attack.value = 0.004; this.comp.release.value = 0.2;
       this.master.connect(this.comp); this.comp.connect(ac.destination);
-      this.engBus = ac.createGain(); this.engBus.connect(this.master);
-      this.fxBus = ac.createGain(); this.fxBus.connect(this.master);
+      this.engBus = ac.createGain(); this.engBus.gain.value = this.vol.engine; this.engBus.connect(this.master);
+      this.fxBus = ac.createGain(); this.fxBus.gain.value = this.vol.effects; this.fxBus.connect(this.master);
+      // some browsers drop volume changes made while the sound is paused: set them again whenever it starts
+      ac.onstatechange = function () { if (ac.state === 'running') Audio.applyVolumes(true); };
       this.engGate = ac.createGain(); this.engGate.gain.value = 0; this.engGate.connect(this.engBus);   // fades engines in/out
       // 2 s of white noise for the noisy effects
       const len = ac.sampleRate * 2, buf = ac.createBuffer(1, len, ac.sampleRate), ch = buf.getChannelData(0);
@@ -115,12 +125,18 @@
       this.applyVolumes();
     },
 
-    applyVolumes: function () {
+    /* now: set at once (start-up, sound restarting) instead of a quick fade */
+    applyVolumes: function (now) {
       if (!this.ready) return;
-      const t = this.ac.currentTime, v = this.vol;
-      this.master.gain.setTargetAtTime(v.muted ? 0 : v.master, t, 0.05);
-      this.engBus.gain.setTargetAtTime(v.engine, t, 0.05);
-      this.fxBus.gain.setTargetAtTime(v.effects, t, 0.05);
+      const ac = this.ac, t = ac.currentTime, v = this.vol, at = now || ac.state !== 'running';
+      const set = function (param, value) {
+        param.cancelScheduledValues(t);
+        if (at) { param.value = value; param.setValueAtTime(value, t); }
+        else { param.setValueAtTime(param.value, t); param.setTargetAtTime(value, t, 0.03); }
+      };
+      set(this.master.gain, v.muted ? 0 : v.master);
+      set(this.engBus.gain, v.engine);
+      set(this.fxBus.gain, v.effects);
     },
     setVolume: function (key, value) {
       this.vol[key] = value;
@@ -132,8 +148,9 @@
       this.save();
     },
     onboardAvailable: function () { return !!this.v6; },
-    toggleMute: function () {
-      this.vol.muted = !this.vol.muted;
+    toggleMute: function () { return this.setMuted(!this.vol.muted); },
+    setMuted: function (on) {
+      this.vol.muted = !!on;
       this.applyVolumes();
       this.save();
       return this.vol.muted;
@@ -182,7 +199,7 @@
       const st = this.st, t = this.ac.currentTime;
       const L = s.listener;
       // start lights: a beep for each light; qualifying countdown 3-2-1
-      if (s.lights > st.lights) this.beep(560, 0.18, 0.32, 'square', 2200);
+      if (s.lights > st.lights) this.lightOn(s.lights);
       st.lights = s.lights || 0;
       if (s.countdown && s.countdown !== st.cd) this.countdown();
       st.cd = s.countdown || 0;
@@ -333,7 +350,20 @@
       this.noiseHit('bandpass', 1800 + Math.random() * 1200, 0.8, 0.8 * k, 0.12 + 0.12 * k);
       if (k > 0.45) this.noiseHit('highpass', 5000, 0.7, 0.35 * k, 0.25, 0.02);   // bits of carbon
     },
-    lightsOut: function () { this.beep(1046, 0.14, 0.3, 'square', 3500); },
+    /* Start lights: a firm tone as each red light comes on (a little higher each time), a bright one at lights out. */
+    lightOn: function (n) {
+      const f = 494 * Math.pow(1.06, (n || 1) - 1);
+      this.beep(f, 0.24, 0.34, 'square', 1700);
+      this.beep(f * 2, 0.16, 0.12, 'sine');
+    },
+    lightsOut: function () {
+      this.beep(1175, 0.12, 0.3, 'square', 4200);
+      this.beep(1568, 0.22, 0.24, 'sine', 0, 0.05);
+    },
+    /* The other cars on the grid hold their revs while the lights come on (a different rhythm for each car). */
+    gridRev: function (id, t) { return 0.36 + 0.24 * (0.5 + 0.5 * Math.sin(t * (2.1 + (id % 5) * 0.41) + id * 1.7)); },
+    warnBeep: function () { this.beep(880, 0.09, 0.3, 'square', 3000); this.beep(880, 0.09, 0.3, 'square', 3000, 0.14); },
+    penaltyBuzz: function () { this.beep(196, 0.32, 0.36, 'sawtooth', 900); this.beep(147, 0.42, 0.34, 'sawtooth', 900, 0.3); },
     go: function () { this.beep(880, 0.25, 0.3, 'square', 3000); },
     countdown: function () { this.beep(560, 0.16, 0.3, 'square', 2200); },
     chime: function (notes, vol, spacing) {
@@ -358,7 +388,9 @@
       else if (e.k === 'lap') {
         if (e.id === myId && e.record) this.personalBest();
         if (e.fastest) this.fastestLap(e.id === myId);
-      } else if (e.k === 'finish' && e.id === myId) this.chequered();
+      } else if (e.k === 'tl' && e.id === myId) { if (e.pen) this.penaltyBuzz(); else this.warnBeep(); }
+      else if (e.k === 'jump' && e.id === myId) this.penaltyBuzz();
+      else if (e.k === 'finish' && e.id === myId) this.chequered();
       else if (e.k === 'chequered' && myId === null) this.chequered();
     }
   };

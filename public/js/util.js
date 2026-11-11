@@ -94,7 +94,7 @@
     opts = opts || {};
     const now = performance.now();
     if (opts.key) this.list = this.list.filter(function (m) { return m.key !== opts.key; });
-    this.list.push({ text: text, sub: opts.sub, color: opts.color, subColor: opts.subColor, big: opts.big, key: opts.key, until: now + (opts.dur || 3000), start: now });
+    this.list.push({ text: text, sub: opts.sub, color: opts.color, subColor: opts.subColor, big: opts.big, sign: opts.sign, key: opts.key, until: now + (opts.dur || 3000), start: now });
     if (this.list.length > 3) this.list.shift();
   };
   Messages.prototype.active = function () {
@@ -102,7 +102,7 @@
     this.list = this.list.filter(function (m) { return m.until > now; });
     return this.list.map(function (m) {
       const left = m.until - now;
-      return { text: m.text, sub: m.sub, color: m.color, subColor: m.subColor, big: m.big, alpha: Math.min(1, left / 400) };
+      return { text: m.text, sub: m.sub, color: m.color, subColor: m.subColor, big: m.big, sign: m.sign, alpha: Math.min(1, left / 400) };
     });
   };
 

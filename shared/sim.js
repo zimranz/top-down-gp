@@ -25,7 +25,8 @@
     { grip: 0.94, traction: 0.96, roll: 0.25, drag2: 0 },     // kerb
     { grip: 0.62, traction: 0.62, roll: 2.6, drag2: 0.0048 }, // grass
     { grip: 0.48, traction: 0.46, roll: 2.4, drag2: 0.007 },  // gravel
-    { grip: 1.0, traction: 1.0, roll: 0, drag2: 0 }           // pit lane (80 km/h limiter)
+    { grip: 1.0, traction: 1.0, roll: 0, drag2: 0 },          // pit lane (80 km/h limiter)
+    { grip: 0.8, traction: 0.82, roll: 0.7, drag2: 0.0012 }    // paved run-off on street circuits (dusty, less grip)
   ];
   const PIT_LIMIT = (F1.PIT_LIMIT = 80 / 3.6);
   const POINTS = (F1.POINTS = [25, 18, 15, 12, 10, 8, 6, 4, 2, 1]);
@@ -357,9 +358,9 @@
   // divebomb = chance that an overtake into a corner is braked for too late
   // gap      = following distance in seconds when stuck behind someone
   const AI_LEVELS = (F1.AI_LEVELS = {
-    easy: { lat: 0.8, brake: 0.72, pace: 0.965, mistake: 0.34, divebomb: 0.05, gap: 0.2 },
-    medium: { lat: 0.88, brake: 0.84, pace: 0.985, mistake: 0.18, divebomb: 0.025, gap: 0.16 },
-    hard: { lat: 0.95, brake: 0.93, pace: 1.0, mistake: 0.1, divebomb: 0.015, gap: 0.13 }
+    easy: { lat: 0.8, brake: 0.72, pace: 0.965, mistake: 0.34, divebomb: 0.05, gap: 0.2, react: [0.2, 0.55] },
+    medium: { lat: 0.88, brake: 0.84, pace: 0.985, mistake: 0.18, divebomb: 0.025, gap: 0.16, react: [0.15, 0.4] },
+    hard: { lat: 0.95, brake: 0.93, pace: 1.0, mistake: 0.1, divebomb: 0.015, gap: 0.13, react: [0.1, 0.28] }
   });
   const LIMIT = { lat: 1, brake: 1 };   // what the car can really do (used when an AI overdoes it)
   const MK_MIX = [0.3, 0.55, 0.78];     // share of lock-ups / running wide / snaps (the rest: kerb strikes)
@@ -441,6 +442,7 @@
       if (o === c || o.out) continue;
       const dS = wrapD(o.s - c.s, L);
       if (dS < 4 || dS > 30.4) continue;
+      if (o.vx * o.vx + o.vy * o.vy < 9) continue;       // a stopped car leaves no wake
       const dD = o.d - c.d;
       if (dD > 2.2 || dD < -2.2) continue;
       const g = 1 - DIRTY * Math.min(1, (30.4 - dS) / 25);
@@ -483,7 +485,8 @@
       bias: 0, stuck: 0, backward: 0, wait: 0,
       latT: c.d, gridLane: c.d, along: {}, pass: null, mk: null, lastMk: -99, dispT: -99,
       pace: lvl.pace * (1 - rng() * 0.012),
-      react: 0.12 + rng() * 0.25
+      // reaction to lights out: quicker on harder levels, and now and then a slow getaway
+      react: lvl.react[0] + rng() * (lvl.react[1] - lvl.react[0]) + (rng() < 0.08 ? 0.2 + rng() * 0.35 : 0)
     };
   };
 
@@ -547,8 +550,20 @@
           continue;
         }
         if (dS <= 0) continue;
-        // ahead: will we run into it on our current line?
         const gap = dS - CAR.length;
+        // a car stopped beside the track: keep a car's width away from it instead of braking for it
+        // (unless we would reach it before we could move out of the way)
+        const oExt = halfWidthOnTrack(o, T);
+        if (o.vx * o.vx + o.vy * o.vy < 9 && Math.abs(o.d) > T.hw + 0.35) {
+          if (dS >= 90) continue;                     // far away: deal with it when we get closer
+          const keep = myExt + oExt + 0.9, touch = myExt + oExt + 0.2, dAway = Math.abs(dD);
+          const tReach = gap > 0 ? gap / Math.max(0.5, cv) : 0;
+          if (dAway >= touch || tReach >= (touch - dAway) / 3 + 0.25) {
+            if (o.d > 0) { const lim = o.d - keep; if (lim < hi) hi = lim; } else { const lim = o.d + keep; if (lim > lo) lo = lim; }
+            continue;
+          }
+        }
+        // ahead: will we run into it on our current line?
         const dNow = Math.abs(dD), dTgt = Math.abs(o.d - ai.latT);
         let inPath = dTgt < 2.4;
         if (!inPath && dNow < 2.4) {
@@ -735,6 +750,43 @@
   };
 
   // ---------------------------------------------------------------- session
+  /* ---- Track limits.
+     A car is off the track when all four wheels are past the kerb (or past the edge where there is no kerb).
+     It has cut a corner when it comes back on further round having driven a shorter way than the track allows:
+     running wide, spinning or using the pit roads never counts. */
+  const TL_WHEELS = 0.8;                       // wheels sit 0.8 m either side of the car's centre
+  function tlEdge(T, i) { return T.hw + (T.kerb[i] ? T.kerbW : 0) + TL_WHEELS; }
+  // length of the track-limit line on one side between two points along the track
+  function tlLegal(T, s0, s1, side) {
+    const L = T.length, ds = T.ds, span = F1.wrapS(s1 - s0, L);
+    const a = F1.trackPoint(T, s0, side * tlEdge(T, F1.idxAt(T, s0)));
+    let len = 0, px = a.x, py = a.y;
+    let i = (Math.floor(F1.wrapS(s0, L) / ds) + 1) % T.n;
+    for (let k = 0; k < span / ds - 1 && k < T.n; k++, i = (i + 1) % T.n) {
+      const off = side * tlEdge(T, i), x = T.x[i] + T.nx[i] * off, y = T.y[i] + T.ny[i] * off;
+      len += Math.hypot(x - px, y - py); px = x; py = y;
+    }
+    const b = F1.trackPoint(T, s1, side * tlEdge(T, F1.idxAt(T, s1)));
+    return len + Math.hypot(b.x - px, b.y - py);
+  }
+  F1.tlLegal = tlLegal;
+  // the quickest a hard AI could get between two points on the racing line (no time lost accelerating)
+  function tlRefTime(T, s0, s1) {
+    if (!T._tlCum) {
+      const prof = F1.speedProfile(T, 'hard'), N = T.n, cum = new Float64Array(N + 1);
+      for (let i = 0; i < N; i++) {
+        const j = (i + 1) % N;
+        cum[i + 1] = cum[i] + Math.hypot(T.rlX[j] - T.rlX[i], T.rlY[j] - T.rlY[i]) / Math.max(5, 0.5 * (prof[i] + prof[j]));
+      }
+      T._tlCum = cum;
+    }
+    const cum = T._tlCum, N = T.n;
+    const at = function (s) { const f = F1.wrapS(s, T.length) / T.ds, i = Math.floor(f) % N; return cum[i] + (cum[i + 1] - cum[i]) * (f - Math.floor(f)); };
+    let t = at(s1) - at(s0);
+    if (t < 0) t += cum[N];
+    return t;
+  }
+
   function passed(ps, ns, x, L) {
     let d = ns - ps;
     if (d < -L / 2) d += L; else if (d > L / 2) d -= L;
@@ -790,6 +842,8 @@
       c.finished = false; c.finishTime = null; c.finishPos = 0;
       c.raceDist = c.s - T.length; c.loopIdx = -1; c.gap = 0; c.pos = k + 1;
       c.qualiDone = false;
+      c.tlOff = false; c.tlWarn = 0; c.penalty = 0; c.lapPen = 0; c.jumped = false;
+      c.grid = k + 1; c.overtakes = 0; c.troubleT = -99;
       c.drsElig = T.drs.map(function () { return opts.type !== 'race'; });
       c.input = F1.NEUTRAL;
       c.prevS = c.s;
@@ -798,6 +852,7 @@
       self.byId[c.id] = c;
     });
     if (opts.startMode === 'pit' && T.pit) this.placeForPitStart();
+    else if (opts.startMode === 'flying') this.placeFlying();
     this.updateOrder();
   }
 
@@ -810,6 +865,7 @@
       const d = F1.driver(driverId);
       return F1.TEAMS.findIndex(function (t) { return t.id === d.team; });
     };
+    const inBox = {};
     for (let i = 0; i < this.cars.length; i++) {
       const c = this.cars[i];
       if (c.isAI) {
@@ -820,7 +876,9 @@
         c.x = T.rlX[idx]; c.y = T.rlY[idx]; c.a = T.hd[idx];
         c.vx = Math.cos(c.a) * v; c.vy = Math.sin(c.a) * v;
       } else {
-        const p = F1.pitSpot(T, teamIdx(c.driverId));
+        const ti = teamIdx(c.driverId);
+        const p = F1.pitSpot(T, ti, !!inBox[ti]);
+        inBox[ti] = true;
         c.x = p.x; c.y = p.y; c.a = p.h; c.vx = 0; c.vy = 0;
       }
       c.px = c.x; c.py = c.y; c.pa = c.a;
@@ -828,6 +886,20 @@
       c.seg = Q.idx; c.s = Q.s; c.d = Q.d; c.dist = Q.dist; c.prevS = c.s;
       c.raceDist = c.s;
       if (c.ai) { c.ai.latT = c.d; c.ai.bias = c.d - T.rlOff[c.seg]; }
+    }
+  };
+
+  /* Time trial: a flying start, already at speed 320 m before the line, so the first lap is timed. */
+  Session.prototype.placeFlying = function () {
+    const T = this.track, L = T.length, prof = F1.speedProfile(T, 'hard');
+    const idx = F1.idxAt(T, F1.wrapS(L - 320, L));
+    for (let i = 0; i < this.cars.length; i++) {
+      const c = this.cars[i], v = prof[idx] * 0.85;
+      c.x = T.rlX[idx]; c.y = T.rlY[idx]; c.a = T.hd[idx];
+      c.vx = Math.cos(c.a) * v; c.vy = Math.sin(c.a) * v;
+      c.px = c.x; c.py = c.y; c.pa = c.a;
+      F1.queryTrack(T, c.x, c.y, -1, Q);
+      c.seg = Q.idx; c.s = Q.s; c.d = Q.d; c.dist = Q.dist; c.prevS = c.s;
     }
   };
 
@@ -845,6 +917,7 @@
       c.locked = this.phase === 'countdown';
       if (c.isAI) c.input = F1.aiDrive(c, this);
       else if (inputs && inputs[c.id]) c.input = inputs[c.id];
+      if (c.locked && this.type === 'race' && !c.isAI) this.checkJumpStart(c);
       const z = T.drsZone[F1.idxAt(T, c.s)];
       c.drsAllowed = z >= 0 && c.drsElig[z] && this.phase !== 'countdown';
     }
@@ -862,6 +935,17 @@
     }
     this.updateOrder();
     this.checkEnd();
+  };
+
+  /* Throttle while the red lights are on = jump start: the car creeps forward, the brakes hold it again,
+     and 5 seconds are added to the race time. */
+  Session.prototype.checkJumpStart = function (c) {
+    if (!c.jumped) {
+      if (this.lights < 1 || !c.input || !(c.input.throttle > 0.3)) return;
+      c.jumped = true; c.penalty += 5; c.jumpX = c.x; c.jumpY = c.y;
+      this.events.push({ k: 'jump', id: c.id });
+    }
+    if (Math.hypot(c.x - c.jumpX, c.y - c.jumpY) < 1.5) c.locked = false;
   };
 
   Session.prototype.resolveContacts = function () {
@@ -916,6 +1000,12 @@
     }
     for (let z = 0; z < T.drs.length; z++) if (passed(ps, ns, T.drs[z].detect, L)) this.onDetection(c, z);
     c.raceDist = (c.lineCount - 1) * L + c.s;
+    this.trackLimits(c, dt);
+    // in trouble: off the track, pointing the wrong way or far slower than normal there (passing it is no overtake)
+    if (this.type === 'race') {
+      const prof = F1.speedProfile(T, 'medium');
+      if (c.dist > T.hw + 0.5 || Math.abs(F1.wrapAngle(c.a - T.hd[c.seg])) > 0.6 || Math.hypot(c.vx, c.vy) < 0.55 * prof[c.seg]) c.troubleT = this.time;
+    }
     if (this.type === 'race' && this.phase !== 'countdown' && c.raceDist >= 0 && !c.finished) {
       const li = Math.floor(c.raceDist / 50);
       if (li > c.loopIdx) {
@@ -924,6 +1014,43 @@
         if (f === undefined) { this.loopFirst[li] = this.time; c.gap = 0; } else c.gap = this.time - f;
       }
     }
+  };
+
+  Session.prototype.trackLimits = function (c, dt) {
+    const T = this.track;
+    if (this.phase === 'countdown' || this.phase === 'done' || c.finished || c.qualiDone) { c.tlOff = false; return; }
+    const side = c.d > 0 ? 1 : -1;
+    if (c.dist > tlEdge(T, c.seg)) {
+      if (!c.tlOff) { c.tlOff = true; c.tlSide = side; c.tlS = c.s; c.tlDist = c.raceDist; c.tlT0 = this.time; c.tlPath = 0; c.tlBad = false; }
+      c.tlPath += Math.hypot(c.vx, c.vy) * dt;
+      // the pit entry and exit roads, a spin or a reset are not corner cutting
+      if ((T.pit && side === T.pit.side && T.pitOff[c.seg] === T.pitOff[c.seg]) || c.inPit || side !== c.tlSide ||
+          Math.abs(F1.wrapAngle(c.a - T.hd[c.seg])) > 1.2 || this.time - c.tlT0 > 40) c.tlBad = true;
+      return;
+    }
+    if (!c.tlOff) return;
+    c.tlOff = false;
+    const prog = c.raceDist - c.tlDist;
+    if (c.tlBad || c.resetCd > 2 || prog < 12) return;
+    // a cut: a clearly shorter way than the track allows, or quicker than is possible on the track
+    const legal = tlLegal(T, c.tlS, c.s, c.tlSide);
+    const shorter = c.tlPath < legal - (2 + 0.04 * legal);
+    const quicker = prog >= 30 && this.time - c.tlT0 < tlRefTime(T, c.tlS, c.s);
+    if (shorter || quicker) this.cutCorner(c);
+  };
+
+  /* Practice and time trial: a warning only. Race and qualifying: 3 warnings, then 5 seconds for every cut
+     (added to the race time, or in qualifying to the lap you are on). */
+  Session.prototype.cutCorner = function (c) {
+    const e = { k: 'tl', id: c.id, n: 0 };
+    if (this.type !== 'practice') {
+      e.n = ++c.tlWarn;
+      if (c.tlWarn > 3) {
+        if (this.type === 'race') { c.penalty += 5; e.pen = 5; }
+        else if (c.lapStart !== null) { c.lapPen += 5; e.pen = 5; e.lap = true; }
+      }
+    }
+    this.events.push(e);
   };
 
   Session.prototype.onLine = function (c, t) {
@@ -940,9 +1067,9 @@
       return;
     }
     if (this.phase !== 'running' || c.qualiDone) return;
-    if (c.inPit) { c.lapStart = null; return; }
+    if (c.inPit) { c.lapStart = null; c.lapPen = 0; return; }
     if (c.lapStart !== null) {
-      this.recordLap(c, t - c.lapStart);
+      this.recordLap(c, t - c.lapStart + c.lapPen, c.lapPen);
       c.lapsDone++;
       if ((this.type === 'quali' || this.laps > 0) && c.lapsDone >= this.laps) {
         c.qualiDone = true;
@@ -953,16 +1080,19 @@
       }
     }
     c.lapStart = t;
+    c.lapPen = 0;
   };
 
-  Session.prototype.recordLap = function (c, lt) {
+  Session.prototype.recordLap = function (c, lt, pen) {
     c.lastLap = lt;
     c.laps.push(lt);
     const pb = c.bestLap === null || lt < c.bestLap;
     if (pb) c.bestLap = lt;
     const fastest = this.fastest === null || lt < this.fastest.time;
     if (fastest) this.fastest = { id: c.id, time: lt };
-    this.events.push({ k: 'lap', id: c.id, t: lt, pb: pb, fastest: fastest, n: c.laps.length });
+    const e = { k: 'lap', id: c.id, t: lt, pb: pb, fastest: fastest, n: c.laps.length };
+    if (pen) e.pen = pen;
+    this.events.push(e);
   };
 
   Session.prototype.finishCar = function (c, t) {
@@ -996,14 +1126,44 @@
       });
     } else {
       arr.sort(function (a, b) {
-        if (a.out !== b.out) return a.out ? 1 : -1;
+        const da = a.out && !a.parked, db = b.out && !b.parked;
+        if (da !== db) return da ? 1 : -1;
         const ab = a.bestLap === null ? Infinity : a.bestLap, bb = b.bestLap === null ? Infinity : b.bestLap;
         if (ab !== bb) return ab - bb;
+        if (!!a.parked !== !!b.parked) return a.parked ? 1 : -1;     // gave up without a time: behind the others without one
         return a.slot - b.slot;
       });
     }
     for (let i = 0; i < arr.length; i++) arr[i].pos = i + 1;
     this.order = arr.map(function (c) { return c.id; });
+    if (this.type === 'race') this.trackPasses();
+  };
+
+  /* Overtakes: a car has passed another once it is 8 m clear of it, having been 8 m behind (so two cars
+     side by side don't count again and again). Lapping, passing a stopped or very slow car, or a car in
+     the pit lane does not count. */
+  Session.prototype.trackPasses = function () {
+    if (this.phase !== 'running' && this.phase !== 'finishing') return;
+    const cars = this.cars, n = cars.length;
+    let st = this.passSt;
+    if (!st) {
+      st = this.passSt = new Int8Array(n * n);
+      for (let i = 0; i < n; i++) for (let j = i + 1; j < n; j++) st[i * n + j] = cars[i].raceDist >= cars[j].raceDist ? 1 : -1;
+      return;
+    }
+    for (let i = 0; i < n; i++) {
+      const A = cars[i];
+      for (let j = i + 1; j < n; j++) {
+        const B = cars[j], d = A.raceDist - B.raceDist, k = i * n + j;
+        if (d > 8) { if (st[k] === -1) this.countPass(A, B); st[k] = 1; }
+        else if (d < -8) { if (st[k] === 1) this.countPass(B, A); st[k] = -1; }
+      }
+    }
+  };
+  Session.prototype.countPass = function (A, B) {
+    if (A.out || B.out || A.finished || B.finished || A.inPit || B.inPit) return;
+    if (this.time - B.troubleT < 3) return;          // it had just gone off, spun or slowed right down
+    A.overtakes++;
   };
 
   Session.prototype.checkEnd = function () {
@@ -1015,7 +1175,7 @@
       if (this.phase === 'running') {
         if (this.type === 'quali' && active.every(function (c) { return c.qualiDone; })) end = true;
         // practice ends as soon as you have done your laps; qualifying waits up to 20 s for the AI
-        if (this.humansDoneAt !== null && this.time - this.humansDoneAt > (this.type === 'practice' ? 2.5 : 20)) end = true;
+        if (this.humansDoneAt !== null && !this.waitForAll && this.time - this.humansDoneAt > (this.type === 'practice' ? 2.5 : 20)) end = true;
       }
     } else if (this.leaderFinishTime !== null) {
       if (active.every(function (c) { return c.finished; })) end = true;
@@ -1036,33 +1196,77 @@
 
   Session.prototype.buildResults = function () {
     const self = this;
-    const order = this.order.map(function (id) { return self.byId[id]; });
+    let order = this.order.map(function (id) { return self.byId[id]; });
     if (this.type === 'race') {
+      // time penalties: cars that finished on the same lap are ordered by their time plus penalties
+      const fin = order.filter(function (c) { return c.finished && !c.out; });
+      fin.sort(function (a, b) { return (b.lapsDone - a.lapsDone) || ((a.finishTime + a.penalty) - (b.finishTime + b.penalty)); });
+      order = fin.concat(order.filter(function (c) { return !(c.finished && !c.out); }));
+      this.order = order.map(function (c) { return c.id; });
+      order.forEach(function (c, i) { c.pos = i + 1; });
       const w = order[0];
-      return order.map(function (c, i) {
+      const fl = this.fastest ? this.byId[this.fastest.id] : null;
+      const rows = order.map(function (c, i) {
         let gap;
         if (c.out) gap = 'DNF';
-        else if (i === 0) gap = w.finished ? F1.fmtLap(w.finishTime - self.startTime) : 'LEADER';
-        else if (c.finished && c.lapsDone >= w.lapsDone) gap = '+' + (c.finishTime - w.finishTime).toFixed(3) + 's';
+        else if (i === 0) gap = w.finished ? F1.fmtLap(w.finishTime - self.startTime + w.penalty) : 'LEADER';
+        else if (c.finished && c.lapsDone >= w.lapsDone) gap = '+' + ((c.finishTime + c.penalty) - (w.finishTime + w.penalty)).toFixed(3) + 's';
         else {
           // not yet across the line: still on the lead lap -> time gap from the timing loops
           const behind = (w.lapsDone || self.laps) - c.lapsDone - (c.finished ? 0 : 1);
-          if (behind <= 0) gap = '+' + c.gap.toFixed(3) + 's';
+          if (behind <= 0) gap = '+' + (c.gap + c.penalty).toFixed(3) + 's';
           else gap = '+' + behind + (behind === 1 ? ' LAP' : ' LAPS');
         }
-        const pts = c.out ? 0 : POINTS[i] || 0;
-        return { pos: i + 1, id: c.id, driverId: c.driverId, isAI: c.isAI, name: c.name, laps: c.lapsDone, best: c.bestLap, gap: gap, out: c.out, pts: pts };
+        // F1 points, +1 for the fastest lap if that driver finishes in the top 10
+        const isFl = c === fl, flPt = isFl && !c.out && i < 10;
+        const pts = c.out ? 0 : (POINTS[i] || 0) + (flPt ? 1 : 0);
+        return { pos: i + 1, id: c.id, driverId: c.driverId, isAI: c.isAI, name: c.name, laps: c.lapsDone, best: c.bestLap, gap: gap, out: c.out, pts: pts,
+          grid: c.grid, gained: c.out ? 0 : c.grid - (i + 1), ovt: c.overtakes, pen: c.penalty, fl: isFl, flPt: flPt };
       });
+      this.stats = this.raceStats(rows);
+      return rows;
     }
     const pole = order.length && order[0].bestLap !== null ? order[0].bestLap : null;
     return order.map(function (c, i) {
       let gap = '';
-      if (c.out) gap = 'DNF';
+      const dnf = c.out && !c.parked;
+      if (dnf) gap = 'DNF';
       else if (c.bestLap === null) gap = 'NO TIME';
       else if (i === 0) gap = F1.fmtLap(c.bestLap);
       else gap = '+' + (c.bestLap - pole).toFixed(3) + 's';
-      return { pos: i + 1, id: c.id, driverId: c.driverId, isAI: c.isAI, name: c.name, laps: c.lapsDone, best: c.bestLap, gap: gap, out: c.out };
+      return { pos: i + 1, id: c.id, driverId: c.driverId, isAI: c.isAI, name: c.name, laps: c.lapsDone, best: c.bestLap, gap: gap, out: dnf, tl: c.tlWarn };
     });
+  };
+
+  /* After the race: fastest lap, most overtakes, biggest climber and the Driver of the day
+     (places gained, overtakes, a strong result and the fastest lap; penalties count against you). */
+  Session.prototype.raceStats = function (rows) {
+    const ok = rows.filter(function (r) { return !r.out; });
+    const fl = rows.find(function (r) { return r.fl; });
+    let most = null, climb = null, dotd = null, best = -Infinity;
+    ok.forEach(function (r) {
+      if (r.ovt > 0 && (!most || r.ovt > most.ovt)) most = r;
+      if (r.gained > 0 && (!climb || r.gained > climb.gained)) climb = r;
+      const score = 2 * r.gained + 1.5 * r.ovt + (r.pos === 1 ? 3 : r.pos <= 3 ? 2 : 0) + (r.fl ? 2 : 0) - r.pen / 2.5;
+      if (score > best) { best = score; dotd = r; }
+    });
+    return {
+      fastest: fl && this.fastest ? { id: fl.id, driverId: fl.driverId, time: this.fastest.time, point: fl.flPt } : null,
+      mostOvertakes: most ? { id: most.id, driverId: most.driverId, n: most.ovt } : null,
+      climber: climb ? { id: climb.id, driverId: climb.driverId, n: climb.gained, from: climb.grid, to: climb.pos } : null,
+      dotd: dotd ? { id: dotd.id, driverId: dotd.driverId, grid: dotd.grid, pos: dotd.pos, ovt: dotd.ovt, fl: dotd.fl } : null
+    };
+  };
+
+  /* Ending your practice or qualifying early: your car goes back to the garage and your best lap stands;
+     the session then runs until everyone else has finished their laps. */
+  Session.prototype.park = function (id) {
+    const c = this.byId[id];
+    if (!c || c.out) return;
+    c.parked = true; c.out = true; c.qualiDone = true;
+    c.vx = 0; c.vy = 0; c.w = 0; c.lapStart = null;
+    this.waitForAll = true;
+    this.updateOrder();
   };
 
   Session.prototype.retire = function (id) {
