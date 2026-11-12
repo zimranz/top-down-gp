@@ -95,7 +95,9 @@
       const sp = Math.hypot(own.vx, own.vy) * 3.6;
       const vf = own.vx * Math.cos(own.a) + own.vy * Math.sin(own.a);
       const pos = order.indexOf(o.myId) + 1;
-      hud.speed = Math.round(sp);
+      const mph = window.Settings && window.Settings.data.units === 'mph';
+      hud.speed = Math.round(mph ? sp / 1.609344 : sp);
+      hud.unit = mph ? 'MPH' : 'KM/H';
       hud.gear = window.gearFor(sp, vf);
       hud.drs = own.drsOpen ? 'open' : own.drsAllowed ? 'avail' : 'off';
       hud.pit = !!own.inPit;

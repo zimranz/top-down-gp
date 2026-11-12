@@ -37,6 +37,33 @@
   champOpts.calendar = (champOpts.calendar || []).filter(function (id) { return F1.TRACK_DEFS[id]; });
   const STAGE_NAME = { p1: 'Practice 1', p2: 'Practice 2', p3: 'Practice 3', quali: 'Qualifying', race: 'Race' };
   let resultsCtx = 'online';   // which buttons the results screen shows
+  let standingsCtx = 'local';  // standings screen: 'local' (your championship) or 'online' (the room's season)
+  let season = null;           // online championship of the room you are in (from the server)
+
+  /* This browser's private id: an online season knows you by it when you come back. */
+  function myToken() {
+    let t = null;
+    try { t = window.localStorage.getItem('topdowngp.pid'); } catch (e) { /* ignore */ }
+    if (!t || t.length < 8) {
+      t = '';
+      const c = 'abcdefghijkmnopqrstuvwxyzABCDEFGHJKLMNPQRSTUVWXYZ23456789';
+      for (let i = 0; i < 20; i++) t += c[Math.floor(Math.random() * c.length)];
+      try { window.localStorage.setItem('topdowngp.pid', t); } catch (e) { /* ignore */ }
+    }
+    return t;
+  }
+  /* The online season you host, kept in this browser so it can carry on another day:
+     { code, key, season, at }. Removed when the season ends. */
+  const OnlineSeason = {
+    load: function () {
+      try {
+        const o = JSON.parse(window.localStorage.getItem('topdowngp.onlineSeason') || 'null');
+        return o && o.code && o.key && o.season && Array.isArray(o.season.calendar) && !o.season.done ? o : null;
+      } catch (e) { return null; }
+    },
+    save: function (o) { try { window.localStorage.setItem('topdowngp.onlineSeason', JSON.stringify(o)); } catch (e) { /* ignore */ } },
+    clear: function () { try { window.localStorage.removeItem('topdowngp.onlineSeason'); } catch (e) { /* ignore */ } }
+  };
 
   // ------------------------------------------------------------- helpers
   function show(id) {
@@ -53,7 +80,28 @@
     const home = $('home').classList.contains('active') && !$('overlay').classList.contains('hidden');
     $('soundbtn').classList.toggle('hidden', !inGame && !home);
     $('soundbtn').classList.toggle('ingame', !!inGame);
+    $('fsbtn').classList.toggle('hidden', !fsSupported || (!inGame && !home));
+    $('fsbtn').classList.toggle('ingame', !!inGame);
   }
+  /* Full screen (button or F): the game fills the whole screen, without the browser's bars. */
+  const fsSupported = !!(document.documentElement.requestFullscreen || document.documentElement.webkitRequestFullscreen);
+  function fsElement() { return document.fullscreenElement || document.webkitFullscreenElement || null; }
+  function toggleFullscreen() {
+    const de = document.documentElement;
+    const fail = function () { toast('Full screen is not available here'); };
+    try {
+      const p = fsElement() ? (document.exitFullscreen || document.webkitExitFullscreen).call(document) : (de.requestFullscreen || de.webkitRequestFullscreen).call(de);
+      if (p && p.catch) p.catch(fail);
+    } catch (e) { fail(); }
+  }
+  function syncFsUI() {
+    const on = !!fsElement();
+    $('fsbtn').classList.toggle('on', on);
+    $('fsbtn').querySelector('.lbl').textContent = on ? 'Exit full screen' : 'Full screen (F)';
+    $('fsbtn').querySelector('button').setAttribute('aria-label', on ? 'Exit full screen (F)' : 'Full screen (F)');
+  }
+  document.addEventListener('fullscreenchange', syncFsUI);
+  document.addEventListener('webkitfullscreenchange', syncFsUI);
   /* Show the real sound state everywhere it appears. */
   function syncSoundUI() {
     const muted = !!GameAudio.vol.muted;
@@ -89,9 +137,23 @@
     game = new window.LocalGame({ attract: true, type: 'practice', track: ids[Math.floor(Math.random() * ids.length)], aiCount: 12, aiLevel: 'hard', collisions: true });
     R.resetEffects();
   }
+  /* The Rejoin season button (home screen) and the season box (online screen), when you host a season. */
+  function updateSeasonButtons() {
+    const sv = OnlineSeason.load();
+    $('home-rejoin').classList.toggle('hidden', !sv);
+    $('online-season').classList.toggle('hidden', !sv);
+    if (!sv) return;
+    const n = sv.season.rounds.length, of = sv.season.calendar.length, next = F1.TRACK_DEFS[sv.season.calendar[n]];
+    $('home-rejoin-sub').textContent = 'Round ' + (n + 1) + ' of ' + of + (next ? ' · ' + next.name : '') + ' · room ' + sv.code;
+    $('os-sub').textContent = (n ? n + ' of ' + of + ' races done' : 'Not started yet') + (next ? ' · next: ' + next.name : '') + ' · room ' + sv.code;
+  }
   function goHome() {
     $('busy').classList.add('hidden');
     $('confirm').classList.add('hidden');
+    $('hostaway').classList.add('hidden');
+    confirmAction = null;
+    season = null;
+    updateSeasonButtons();
     mode = 'menu';
     gp = null;
     clearInterval(resultsTimer);
@@ -434,73 +496,181 @@
       .sort(function (a, b) { return b.pts - a.pts || F1.TEAMS.findIndex(function (t) { return t.id === a.id; }) - F1.TEAMS.findIndex(function (t) { return t.id === b.id; }); });
     return { drivers: rows, teams: teamRows };
   }
-  function showStandings(c) {
-    const st = standings(c), myId = c.opts.driverId;
-    const done = c.done, n = c.rounds.length;
-    $('st-title').textContent = done ? 'Final standings' : n ? 'Standings after round ' + n + ' of ' + c.calendar.length : 'Standings';
+  /* Standings screen (your championship or an online season):
+     o = { title, banner: { text, small } | null, calendar, drivers: [{ me, name, sub, color, cells: [{ text, cls, title }], pts }],
+           teams: [{ me, name, color, pts }], note, next, newb, menu, car: { options, value } | null } */
+  const CODES = { suzuka: 'JPN', jeddah: 'KSA', montreal: 'CAN', monaco: 'MON', redbullring: 'AUT', silverstone: 'GBR', spa: 'BEL', monza: 'ITA', baku: 'AZE', interlagos: 'BRA', abudhabi: 'UAE' };
+  function renderStandings(o) {
+    $('st-title').textContent = o.title;
     const banner = $('st-banner');
-    banner.classList.toggle('hidden', !done);
-    if (done) {
-      const w = st.drivers[0], t = F1.teamOfDriver(w.id);
+    banner.classList.toggle('hidden', !o.banner);
+    if (o.banner) {
       banner.innerHTML = '';
-      banner.append(document.createTextNode(w.id === myId ? '🏆 You are the World Champion!' : '🏆 ' + F1.driver(w.id).name + ' is the World Champion'));
-      banner.appendChild(el('small', null, t.name + ' · ' + w.pts + ' points · Constructors\' champions: ' + F1.team(st.teams[0].id).name));
+      banner.append(document.createTextNode(o.banner.text));
+      banner.appendChild(el('small', null, o.banner.small));
     }
     // drivers: a column per round (finishing position), then the total
     const head = $('st-drivers-head');
     head.innerHTML = '';
     const hr = el('tr');
     hr.append(el('th', null, 'Pos'), el('th', null, 'Driver'));
-    const CODES = { jeddah: 'KSA', monaco: 'MON', redbullring: 'AUT', silverstone: 'GBR', spa: 'BEL', monza: 'ITA', interlagos: 'BRA', abudhabi: 'UAE' };
-    c.calendar.forEach(function (id) { const th = el('th', 'rd', CODES[id] || id.slice(0, 3).toUpperCase()); th.title = F1.getTrack(id).name; hr.appendChild(th); });
+    o.calendar.forEach(function (id) { const th = el('th', 'rd', CODES[id] || id.slice(0, 3).toUpperCase()); th.title = F1.getTrack(id).name; hr.appendChild(th); });
     hr.appendChild(el('th', 'r', 'Pts'));
     head.appendChild(hr);
     const body = $('st-drivers');
     body.innerHTML = '';
-    st.drivers.forEach(function (r, k) {
-      const d = F1.driver(r.id), t = F1.teamOfDriver(r.id);
-      const tr = el('tr', r.id === myId ? 'me' : '');
+    o.drivers.forEach(function (r, k) {
+      const tr = el('tr', r.me ? 'me' : '');
       tr.appendChild(el('td', 'pos', String(k + 1)));
       const td = el('td', 'drv');
-      const bar = el('span', 'bar'); bar.style.background = teamColor(t);
-      td.append(bar, document.createTextNode(d.name + (r.id === myId ? '  (You)' : '')));
+      const bar = el('span', 'bar'); bar.style.background = r.color;
+      td.append(bar, document.createTextNode(r.name));
+      if (r.sub) td.appendChild(el('span', 'sub', r.sub));
       tr.appendChild(td);
-      c.calendar.forEach(function (id, i) {
-        const v = r.res[i];
-        tr.appendChild(el('td', 'rd' + (v === 'DNF' ? ' dnf' : v === 1 ? ' p1' : v === 2 ? ' p2' : v === 3 ? ' p3' : ''), v === undefined ? '–' : String(v)));
+      r.cells.forEach(function (c) {
+        const cell = el('td', 'rd' + (c.cls ? ' ' + c.cls : ''), c.text);
+        if (c.title) cell.title = c.title;
+        tr.appendChild(cell);
       });
       tr.appendChild(el('td', 'r big', String(r.pts)));
       body.appendChild(tr);
     });
     const tb = $('st-teams');
     tb.innerHTML = '';
-    const myTeam = F1.teamOfDriver(myId).id;
-    st.teams.forEach(function (r, k) {
-      const t = F1.team(r.id);
-      const tr = el('tr', r.id === myTeam ? 'me' : '');
+    o.teams.forEach(function (r, k) {
+      const tr = el('tr', r.me ? 'me' : '');
       tr.appendChild(el('td', 'pos', String(k + 1)));
       const td = el('td', 'drv');
-      const bar = el('span', 'bar'); bar.style.background = teamColor(t);
-      td.append(bar, document.createTextNode(t.name));
+      const bar = el('span', 'bar'); bar.style.background = r.color;
+      td.append(bar, document.createTextNode(r.name));
       tr.appendChild(td);
       tr.appendChild(el('td', 'r big', String(r.pts)));
       tb.appendChild(tr);
     });
-    const next = done ? null : F1.getTrack(c.calendar[n]);
-    $('st-note').textContent = done ? 'Season complete.' : 'Your season is saved: you can carry on later from Championship on the home screen.';
-    $('st-next').style.display = next ? '' : 'none';
-    if (next) $('st-next').textContent = 'Next race: ' + next.name;
-    $('st-new').style.display = done ? '' : 'none';
+    $('st-note').textContent = o.note || '';
+    $('st-next').style.display = o.next ? '' : 'none';
+    if (o.next) $('st-next').textContent = o.next;
+    $('st-new').style.display = o.newb ? '' : 'none';
+    if (o.newb) $('st-new').textContent = o.newb;
+    $('st-menu').textContent = o.menu;
+    $('st-car-wrap').classList.toggle('hidden', !o.car);
+    if (o.car) fillSelect($('st-car'), o.car.options, o.car.value);
     $('pause').classList.add('hidden');
     show('standings');
+  }
+  function posCell(v) {
+    if (v === undefined) return { text: '–' };
+    if (v === 'DNF') return { text: 'DNF', cls: 'dnf' };
+    return { text: String(v), cls: v === 1 ? 'p1' : v === 2 ? 'p2' : v === 3 ? 'p3' : '' };
+  }
+  function showStandings(c) {
+    standingsCtx = 'local';
+    const st = standings(c), myId = c.opts.driverId;
+    const done = c.done, n = c.rounds.length;
+    let banner = null;
+    if (done) {
+      const w = st.drivers[0], t = F1.teamOfDriver(w.id);
+      banner = { text: w.id === myId ? '🏆 You are the World Champion!' : '🏆 ' + F1.driver(w.id).name + ' is the World Champion',
+        small: t.name + ' · ' + w.pts + ' points · Constructors\' champions: ' + F1.team(st.teams[0].id).name };
+    }
+    const myTeam = F1.teamOfDriver(myId).id, next = done ? null : F1.getTrack(c.calendar[n]);
+    renderStandings({
+      title: done ? 'Final standings' : n ? 'Standings after round ' + n + ' of ' + c.calendar.length : 'Standings',
+      banner: banner, calendar: c.calendar,
+      drivers: st.drivers.map(function (r) {
+        return { me: r.id === myId, name: F1.driver(r.id).name + (r.id === myId ? '  (You)' : ''), color: teamColor(F1.teamOfDriver(r.id)), pts: r.pts,
+          cells: c.calendar.map(function (id, i) { return posCell(r.res[i]); }) };
+      }),
+      teams: st.teams.map(function (r) { return { me: r.id === myTeam, name: F1.team(r.id).name, color: teamColor(F1.team(r.id)), pts: r.pts }; }),
+      note: done ? 'Season complete.' : 'Your season is saved: you can carry on later from Championship on the home screen.',
+      next: next ? 'Next race: ' + next.name : null, newb: done ? 'New season' : null, menu: 'Back to menu', car: null
+    });
+  }
+  /* The online season's standings: drivers (players and AI) and constructors. Players who missed a race were
+     placed last; players who left during a race were classified behind the others. */
+  function onlineStandings(sv) {
+    const rows = sv.entrants.map(function (e, k) { return { e: e, pts: 0, res: [], count: new Array(41).fill(0), k: k }; });
+    const by = {};
+    rows.forEach(function (r) { by[r.e.eid] = r; });
+    sv.rounds.forEach(function (rd, i) {
+      rd.res.forEach(function (x) { const r = by[x.eid]; if (!r) return; r.pts += x.pts; r.res[i] = x; if (!x.out) r.count[x.pos]++; });
+    });
+    rows.sort(function (a, b) {
+      if (b.pts !== a.pts) return b.pts - a.pts;
+      for (let p = 1; p < 41; p++) if (b.count[p] !== a.count[p]) return b.count[p] - a.count[p];
+      return a.k - b.k;
+    });
+    const teams = {};
+    rows.forEach(function (r) { const t = F1.teamOfDriver(r.e.driverId); teams[t.id] = (teams[t.id] || 0) + r.pts; });
+    const teamRows = Object.keys(teams).map(function (id) { return { id: id, pts: teams[id] }; })
+      .sort(function (a, b) { return b.pts - a.pts || F1.TEAMS.findIndex(function (t) { return t.id === a.id; }) - F1.TEAMS.findIndex(function (t) { return t.id === b.id; }); });
+    return { drivers: rows, teams: teamRows };
+  }
+  function showOnlineStandings() {
+    standingsCtx = 'online';
+    const sv = season;
+    if (!sv || !room) return;
+    const st = onlineStandings(sv), n = sv.rounds.length, done = sv.done;
+    const isHost = net && room.hostId === net.id();
+    const me = sv.entrants.find(function (e) { return e.eid === sv.you; }) || null;
+    const nameOf = function (e) { return e.human ? e.name : F1.driver(e.driverId).name; };
+    let banner = null;
+    if (done && st.drivers.length) {
+      const w = st.drivers[0].e, t = F1.teamOfDriver(w.driverId);
+      banner = { text: me && w.eid === me.eid ? '🏆 You are the World Champion!' : '🏆 ' + nameOf(w) + ' is the World Champion',
+        small: t.name + ' · ' + st.drivers[0].pts + ' points · Constructors\' champions: ' + F1.team(st.teams[0].id).name };
+    }
+    const next = done ? null : F1.getTrack(sv.calendar[n]);
+    const hostP = room.players.find(function (p) { return p.id === room.hostId; });
+    // joined during the season and not raced yet: you can still pick a free car
+    let car = null;
+    if (me && !sv.rounds.some(function (rd) { return rd.res.some(function (x) { return x.eid === me.eid; }); })) {
+      const used = {};
+      sv.entrants.forEach(function (e) { if (e.eid !== me.eid) used[e.driverId] = true; });
+      car = { value: me.driverId, options: F1.DRIVERS.filter(function (d) { return !used[d.id]; }).map(function (d) { return [d.id, '#' + d.number + ' ' + d.name]; }) };
+    }
+    const myTeam = me ? F1.teamOfDriver(me.driverId).id : null;
+    renderStandings({
+      title: (done ? 'Final standings' : n ? 'Standings after round ' + n + ' of ' + sv.calendar.length : 'Championship: ' + sv.calendar.length + ' rounds'),
+      banner: banner, calendar: sv.calendar,
+      drivers: st.drivers.map(function (r) {
+        const e = r.e, mine = me && e.eid === me.eid;
+        return { me: mine, name: nameOf(e) + (mine ? '  (You)' : ''), sub: e.human ? F1.driver(e.driverId).name + (e.here ? '' : ' · away') : '',
+          color: teamColor(F1.teamOfDriver(e.driverId)), pts: r.pts,
+          cells: sv.calendar.map(function (id, i) {
+            const x = r.res[i];
+            if (!x) return { text: '–' };
+            if (x.out === 'absent') return { text: String(x.pos), cls: 'absent', title: 'Missed this race: placed last' };
+            if (x.out === 'left') return { text: String(x.pos), cls: 'left', title: 'Left during the race' };
+            return posCell(x.pos);
+          }) };
+      }),
+      teams: st.teams.map(function (r) { return { me: r.id === myTeam, name: F1.team(r.id).name, color: teamColor(F1.team(r.id)), pts: r.pts }; }),
+      note: done ? (isHost ? 'Season complete. Back to the lobby to start another one.' : 'Season complete.')
+        : isHost ? 'The season is saved in your browser. If you leave, it pauses until you come back.'
+        : 'Waiting for ' + (hostP ? hostP.name : 'the host') + ' to start ' + (n ? 'round ' + (n + 1) : 'the first round') + '…',
+      next: isHost && next ? 'Start round ' + (n + 1) + ': ' + next.name : null,
+      newb: isHost && done ? 'Back to lobby' : null,
+      menu: 'Leave room', car: car
+    });
   }
   $('champ-start').addEventListener('click', startSeason);
   $('cc-go').addEventListener('click', function () { const c = Champ.load(); if (c && !c.done) startRound(c); });
   $('cc-standings').addEventListener('click', function () { const c = Champ.load(); if (c) showStandings(c); });
-  $('results-standings').addEventListener('click', function () { const c = gp && gp.champ ? gp.champ : Champ.load(); if (c) showStandings(c); });
-  $('st-next').addEventListener('click', function () { const c = Champ.load(); if (c && !c.done) startRound(c); });
-  $('st-new').addEventListener('click', function () { goHome(); openChamp(); });
-  $('st-menu').addEventListener('click', function () { goHome(); });
+  $('results-standings').addEventListener('click', function () {
+    if (resultsCtx === 'online') { showOnlineStandings(); return; }
+    const c = gp && gp.champ ? gp.champ : Champ.load(); if (c) showStandings(c);
+  });
+  $('st-next').addEventListener('click', function () {
+    if (standingsCtx === 'online') { if (net) net.socket.emit('nextRound'); return; }
+    const c = Champ.load(); if (c && !c.done) startRound(c);
+  });
+  $('st-new').addEventListener('click', function () {
+    if (standingsCtx === 'online') { if (net) net.socket.emit('backToLobby'); return; }
+    goHome(); openChamp();
+  });
+  $('st-menu').addEventListener('click', function () { if (standingsCtx === 'online') askLeaveRoom(false); else goHome(); });
+  $('st-car').addEventListener('change', function () { if (net && standingsCtx === 'online') net.socket.emit('pickDriver', this.value); });
 
   // ------------------------------------------------------------- navigation
   document.querySelectorAll('[data-go]').forEach(function (b) {
@@ -524,6 +694,7 @@
     $('set-steer').oninput = function () { d.steering = Number(this.value); $('set-steer-val').textContent = this.value; Settings.save(); };
     segInit($('set-camera'), d.camera, function (v) { d.camera = v; Settings.save(); });
     segInit($('set-zoom'), d.zoom || 'normal', function (v) { d.zoom = v; Settings.save(); });
+    segInit($('set-units'), d.units === 'mph' ? 'mph' : 'kmh', function (v) { d.units = v; Settings.save(); });
     $('set-labels').checked = !!d.labels;
     $('set-labels').onchange = function () { d.labels = this.checked; Settings.save(); };
     $('set-ghost').checked = d.ghost !== false;
@@ -556,7 +727,7 @@
   function openPause() {
     if (mode === 'menu' || !$('overlay').classList.contains('hidden')) return;
     $('pause').classList.remove('hidden');
-    if (game && game.kind === 'local') game.paused = true;
+    if (game && game.kind === 'local') { game.paused = true; game.cancelResume(); }
     $('pause-restart').style.display = mode === 'practice' || mode === 'gp' || mode === 'tt' ? '' : 'none';
     $('pause-restart').textContent = mode === 'gp' ? 'Restart this session' : mode === 'tt' ? 'Restart time trial' : 'Restart practice';
     // end practice or qualifying early (online: the host ends it for everyone)
@@ -570,24 +741,29 @@
     $('pause-quit').textContent = mode === 'online' ? 'Leave the room' : mode === 'tt' ? 'Quit time trial' : 'Quit to menu';
     Input.active = false;
   }
-  function resume() {
+  /* Back to the game. Offline sessions count down 3-2-1 first (still frozen) so you can see where you are;
+     now = true skips that (restarting or ending the session). */
+  function resume(now) {
     $('pause').classList.add('hidden');
     $('settings').classList.add('hidden');
-    if (game && game.kind === 'local') game.paused = false;
+    if (game && game.kind === 'local') {
+      if (now !== true && game.paused && !game.ended && game.S.phase !== 'done') game.startResume();
+      else { game.cancelResume(); game.paused = false; }
+    }
     Input.active = mode !== 'menu' && $('overlay').classList.contains('hidden');
     if (document.activeElement && document.activeElement.blur) document.activeElement.blur();
     updatePauseBtn();
   }
   $('pausebtn').querySelector('button').addEventListener('click', function (e) { e.currentTarget.blur(); openPause(); });
-  $('pause-resume').addEventListener('click', resume);
+  $('pause-resume').addEventListener('click', function () { resume(); });
   $('pause-restart').addEventListener('click', function () {
-    resume();
+    resume(true);
     if (mode === 'gp' && gp) startGpStage(gp.idx); else if (mode === 'tt') startTT(); else startPractice();
   });
   function sessionLive() { return game && (game.kind === 'online' ? !game.ended && game.phase !== 3 : game.S && game.S.phase !== 'done'); }
   $('pause-end').addEventListener('click', function () {
-    if (!sessionLive()) { resume(); return; }
-    if (game.type !== 'quali') { resume(); endSessionNow(); return; }
+    if (!sessionLive()) { resume(true); return; }
+    if (game.type !== 'quali') { resume(true); endSessionNow(); return; }
     // qualifying: a warning first
     let text;
     if (game.kind === 'online') text = 'This ends qualifying for everyone. Drivers who haven\'t set a lap time will start the race from the back of the grid.';
@@ -597,16 +773,34 @@
         ? 'You keep your best lap (' + F1.fmtLap(me.bestLap) + '), which is P' + me.pos + ' right now. The other drivers will finish their laps, so you could drop back if they go faster.'
         : 'You haven\'t set a lap time yet, so you will start the race from the back of the grid (P' + n + ').';
     }
+    confirmAction = null;
+    $('confirm-title').textContent = 'End qualifying now?';
+    $('confirm-yes').textContent = 'End qualifying';
+    $('confirm-no').textContent = 'Keep driving';
     $('confirm-text').textContent = text;
     $('pause').classList.add('hidden');
     $('confirm').classList.remove('hidden');
   });
-  function closeConfirm(backToPause) {
+  /* The warning dialog is also used for other questions (leaving a season): o = { title, text, yes, no, onYes, onNo }. */
+  let confirmAction = null;
+  function askConfirm(o) {
+    confirmAction = o;
+    $('confirm-title').textContent = o.title;
+    $('confirm-text').textContent = o.text;
+    $('confirm-yes').textContent = o.yes;
+    $('confirm-no').textContent = o.no;
+    $('confirm').classList.remove('hidden');
+  }
+  function closeConfirm(backToPause, now) {
     $('confirm').classList.add('hidden');
-    if (backToPause) $('pause').classList.remove('hidden'); else resume();
+    if (confirmAction) { const a = confirmAction; confirmAction = null; if (a.onNo) a.onNo(); return; }
+    if (backToPause) $('pause').classList.remove('hidden'); else resume(now);
   }
   $('confirm-no').addEventListener('click', function () { closeConfirm(false); });
-  $('confirm-yes').addEventListener('click', function () { closeConfirm(false); endSessionNow(); });
+  $('confirm-yes').addEventListener('click', function () {
+    if (confirmAction) { const a = confirmAction; confirmAction = null; $('confirm').classList.add('hidden'); a.onYes(); return; }
+    closeConfirm(false, true); endSessionNow();
+  });
   function endSessionNow() {
     if (!sessionLive()) return;
     if (game.kind === 'online') { if (net) net.emit('endSession'); return; }
@@ -617,9 +811,10 @@
     } else game.endEarly();
   }
   $('pause-quit').addEventListener('click', function () {
-    if (mode === 'online') leaveRoom(); else if (mode === 'tt') { goHome(); openTT(); } else goHome();
+    if (mode === 'online') askLeaveRoom(true); else if (mode === 'tt') { goHome(); openTT(); } else goHome();
   });
   $('soundbtn').querySelector('button').addEventListener('click', function (e) { e.currentTarget.blur(); toggleSound(); });
+  $('fsbtn').querySelector('button').addEventListener('click', function (e) { e.currentTarget.blur(); toggleFullscreen(); });
   // the game open in another tab, or brought back from the browser's cache: use the saved sound settings
   window.addEventListener('storage', function (e) { if (e.key === 'topdowngp.settings') { GameAudio.reload(); syncSoundUI(); } });
   window.addEventListener('pageshow', function () { GameAudio.reload(); syncSoundUI(); });
@@ -629,6 +824,11 @@
     const typing = tg === 'TEXTAREA' || tg === 'SELECT' || (tg === 'INPUT' && !/^(checkbox|radio|range|button|submit)$/i.test(e.target.type || ''));
     if (e.code === 'KeyM' && !e.repeat && !typing) {
       toggleSound();
+      return;
+    }
+    // F: full screen on / off
+    if (e.code === 'KeyF' && !e.repeat && !typing && !e.ctrlKey && !e.metaKey && !e.altKey) {
+      if (fsSupported) toggleFullscreen();
       return;
     }
     // C: camera distance (close / normal / far) while driving
@@ -660,21 +860,35 @@
   function ensureNet() {
     if (net) return net;
     const socket = window.io({ transports: ['websocket', 'polling'], tryAllTransports: true });
-    net = { socket: socket, ping: null, id: function () { return socket.id; }, emit: function () { socket.emit.apply(socket, arguments); } };
+    net = { socket: socket, ping: null, jitWorst: 0, id: function () { return socket.id; }, emit: function () { socket.emit.apply(socket, arguments); } };
     socket.on('room', onRoom);
     socket.on('session', onSession);
     socket.on('snap', function (m) { if (game && game.kind === 'online') game.onSnap(m); });
     socket.on('timing', function (m) { if (game && game.kind === 'online') game.onTiming(m); });
     socket.on('ev', function (m) { if (game && game.kind === 'online') game.onEvents(m); });
     socket.on('sessionEnd', onSessionEnd);
+    socket.on('season', onSeason);
+    socket.on('seasonEnded', function (m) {
+      if (game && game.kind === 'online') game.ended = true;
+      season = null;
+      const sv = OnlineSeason.load();
+      if (sv && room && sv.code === room.code) OnlineSeason.clear();
+      if (!(m && m.finished)) toast('The host has ended the championship');
+    });
     socket.on('disconnect', function () {
-      if (room) { room = null; goHome(); toast('Lost connection to the server'); }
+      if (room) {
+        const hosting = season && !season.done && room.hostId === net.id();
+        room = null; goHome();
+        toast(hosting ? 'Lost connection — your season is paused: press Rejoin season to carry on' : 'Lost connection to the server');
+      }
     });
     socket.on('connect_error', function () { $('online-error').textContent = 'Cannot reach the game server.'; });
+    // ping every 2 s; also tell the room how our connection is doing (shown on their connection indicator)
     setInterval(function () {
       if (!socket.connected) return;
       const t0 = performance.now();
-      socket.emit('lat', function () { net.ping = Math.round(performance.now() - t0); });
+      socket.emit('lat', { p: net.ping || 0, j: net.jitWorst || 0 }, function () { net.ping = Math.round(performance.now() - t0); });
+      net.jitWorst = 0;
     }, 2000);
     return net;
   }
@@ -683,6 +897,7 @@
     $('online-name').value = Settings.data.name || '';
     if (code) $('online-code').value = code;
     $('online-error').textContent = '';
+    updateSeasonButtons();
     show('online');
     setTimeout(function () { ($('online-name').value ? $('online-code') : $('online-name')).focus(); }, 50);
     ensureNet();
@@ -696,7 +911,7 @@
   $('online-create').addEventListener('click', function () {
     const n = ensureNet();
     $('online-error').textContent = '';
-    n.socket.emit('createRoom', { name: playerName() }, function (res) {
+    n.socket.emit('createRoom', { name: playerName(), token: myToken() }, function (res) {
       if (!res || !res.ok) { $('online-error').textContent = (res && res.error) || 'Could not create a room'; return; }
       history.replaceState(null, '', '?room=' + res.code);
     });
@@ -706,7 +921,8 @@
     const code = $('online-code').value.trim().toUpperCase();
     if (code.length !== 4) { $('online-error').textContent = 'Room codes have 4 characters'; return; }
     $('online-error').textContent = '';
-    n.socket.emit('joinRoom', { code: code, name: playerName() }, function (res) {
+    const sv = OnlineSeason.load();      // your own season's room: you come back as its host
+    n.socket.emit('joinRoom', { code: code, name: playerName(), token: myToken(), key: sv && sv.code === code ? sv.key : undefined }, function (res) {
       if (!res || !res.ok) { $('online-error').textContent = (res && res.error) || 'Could not join'; return; }
       history.replaceState(null, '', '?room=' + res.code);
     });
@@ -720,7 +936,51 @@
     history.replaceState(null, '', location.pathname);
     goHome();
   }
-  $('lobby-leave').addEventListener('click', leaveRoom);
+  /* Leaving: the host of a season is warned that it pauses for everyone until they come back. */
+  function askLeaveRoom(fromPause) {
+    const hosting = room && net && season && !season.done && room.hostId === net.id();
+    if (!hosting) { leaveRoom(); return; }
+    $('pause').classList.add('hidden');
+    askConfirm({
+      title: 'Leave the season?', yes: 'Pause and leave', no: 'Stay',
+      text: 'The season pauses for everyone until you come back. It is saved in this browser: press Rejoin season on the home screen to carry on.',
+      onYes: leaveRoom,
+      onNo: function () { if (fromPause) $('pause').classList.remove('hidden'); }
+    });
+  }
+  $('lobby-leave').addEventListener('click', function () { askLeaveRoom(false); });
+  $('hostaway-leave').addEventListener('click', leaveRoom);
+  /* Your season: open the room again (as the host) from the copy in this browser. */
+  function rejoinSeason() {
+    const sv = OnlineSeason.load();
+    if (!sv) { updateSeasonButtons(); return; }
+    openOnline();
+    const n = ensureNet();
+    $('online-error').textContent = 'Opening your season…';
+    n.socket.emit('rejoinSeason', { code: sv.code, key: sv.key, season: sv.season, name: playerName(), token: myToken() }, function (res) {
+      if (!res || !res.ok) { $('online-error').textContent = (res && res.error) || 'Could not open the season'; return; }
+      $('online-error').textContent = '';
+      history.replaceState(null, '', '?room=' + res.code);
+      if (res.moved) toast('Your season is in room ' + res.code + ' now — send your friends the new invite link');
+    });
+  }
+  $('home-rejoin').addEventListener('click', rejoinSeason);
+  $('os-rejoin').addEventListener('click', rejoinSeason);
+  $('os-end').addEventListener('click', function () {
+    const sv = OnlineSeason.load();
+    if (!sv) return;
+    askConfirm({
+      title: 'End your season?', yes: 'End the season', no: 'Keep it',
+      text: 'The championship ends for everyone and can\'t be continued. Results so far are not kept.',
+      onYes: function () {
+        const n = ensureNet();
+        n.socket.emit('endSeason', { code: sv.code, key: sv.key });
+        OnlineSeason.clear();
+        updateSeasonButtons();
+        toast('Season ended');
+      }
+    });
+  });
   $('lobby-copy').addEventListener('click', function () {
     if (!room) return;
     const link = location.origin + location.pathname + '?room=' + room.code;
@@ -761,6 +1021,30 @@
       list.appendChild(li);
     });
     const s = r.settings;
+    // championship: a calendar of 2 to 11 tracks instead of one track
+    const champ = s.mode === 'champ', cal = s.calendar || [];
+    $('set-mode').value = champ ? 'champ' : 'single';
+    $('lobby-cal').classList.toggle('hidden', !champ);
+    $('set-track-wrap').classList.toggle('hidden', champ);
+    const chips = $('lobby-cal-chips'), ckey = JSON.stringify([cal, isHost]);
+    if (chips.dataset.key !== ckey) {
+      chips.dataset.key = ckey;
+      chips.innerHTML = '';
+      Object.keys(F1.TRACK_DEFS).forEach(function (id) {
+        const k = cal.indexOf(id), b = el('button', 'cal-chip' + (k >= 0 ? ' on' : ''));
+        b.type = 'button';
+        b.disabled = !isHost;
+        if (k >= 0) b.appendChild(el('b', null, String(k + 1)));
+        b.appendChild(document.createTextNode(F1.TRACK_DEFS[id].short || F1.TRACK_DEFS[id].name));
+        b.addEventListener('click', function () {
+          const next = cal.slice(), at = next.indexOf(id);
+          if (at >= 0) next.splice(at, 1); else next.push(id);
+          if (net) net.socket.emit('settings', { calendar: next });
+        });
+        chips.appendChild(b);
+      });
+    }
+    $('lobby-cal-n').textContent = cal.length ? '(' + cal.length + (cal.length === 1 ? ' race' : ' races') + ')' : (isHost ? '(click tracks in race order)' : '');
     fillSelect($('set-track'), Object.keys(F1.TRACK_DEFS).map(function (id) { return [id, F1.TRACK_DEFS[id].name]; }), s.track);
     ['p1', 'p2', 'p3'].forEach(function (k) { fillSelect($('set-' + k), [[0, 'Skip'], [1, '1 lap'], [2, '2 laps'], [3, '3 laps']], s[k] || 0); });
     fillSelect($('set-quali'), [[0, 'None (random grid)'], [1, '1 lap'], [2, '2 laps'], [3, '3 laps'], [4, '4 laps'], [5, '5 laps']], s.qualiLaps);
@@ -770,11 +1054,13 @@
     for (let i = 0; i <= 21; i++) aiOpts.push([i, i > aiMax ? i + ' (max ' + aiMax + ')' : (i === aiMax ? i + ' (full grid)' : String(i))]);
     fillSelect($('set-ai'), aiOpts, s.aiCount);
     $('set-level').value = s.aiLevel;
-    ['set-track', 'set-p1', 'set-p2', 'set-p3', 'set-quali', 'set-race', 'set-ai', 'set-level'].forEach(function (id) { $(id).disabled = !isHost; });
+    ['set-mode', 'set-track', 'set-p1', 'set-p2', 'set-p3', 'set-quali', 'set-race', 'set-ai', 'set-level'].forEach(function (id) { $(id).disabled = !isHost; });
     $('lobby-hostnote').textContent = isHost ? '' : '(host decides)';
     $('lobby-start').style.display = isHost ? '' : 'none';
     const first = ['p1', 'p2', 'p3'].find(function (k) { return s[k] > 0; }) || (s.qualiLaps > 0 ? 'quali' : 'race');
-    $('lobby-start').textContent = first === 'race' ? 'Start race' : 'Start ' + STAGE_NAME[first];
+    $('lobby-start').textContent = champ ? (cal.length >= 2 ? 'Start season (' + cal.length + ' races)' : 'Pick at least 2 tracks')
+      : first === 'race' ? 'Start race' : 'Start ' + STAGE_NAME[first];
+    $('lobby-start').disabled = champ && cal.length < 2;
     $('lobby-waiting').style.display = isHost ? 'none' : '';
     const mine = r.players.find(function (p) { return p.id === me; });
     const takenBy = {};
@@ -789,19 +1075,27 @@
       });
     }
   }
-  ['set-track', 'set-p1', 'set-p2', 'set-p3', 'set-quali', 'set-race', 'set-ai', 'set-level'].forEach(function (id) {
+  ['set-mode', 'set-track', 'set-p1', 'set-p2', 'set-p3', 'set-quali', 'set-race', 'set-ai', 'set-level'].forEach(function (id) {
     $(id).addEventListener('change', function () {
-      const map = { 'set-track': 'track', 'set-p1': 'p1', 'set-p2': 'p2', 'set-p3': 'p3', 'set-quali': 'qualiLaps', 'set-race': 'raceLaps', 'set-ai': 'aiCount', 'set-level': 'aiLevel' };
+      const map = { 'set-mode': 'mode', 'set-track': 'track', 'set-p1': 'p1', 'set-p2': 'p2', 'set-p3': 'p3', 'set-quali': 'qualiLaps', 'set-race': 'raceLaps', 'set-ai': 'aiCount', 'set-level': 'aiLevel' };
       const v = this.value, msg = {};
-      msg[map[id]] = (id === 'set-track' || id === 'set-level') ? v : Number(v);
+      msg[map[id]] = (id === 'set-mode' || id === 'set-track' || id === 'set-level') ? v : Number(v);
       if (net) net.socket.emit('settings', msg);
     });
   });
 
+  let roomAt = 0;
   function onRoom(r) {
     room = r;
+    roomAt = performance.now();
     mode = 'online';
     const inSession = game && game.kind === 'online' && !game.ended;
+    // an online season waits while its host is away, then carries on after a 3-2-1
+    $('hostaway').classList.toggle('hidden', !r.hostAway);
+    if (r.hostAway) $('hostaway-text').textContent = (r.awayName || 'The host') + ' has left the room. The season carries on as soon as they come back.';
+    if (game && game.kind === 'online') game.setPause(!!r.hostAway, r.resumeIn || 0);
+    if (r.hostAway) $('pause').classList.add('hidden');
+    updatePauseBtn();
     if (r.state === 'lobby' && !inSession) {
       if (!$('lobby').classList.contains('active')) {
         if (game && game.kind === 'online') startAttract();
@@ -814,6 +1108,37 @@
     } else if ($('lobby').classList.contains('active')) {
       renderLobby(r);
     }
+    maybeShowSeasonBreak();
+    updateResultsButtons();
+    if ($('standings').classList.contains('active') && standingsCtx === 'online') showOnlineStandings();
+  }
+
+  /* Between two rounds of a season with nothing else on screen (the host opened the season again): the standings. */
+  function maybeShowSeasonBreak() {
+    if (!room || room.state !== 'seasonBreak' || !season) return;
+    if (game && game.kind === 'online' && !game.ended) return;
+    if ($('results').classList.contains('active') || $('standings').classList.contains('active')) return;
+    showOnlineStandings();
+  }
+
+  /* The season of this room (championship standings, your car), from the server. The host keeps a copy. */
+  function onSeason(sv) {
+    const first = !season;
+    season = sv;
+    if (sv && sv.save) {
+      if (sv.done) OnlineSeason.clear();
+      else OnlineSeason.save({ code: sv.save.code, key: sv.save.key, season: sv.save.season, at: Date.now() });
+    }
+    if (sv && first && sv.rounds.length && !sv.done) {
+      const me = sv.entrants.find(function (e) { return e.eid === sv.you; });
+      const raced = me && sv.rounds.some(function (rd) { return rd.res.some(function (x) { return x.eid === me.eid; }); });
+      const d = me ? F1.driver(me.driverId) : null;
+      if (!me) toast('Every car is taken this season — you can watch the races');
+      else if (raced) toast('Welcome back: you are driving #' + d.number + ' ' + d.name + ' again');
+      else toast('You have joined the season as #' + d.number + ' ' + d.name + ' — your points start now');
+    }
+    if ($('standings').classList.contains('active') && standingsCtx === 'online') showOnlineStandings();
+    maybeShowSeasonBreak();
     updateResultsButtons();
   }
 
@@ -823,6 +1148,8 @@
     $('pause').classList.add('hidden');
     $('settings').classList.add('hidden');
     game = new window.OnlineGame(net, info);
+    // joining a paused season (or the host coming back): wait with everyone else
+    if (room && (room.hostAway || room.resumeIn)) game.setPause(!!room.hostAway, Math.max(0, (room.resumeIn || 0) - (performance.now() - roomAt)));
     R.resetEffects();
     GameAudio.newSession();
     show(null);
@@ -932,15 +1259,20 @@
     const isChamp = resultsCtx === 'champ', isGp = resultsCtx === 'gp' || isChamp;
     const isHost = !isGp && room && net && room.hostId === net.id();
     const raceDone = lastResults && lastResults.type === 'race';
-    $('results-lobby').style.display = !isGp && isHost && raceDone ? '' : 'none';
+    const onlineSeason = !isGp && raceDone && !!lastResults.season;
+    $('results-lobby').style.display = !isGp && isHost && raceDone && !onlineSeason ? '' : 'none';
     const next = isGp && gp && !raceDone ? gp.stages[gp.idx + 1] : null;
     $('results-next').style.display = next ? '' : 'none';
     if (next) $('results-next').textContent = next === 'race' ? 'Start the race' : 'Start ' + STAGE_NAME[next];
     $('results-again').style.display = isGp && !isChamp && raceDone ? '' : 'none';
     $('results-restart').style.display = isGp && !isChamp && raceDone && gp && gp.stages.length > 1 ? '' : 'none';
-    $('results-standings').style.display = isChamp && raceDone ? '' : 'none';
+    $('results-standings').style.display = (isChamp || onlineSeason) && raceDone ? '' : 'none';
     $('results-menu').style.display = isGp ? '' : 'none';
-    if (!isGp && raceDone && !isHost) $('results-note').textContent = 'Waiting for the host to return to the lobby…';
+    if (onlineSeason) {
+      const done = season && season.done;
+      $('results-note').textContent = isHost ? (done ? 'The season is over: see the final standings.' : 'Next: the championship standings, then start the next round.')
+        : (done ? 'The season is over!' : 'Waiting for the host to start the next round…');
+    } else if (!isGp && raceDone && !isHost) $('results-note').textContent = 'Waiting for the host to return to the lobby…';
   }
 
   // ------------------------------------------------------------- main loop
@@ -961,7 +1293,7 @@
     if (steps >= 6) acc = 0;
     try { game.render(R, acc / F1.DT, dt); } catch (err) { console.error(err); }
     // sound: only while a session is on screen (not in menus, pause or results)
-    const audioOn = mode !== 'menu' && game.kind !== 'attract' && $('overlay').classList.contains('hidden') && $('pause').classList.contains('hidden');
+    const audioOn = mode !== 'menu' && game.kind !== 'attract' && $('overlay').classList.contains('hidden') && $('pause').classList.contains('hidden') && !(game.resumeT > 0) && !game.frozen;
     GameAudio.setActive(audioOn);
     if (audioOn && game.audioState) { try { const st = game.audioState(); if (st) GameAudio.update(st, dt); } catch (err) { console.error(err); } }
     requestAnimationFrame(frame);

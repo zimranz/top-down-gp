@@ -43,6 +43,7 @@
     this.entries = {};
     entries.forEach(function (e) { self.entries[e.id] = e; });
     this.paused = false;
+    this.resumeT = 0;                  // after Resume: a 3-2-1 countdown with the game still frozen
     this.ended = false;
     this.msgs = new window.Messages();
     this.fx = [];
@@ -95,6 +96,21 @@
     chunk();
   };
 
+  /* Resume after a pause: the game stays frozen for 3 seconds (3, 2, 1) so you can see where you are first. */
+  LocalGame.prototype.startResume = function () {
+    this.paused = true;
+    this.resumeT = 3;
+    this.resumeShown = 0;
+  };
+  LocalGame.prototype.cancelResume = function () { this.resumeT = 0; };
+  LocalGame.prototype.tickResume = function (dt) {
+    if (!(this.resumeT > 0)) return;
+    this.resumeT -= dt;
+    const n = Math.ceil(this.resumeT);
+    if (this.resumeT > 0 && n !== this.resumeShown) { this.resumeShown = n; window.GameAudio.countdown(); }
+    if (this.resumeT <= 0) { this.resumeT = 0; this.paused = false; window.GameAudio.go(); }
+  };
+
   LocalGame.prototype.step = function (fast) {
     if (this.paused || (this.ff && !fast)) return;
     const inputs = {};
@@ -142,11 +158,13 @@
     v.vx = c.vx; v.vy = c.vy; v.delta = c.delta; v.drsOpen = c.drsOpen; v.surf = c.surf; v.lock = c.lockFx;
     v.me = this.me === c;
     v.ghost = this.type === 'quali' && !v.me;
+    v.lvl = this.T.bridge ? F1.levelAt(this.T, c.s) : 0;      // on / under a bridge (drawing order)
     return v;
   };
 
   LocalGame.prototype.render = function (R, alpha, dt) {
     const S = this.S, T = this.T;
+    this.tickResume(dt);
     const cars = [];
     for (let i = 0; i < S.cars.length; i++) if (!S.cars[i].out) cars.push(this.view(S.cars[i], this.paused ? 1 : alpha));
     let focus = this.me ? this.views[this.myId] : null;
@@ -214,13 +232,15 @@
       const lapT = S.time - me.lapStart;
       if (lapT > 1.5 && !(me.s > this.T.length * 0.8 && lapT < 10)) delta = lapT - window.ghostTimeAtS(g, this.T, me.s);
     }
-    return window.HUD.build({
+    const hud = window.HUD.build({
       type: this.type, laps: S.laps, track: this.T, order: S.order, rows: rows, entries: this.entries, title: this.opts.title, delta: delta,
       myId: this.myId, phase: PH[S.phase], lights: S.lights, time: S.time,
       timeLeft: isFinite(S.timeLimit) ? Math.max(0, S.timeLimit - S.time) : -1,
       fastestId: S.fastest ? S.fastest.id : null, own: this.me, msgs: this.msgs, ping: null,
       started: this.started, wrongT: this.wrongT, stuckT: this.stuckT
     });
+    if (this.resumeT > 0) { hud.resume = Math.ceil(this.resumeT); hud.hint = null; }
+    return hud;
   };
 
   window.LocalGame = LocalGame;

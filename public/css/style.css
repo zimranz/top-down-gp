@@ -24,6 +24,21 @@ canvas#game { position: fixed; inset: 0; display: block; }
 .logo span { color: var(--red); }
 .tag { margin-top: 10px; color: #d5d9de; font-weight: 600; letter-spacing: 1px; text-transform: uppercase; font-size: 14px; }
 .menu { display: flex; flex-direction: column; gap: 12px; width: min(360px, 90vw); }
+/* home menu: a darker, frosted panel so the race behind does not fight with the buttons (still see-through) */
+#home .menu { width: min(394px, 92vw); padding: 17px; border-radius: 16px; background: rgba(10, 10, 14, 0.62);
+  -webkit-backdrop-filter: blur(7px) saturate(0.8); backdrop-filter: blur(7px) saturate(0.8);
+  border: 1px solid rgba(255, 255, 255, 0.09); box-shadow: 0 14px 44px rgba(0, 0, 0, 0.4); }
+#home .menu .btn { background: rgba(255, 255, 255, 0.075); border-color: rgba(255, 255, 255, 0.14);
+  transition: background .15s, border-color .15s, box-shadow .15s, transform .05s; }
+/* a subtle highlight on the button under the mouse */
+#home .menu .btn:hover, #home .menu .btn:focus-visible { background: rgba(255, 255, 255, 0.13); border-color: rgba(255, 255, 255, 0.4);
+  box-shadow: 0 0 0 1px rgba(255, 255, 255, 0.06), 0 0 14px rgba(255, 255, 255, 0.07); outline: none; }
+#home .menu .btn.red { background: var(--red); border-color: var(--red); }
+#home .menu .btn.red:hover, #home .menu .btn.red:focus-visible { background: #f00a02; border-color: #ff5a52; box-shadow: 0 0 16px rgba(225, 6, 0, 0.42); }
+#home .menu .btn.season { background: rgba(255, 214, 0, 0.12); border-color: rgba(255, 214, 0, 0.55); color: #ffe46b; }
+#home .menu .btn.season:hover, #home .menu .btn.season:focus-visible { background: rgba(255, 214, 0, 0.2); border-color: #ffd600; box-shadow: 0 0 14px rgba(255, 214, 0, 0.18); }
+#home .menu .btn.season small { display: block; font-size: 13px; font-weight: 600; color: #e9dca0; margin-top: 1px; }
+#home .menu .btn.hidden { display: none; }
 .keys { display: flex; flex-wrap: wrap; justify-content: center; gap: 8px 18px; color: #c9ced3; font-size: 14px; max-width: 640px; }
 .keys b { color: #fff; background: rgba(255,255,255,0.12); padding: 1px 7px; border-radius: 4px; margin-right: 4px; }
 
@@ -110,6 +125,37 @@ select option { color: #111; }
 .settings-grid label { display: flex; flex-direction: column; gap: 4px; font-size: 13px; font-weight: 700; color: var(--muted); }
 .settings-grid select { font-size: 15px; padding: 8px 10px; }
 .settings-grid select:disabled { opacity: 0.75; }
+.settings-grid .span2 { grid-column: 1 / -1; }
+/* the lobby's start button stays in view at the bottom of the column, even on short screens */
+#lobby-start { position: sticky; bottom: 0; z-index: 2; box-shadow: 0 -14px 18px rgba(12, 12, 16, 0.92); }
+/* online championship: the calendar (click tracks in race order) */
+.lobby-cal { display: flex; flex-direction: column; gap: 6px; }
+.lobby-cal.hidden, #set-track-wrap.hidden { display: none; }
+.cal-head { font-size: 13px; font-weight: 700; color: var(--muted); }
+.cal-head span { color: #cfd3d8; font-weight: 600; }
+.cal-chips { display: flex; flex-wrap: wrap; gap: 5px; }
+.cal-chip { font-family: var(--font); font-size: 13px; font-weight: 700; color: #cfd3d8; background: rgba(255,255,255,0.06); border: 1px solid rgba(255,255,255,0.12);
+  border-radius: 6px; padding: 4px 8px; cursor: pointer; display: inline-flex; align-items: center; gap: 5px; }
+.cal-chip:hover:not(:disabled) { border-color: rgba(255,255,255,0.35); }
+.cal-chip.on { color: #fff; background: rgba(225,6,0,0.22); border-color: rgba(225,6,0,0.75); }
+.cal-chip:disabled { cursor: default; }
+.cal-chip b { background: var(--red); color: #fff; border-radius: 4px; font-size: 11px; min-width: 17px; padding: 0 4px; text-align: center; }
+/* your online season (online screen) */
+.season-box { display: flex; flex-direction: column; gap: 10px; border: 1px solid rgba(255,214,0,0.45); background: rgba(255,214,0,0.07);
+  border-radius: 10px; padding: 12px 14px; }
+.season-box.hidden { display: none; }
+.season-box b { display: block; color: #ffe46b; }
+.season-box span { color: #cfd3d8; font-size: 14px; }
+/* season paused: a pause sign */
+.pause-sign { display: flex; gap: 9px; justify-content: center; margin-bottom: 4px; }
+.pause-sign span { width: 13px; height: 42px; border-radius: 3px; background: var(--yellow); }
+#hostaway .modal-box { text-align: center; align-items: center; }
+#hostaway p { color: #cfd3d8; }
+.st-car { display: flex; align-items: center; gap: 8px; font-weight: 700; color: var(--muted); font-size: 14px; }
+.st-car.hidden { display: none; }
+.st-car select { font-size: 14px; padding: 6px 8px; }
+.standings td .sub { color: var(--muted); font-weight: 600; font-size: 13px; margin-left: 6px; }
+.standings td.rd.absent, .standings td.rd.left { color: #8a9098; font-style: italic; }
 .waiting { color: var(--muted); font-weight: 700; text-align: center; padding: 10px; }
 
 /* results */
@@ -161,7 +207,7 @@ table.results .purple { color: #c77dff; }
 #pausebtn .lbl { font-size: 12px; font-weight: 800; color: #fff; text-shadow: 0 1px 3px rgba(0,0,0,0.9); letter-spacing: 0.5px; }
 /* sound on / off: bottom-right of the home screen, and next to the pause button while driving */
 #soundbtn { position: fixed; right: 16px; bottom: 14px; display: flex; flex-direction: column; align-items: center; gap: 4px; z-index: 6; }
-#soundbtn.ingame { right: 84px; }
+#soundbtn.ingame { right: 91px; }
 #soundbtn.hidden { display: none; }
 #soundbtn button { width: 52px; height: 52px; border-radius: 12px; border: 1px solid rgba(255,255,255,0.25); background: rgba(10,10,14,0.85);
   cursor: pointer; display: flex; align-items: center; justify-content: center; padding: 0; }
@@ -171,6 +217,18 @@ table.results .purple { color: #c77dff; }
 #soundbtn.muted .wave { display: none; }
 #soundbtn.muted button { border-color: rgba(255,75,69,0.7); }
 #soundbtn .lbl { font-size: 12px; font-weight: 800; color: #fff; text-shadow: 0 1px 3px rgba(0,0,0,0.9); letter-spacing: 0.5px; white-space: nowrap; }
+/* full screen: next to the sound button (home screen and while driving) */
+#fsbtn { position: fixed; right: 118px; bottom: 14px; display: flex; flex-direction: column; align-items: center; gap: 4px; z-index: 6; }
+#fsbtn.ingame { right: 193px; }
+#fsbtn.hidden { display: none; }
+#fsbtn button { width: 52px; height: 52px; border-radius: 12px; border: 1px solid rgba(255,255,255,0.25); background: rgba(10,10,14,0.85);
+  display: flex; align-items: center; justify-content: center; cursor: pointer; padding: 0; }
+#fsbtn button:hover { background: rgba(255,255,255,0.16); }
+#fsbtn .exit { display: none; }
+#fsbtn.on .exit { display: inline; }
+#fsbtn.on .enter { display: none; }
+#fsbtn .lbl { font-size: 12px; font-weight: 800; color: #fff; text-shadow: 0 1px 3px rgba(0,0,0,0.9); letter-spacing: 0.5px; white-space: nowrap; }
+@media (max-width: 900px) { #fsbtn.ingame { display: none; } }
 
 .foot-btns { display: flex; gap: 10px; flex-wrap: wrap; justify-content: flex-end; }
 .gp-laps { margin-top: 14px; }

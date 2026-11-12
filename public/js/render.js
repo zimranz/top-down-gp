@@ -10,7 +10,9 @@
     asphalt: '#3a3c40', line: '#f2f2f2', kerbR: '#d62b2b', kerbW: '#f4f4f4',
     gravel: '#cdb98d', gravelDot: '#b9a476',
     // street circuits
-    city: '#25272c', runoffSt: '#5d6168', bld: ['#3a3d44', '#444851', '#4f535c'], roof: 'rgba(255,255,255,0.07)'
+    city: '#25272c', runoffSt: '#5d6168', bld: ['#3a3d44', '#444851', '#4f535c'], roof: 'rgba(255,255,255,0.07)',
+    // old-town walls (narrow sections) and bridges
+    stone: '#9a8566', stoneEdge: '#6f5f48', deck: '#55595f', bridgeSide: '#757a81'
   };
 
   function lerpAngle(a, b, t) { return a + F1.wrapAngle(b - a) * t; }
@@ -203,7 +205,9 @@
     function off(i, d) { return [X[i] + NX[i] * d, Y[i] + NY[i] * d]; }
     for (let c0 = 0; c0 < N; c0 += CH) {
       const c1 = Math.min(N, c0 + CH);
-      const ch = { center: new Path2D(), runoff: [], edges: new Path2D(), kerbR: new Path2D(), kerbW: new Path2D(), kerbAll: new Path2D(), gravel: new Path2D(), cx: 0, cy: 0, r: 0 };
+      const ch = { center: new Path2D(), runoff: [], edges: new Path2D(), kerbR: new Path2D(), kerbW: new Path2D(), kerbAll: new Path2D(), gravel: new Path2D(),
+        narrowFill: new Path2D(), narrowLine: new Path2D(), cx: 0, cy: 0, r: 0 };
+      const HWE = T.hwE;
       let sx = 0, sy = 0;
       for (let k = c0; k <= c1; k++) {
         const i = k % N;
@@ -224,11 +228,22 @@
           gStart = k - 1 < c0 ? c0 : k - 1; gW = wv;
         }
       }
-      // white edge lines
+      // white edge lines (closer together where the track narrows)
       for (const side of [-1, 1]) {
         for (let k = c0; k <= c1; k++) {
-          const i = k % N, p = off(i, side * (hw - 0.45));
+          const i = k % N, p = off(i, side * (HWE[i] - 0.45));
           if (k === c0) ch.edges.moveTo(p[0], p[1]); else ch.edges.lineTo(p[0], p[1]);
+        }
+      }
+      // narrow sections: old stone walls cover the road beyond the usable width
+      for (let k = c0; k < c1; k++) {
+        const i = k % N, j = (k + 1) % N;
+        if (HWE[i] > hw - 0.05 && HWE[j] > hw - 0.05) continue;
+        ch.narrow = true;
+        for (const side of [-1, 1]) {
+          const a = off(i, side * (HWE[i] + 0.5)), b = off(j, side * (HWE[j] + 0.5)), c = off(j, side * (hw + 2.2)), d = off(i, side * (hw + 2.2));
+          ch.narrowFill.moveTo(a[0], a[1]); ch.narrowFill.lineTo(b[0], b[1]); ch.narrowFill.lineTo(c[0], c[1]); ch.narrowFill.lineTo(d[0], d[1]); ch.narrowFill.closePath();
+          ch.narrowLine.moveTo(a[0], a[1]); ch.narrowLine.lineTo(b[0], b[1]);
         }
       }
       // kerbs + gravel quads
@@ -238,7 +253,7 @@
           // the whole kerb is filled white, then the red blocks go on top: no seams between blocks
           const path = k % 2 === 0 ? ch.kerbR : ch.kerbW;
           for (const side of [-1, 1]) {
-            const a = off(i, side * (hw - 0.2)), b = off(j, side * (hw - 0.2)), c = off(j, side * (hw + T.kerbW)), d = off(i, side * (hw + T.kerbW));
+            const a = off(i, side * (HWE[i] - 0.2)), b = off(j, side * (HWE[j] - 0.2)), c = off(j, side * (HWE[j] + T.kerbW)), d = off(i, side * (HWE[i] + T.kerbW));
             for (const pth of [path, ch.kerbAll]) { pth.moveTo(a[0], a[1]); pth.lineTo(b[0], b[1]); pth.lineTo(c[0], c[1]); pth.lineTo(d[0], d[1]); pth.closePath(); }
           }
         }
@@ -254,6 +269,28 @@
         }
       }
       G.chunks.push(ch);
+    }
+
+    // a bridge (Suzuka): the upper road over the crossing, drawn after the cars underneath it
+    if (T.bridge) {
+      const B = T.bridge, iU = F1.idxAt(T, B.sU), wU = T.wall[iU];
+      const road = new Path2D(), shadow = new Path2D(), edges = new Path2D();
+      for (let s = B.sU - B.span, k = 0; s <= B.sU + B.span + 0.01; s += 2, k++) {
+        const p = F1.trackPoint(T, s, 0);
+        if (k) road.lineTo(p.x, p.y); else road.moveTo(p.x, p.y);
+      }
+      // the shadow falls beside the bridge (not past its ends, where the road is back on the ground)
+      for (let s = B.sU - B.span + 4.5, k = 0; s <= B.sU + B.span - 4.5 + 0.01; s += 2, k++) {
+        const p = F1.trackPoint(T, s, 0);
+        if (k) shadow.lineTo(p.x + 2.4, p.y + 3.4); else shadow.moveTo(p.x + 2.4, p.y + 3.4);
+      }
+      for (const side of [-1, 1]) {
+        for (let s = B.sU - B.span, k = 0; s <= B.sU + B.span + 0.01; s += 2, k++) {
+          const p = F1.trackPoint(T, s, side * (hw - 0.45));
+          if (k) edges.lineTo(p.x, p.y); else edges.moveTo(p.x, p.y);
+        }
+      }
+      G.bridge = { road: road, shadow: shadow, edges: edges, w: wU, cx: B.x, cy: B.y, r: B.span + wU + 10 };
     }
 
     // start/finish chequers, grid boxes, DRS lines
@@ -365,8 +402,27 @@
     const tracePath = function () { mc.beginPath(); for (let i = 0; i <= N; i += 3) { const k = i % N; const px = X[k] * sc + ox, py = Y[k] * sc + oy; if (i === 0) mc.moveTo(px, py); else mc.lineTo(px, py); } mc.closePath(); };
     tracePath(); mc.strokeStyle = 'rgba(0,0,0,0.65)'; mc.lineWidth = 7; mc.stroke();
     tracePath(); mc.strokeStyle = '#e9edf1'; mc.lineWidth = 3; mc.stroke();
+    // a bridge (Suzuka): the upper road drawn again on top, with dark edges, so it reads as an overpass
+    if (T.bridge) {
+      const up = T.bridge.up, mbr = function () {
+        mc.beginPath();
+        for (let s = up[0] - 30, k = 0; s <= up[1] + 30; s += 6, k++) { const p = F1.trackPoint(T, s, 0); if (k) mc.lineTo(p.x * sc + ox, p.y * sc + oy); else mc.moveTo(p.x * sc + ox, p.y * sc + oy); }
+      };
+      mc.lineCap = 'butt';
+      mbr(); mc.strokeStyle = 'rgba(0,0,0,0.85)'; mc.lineWidth = 8; mc.stroke();
+      mbr(); mc.strokeStyle = '#e9edf1'; mc.lineWidth = 3; mc.stroke();
+    }
+    // start / finish: a small chequered stripe across the track line
     const s0 = F1.trackPoint(T, 0, 0);
-    mc.fillStyle = '#e10600'; mc.beginPath(); mc.arc(s0.x * sc + ox, s0.y * sc + oy, 3.5, 0, TAU); mc.fill();
+    mc.save();
+    mc.translate(s0.x * sc + ox, s0.y * sc + oy);
+    mc.rotate(s0.h);
+    mc.fillStyle = 'rgba(0,0,0,0.8)'; mc.fillRect(-3, -7, 6, 14);
+    for (let a = 0; a < 2; a++) for (let b = 0; b < 6; b++) {
+      mc.fillStyle = (a + b) % 2 ? '#111' : '#fff';
+      mc.fillRect(-2 + a * 2, -6 + b * 2, 2, 2);
+    }
+    mc.restore();
     G.mini = { canvas: mm, size: MS, sc: sc, ox: ox, oy: oy };
 
     // grass stripes pattern (in world metres)
@@ -516,6 +572,11 @@
     ctx.fillStyle = COL.kerbR; ctx.fill(merge('kerbR'));
     ctx.strokeStyle = COL.line; ctx.lineWidth = 0.28; ctx.lineCap = 'butt';
     ctx.stroke(merge('edges'));
+    if (T.hwE && vis.some(function (ch) { return ch.narrow; })) {
+      ctx.fillStyle = COL.stone; ctx.fill(merge('narrowFill'));
+      ctx.strokeStyle = COL.stoneEdge; ctx.lineWidth = 0.9; ctx.stroke(merge('narrowLine'));
+      ctx.strokeStyle = COL.barrier; ctx.lineWidth = 0.35; ctx.stroke(merge('narrowLine'));
+    }
     ctx.fillStyle = '#f5f5f5'; ctx.fill(G.chequerW);
     ctx.fillStyle = '#111'; ctx.fill(G.chequerB);
     ctx.strokeStyle = 'rgba(255,255,255,0.85)'; ctx.lineWidth = 0.22; ctx.stroke(G.marks);
@@ -535,16 +596,24 @@
     }
 
 
-    // cars
-    const cars = frame.cars;
-    for (let i = 0; i < cars.length; i++) {
-      const c = cars[i];
-      if (Math.abs(c.x - vc[0]) > vr + 6 || Math.abs(c.y - vc[1]) > vr + 6) continue;
-      if (c.me) this.drawMeGlow(ctx, c);
+    // cars (at a bridge: the cars underneath first, then the bridge, then everyone else)
+    const cars = frame.cars, self = this;
+    const drawOne = function (c) {
+      if (Math.abs(c.x - vc[0]) > vr + 6 || Math.abs(c.y - vc[1]) > vr + 6) return;
+      if (c.me) self.drawMeGlow(ctx, c);
       ctx.globalAlpha = c.replay ? 0.38 : c.ghost ? 0.42 : 1;
-      this.drawCar(ctx, c, c.team, c.delta || 0, c.drsOpen);
+      self.drawCar(ctx, c, c.team, c.delta || 0, c.drsOpen);
       ctx.globalAlpha = 1;
-      if (!c.replay) this.trackSkids(c, T);
+      if (!c.replay) self.trackSkids(c, T);
+    };
+    const BR = G.bridge && Math.hypot(G.bridge.cx - vc[0], G.bridge.cy - vc[1]) < G.bridge.r + vr ? G.bridge : null;
+    if (BR) {
+      const lv = function (c) { return c.lvl !== undefined ? c.lvl : F1.levelNear(T, c.x, c.y, c.a); };
+      for (let i = 0; i < cars.length; i++) if (lv(cars[i]) < 0) drawOne(cars[i]);
+      this.drawBridge(ctx, BR, T);
+      for (let i = 0; i < cars.length; i++) if (lv(cars[i]) >= 0) drawOne(cars[i]);
+    } else {
+      for (let i = 0; i < cars.length; i++) drawOne(cars[i]);
     }
 
     // particles
@@ -561,6 +630,20 @@
       if (c.me) this.drawYouTag(ctx, sp[0], sp[1] - 3.6 * cam.z - 14);
       else if (frame.labels) this.drawLabel(ctx, sp[0], sp[1] - 3.2 * cam.z - 8, c);
     }
+  };
+
+  /* The bridge deck: shadow on the road below, concrete sides, barriers, the road and its edge lines. */
+  Renderer.prototype.drawBridge = function (ctx, B, T) {
+    ctx.save();
+    ctx.lineJoin = 'round'; ctx.lineCap = 'butt';
+    ctx.strokeStyle = 'rgba(0,0,0,0.32)'; ctx.lineWidth = 2 * B.w + 3; ctx.stroke(B.shadow);
+    ctx.strokeStyle = COL.bridgeSide; ctx.lineWidth = 2 * B.w + 3; ctx.stroke(B.road);
+    ctx.strokeStyle = COL.armco; ctx.lineWidth = 2 * B.w + 1.6; ctx.stroke(B.road);
+    ctx.strokeStyle = COL.barrier; ctx.lineWidth = 2 * B.w + 0.8; ctx.stroke(B.road);
+    ctx.strokeStyle = COL.deck; ctx.lineWidth = 2 * B.w; ctx.stroke(B.road);
+    ctx.strokeStyle = COL.asphalt; ctx.lineWidth = 2 * T.hw; ctx.stroke(B.road);
+    ctx.strokeStyle = COL.line; ctx.lineWidth = 0.28; ctx.stroke(B.edges);
+    ctx.restore();
   };
 
   Renderer.prototype.drawPit = function (ctx, pit, T, frame) {
@@ -910,15 +993,28 @@
       ctx.drawImage(mm.canvas, mx, my, ms, ms);
       const k = ms / mm.size;
       const cars = frame.cars;
-      for (let pass = 0; pass < 2; pass++) {
-        for (let i = 0; i < cars.length; i++) {
-          const c = cars[i];
-          if (!!c.me !== (pass === 1) || c.replay) continue;
-          const px = mx + (c.x * mm.sc + mm.ox) * k, py = my + (c.y * mm.sc + mm.oy) * k;
-          ctx.beginPath(); ctx.arc(px, py, c.me ? 5 : 3, 0, TAU);
-          ctx.fillStyle = F1.teamUiColor(c.team); ctx.fill();
-          ctx.lineWidth = c.me ? 2 : 1; ctx.strokeStyle = c.me ? '#ffd600' : 'rgba(0,0,0,0.7)'; ctx.stroke();
-        }
+      // everyone else: small team-coloured dots
+      let meCar = null;
+      for (let i = 0; i < cars.length; i++) {
+        const c = cars[i];
+        if (c.replay) continue;
+        if (c.me) { meCar = c; continue; }
+        const px = mx + (c.x * mm.sc + mm.ox) * k, py = my + (c.y * mm.sc + mm.oy) * k;
+        ctx.beginPath(); ctx.arc(px, py, compact ? 2.5 : 3, 0, TAU);
+        ctx.fillStyle = F1.teamUiColor(c.team); ctx.fill();
+        ctx.lineWidth = 1; ctx.strokeStyle = 'rgba(0,0,0,0.7)'; ctx.stroke();
+      }
+      // you: an arrow pointing the way you are driving, on top of everything
+      if (meCar) {
+        const px = mx + (meCar.x * mm.sc + mm.ox) * k, py = my + (meCar.y * mm.sc + mm.oy) * k, as = compact ? 0.85 : 1;
+        ctx.save();
+        ctx.translate(px, py); ctx.rotate(meCar.a); ctx.scale(as, as);
+        ctx.beginPath(); ctx.moveTo(9, 0); ctx.lineTo(-6, -6.5); ctx.lineTo(-2.5, 0); ctx.lineTo(-6, 6.5); ctx.closePath();
+        ctx.lineJoin = 'round';
+        ctx.lineWidth = 6; ctx.strokeStyle = 'rgba(0,0,0,0.75)'; ctx.stroke();
+        ctx.lineWidth = 3; ctx.strokeStyle = '#ffffff'; ctx.stroke();
+        ctx.fillStyle = F1.teamUiColor(meCar.team); ctx.fill();
+        ctx.restore();
       }
       let fy = my + ms + 8;
       if (hud.timeLeft) {
@@ -927,6 +1023,18 @@
         ctx.fillStyle = '#fff'; ctx.font = '700 13px ' + FONT; ctx.textAlign = 'center';
         ctx.fillText(hud.timeLeft, mx + ms / 2, fy + 13);
         fy += 34;
+      }
+      // online: connection indicator (green good / amber / red, and whether it is the server, you or a friend)
+      if (hud.conn) {
+        const c = hud.conn, col = c.lvl >= 2 ? '#ff5a4f' : c.lvl === 1 ? '#ffd600' : '#19c94a';
+        ctx.fillStyle = 'rgba(10,10,14,0.86)';
+        roundRect(ctx, mx, fy, ms, 24, 5); ctx.fill();
+        if (c.lvl) { ctx.fillStyle = col; ctx.fillRect(mx, fy, 3, 24); }
+        ctx.beginPath(); ctx.arc(mx + 14, fy + 12, 4.5, 0, TAU); ctx.fillStyle = col; ctx.fill();
+        ctx.font = '800 ' + (compact ? 10 : 11) + 'px ' + FONT; ctx.textAlign = 'left';
+        ctx.fillStyle = c.lvl ? col : '#cfd3d8';
+        ctx.fillText(c.text, mx + 25, fy + 12.5);
+        fy += 32;
       }
     }
 
@@ -955,7 +1063,7 @@
     }
 
     // ---- centre messages
-    let my2 = hud.lights !== undefined && hud.lights !== null ? 128 : 26;
+    let my2 = hud.resume ? 152 : hud.lights !== undefined && hud.lights !== null ? 128 : 26;
     if (hud.msgs) {
       for (let i = 0; i < hud.msgs.length; i++) {
         const m = hud.msgs[i];
@@ -1005,6 +1113,17 @@
       ctx.lineWidth = 6; ctx.strokeStyle = 'rgba(0,0,0,0.6)'; ctx.strokeText(hud.centre.text, W / 2, H * 0.36);
       ctx.fillStyle = hud.centre.color || '#fff'; ctx.fillText(hud.centre.text, W / 2, H * 0.36);
     }
+    // resuming after a pause: 3, 2, 1 with the game still frozen (at the top, so the road ahead stays in view)
+    if (hud.resume) {
+      const bw2 = 150, bh2 = 126, bx2 = W / 2 - bw2 / 2, by2 = 16;
+      ctx.fillStyle = 'rgba(10,10,14,0.86)';
+      roundRect(ctx, bx2, by2, bw2, bh2, 14); ctx.fill();
+      ctx.fillStyle = '#e10600'; ctx.fillRect(bx2 + 16, by2 + bh2 - 28, bw2 - 32, 3);
+      ctx.textAlign = 'center'; ctx.fillStyle = '#fff'; ctx.font = '900 80px ' + FONT;
+      ctx.fillText(String(hud.resume), W / 2, by2 + 54);
+      ctx.font = '800 13px ' + FONT; ctx.fillStyle = '#cfd3d8';
+      ctx.fillText('GET READY', W / 2, by2 + bh2 - 12);
+    }
 
     // ---- bottom dashboard
     if (hud.speed !== undefined) {
@@ -1031,7 +1150,7 @@
       ctx.textAlign = 'right'; ctx.fillStyle = '#fff'; ctx.font = '800 42px ' + FONT;
       ctx.fillText(String(hud.speed), bx + 146, by + 36);
       ctx.font = '700 11px ' + FONT; ctx.fillStyle = '#9aa1a8'; ctx.textAlign = 'left';
-      ctx.fillText('KM/H', bx + 150, by + 46);
+      ctx.fillText(hud.unit || 'KM/H', bx + 150, by + 46);
       // DRS indicator
       const dx = bx + 14, dy = by + bh - 28, dw = 172;
       const st = hud.drs;
@@ -1039,7 +1158,7 @@
         ctx.fillStyle = Math.floor(performance.now() / 400) % 2 ? '#1f6bff' : '#1752c4';
         roundRect(ctx, dx, dy, dw, 18, 4); ctx.fill();
         ctx.font = '800 11px ' + FONT; ctx.textAlign = 'center'; ctx.fillStyle = '#fff';
-        ctx.fillText('PIT LIMITER  80 KM/H', dx + dw / 2, dy + 9.5);
+        ctx.fillText(hud.unit === 'MPH' ? 'PIT LIMITER  50 MPH' : 'PIT LIMITER  80 KM/H', dx + dw / 2, dy + 9.5);
       } else {
         ctx.fillStyle = st === 'open' ? '#19c94a' : 'rgba(40,40,48,0.95)';
         roundRect(ctx, dx, dy, dw, 18, 4); ctx.fill();
@@ -1085,11 +1204,6 @@
       roundRect(ctx, 12, H - hh - 14, hw2, hh, 6); ctx.fill();
       ctx.fillStyle = '#e9edf1';
       for (let i = 0; i < lines.length; i++) ctx.fillText(lines[i], 22, H - hh - 14 + 16 + i * 17);
-    }
-    if (hud.ping !== undefined && hud.ping !== null) {
-      ctx.fillStyle = hud.ping < 80 ? '#7dff9b' : hud.ping < 160 ? '#ffd600' : '#ff5a4f';
-      ctx.textAlign = 'right';
-      ctx.fillText('PING ' + hud.ping + ' ms', W - 92, H - 18);
     }
   };
 

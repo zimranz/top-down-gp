@@ -198,12 +198,79 @@
         120.2,-84.1,146.7,-88.5,161.5,-93.7,179.6,-105,195.3,-121.3,204.2,-135,208.1,-149.3,207.5,-164.4,
         204.9,-178.5,199.3,-194.1,191.8,-208.9,180,-218,168.8,-228.5,163.3,-233.3,158.3,-238.4
       ]
+    },
+    suzuka: {
+      id: 'suzuka', name: 'Suzuka', country: 'Japan', officialLength: 5807,
+      halfWidth: 8.2, runoff: 30, startAt: 0,
+      bridge: { upAt: 137.7 },            // the back straight goes over the road from Degner to the hairpin
+      pts: [
+        685.8,137.7,806.9,282.5,948.6,455,961.6,473.2,968.8,492.3,972.6,509.4,972.3,526.2,970.2,539.1,
+        953.6,589.9,945.8,603.2,934.4,613.2,924.8,618.6,907.5,622.8,891.8,622.3,874.5,616.5,858.4,603.9,
+        842.1,579.4,758.5,451.9,742.7,438.5,729.1,434.2,708.5,430.7,665.3,430.3,643.6,424.1,628.2,413.4,
+        616.6,399.4,611.1,385.7,591.7,312.2,583.5,293.4,570.6,277.3,555.5,266.4,536.5,257.5,517,253.9,
+        466.8,253.1,443.6,248.7,427.7,241.1,411.2,228.5,399.2,211,391.8,193,388.4,176.1,388.6,160,
+        391.7,146.3,416.4,79.3,420.1,65.7,420.7,47.8,418.1,35.9,411.6,18.8,401.9,4.2,383.4,-8.9,
+        360.8,-21,334,-34.4,310.5,-43.8,292.9,-48.7,268.3,-52.8,240.3,-53.2,218.3,-52.3,199.9,-47.5,
+        185,-41.1,161.8,-31.3,137.4,-17.7,109.4,5.1,87.5,28.2,-4.7,139.2,-9.5,145.6,-24.2,149,
+        -158.9,161.1,-167.5,160,-176.8,153.8,-180.5,143.3,-182.2,134.4,-202.6,50.8,-229.9,-106.2,-235.1,-135,
+        -236.4,-149.6,-235,-164.7,-232,-180.2,-225.8,-196.4,-218.8,-212.4,-197,-262,-194.8,-269.6,-196.4,-276.6,
+        -200.5,-283,-207.5,-287.7,-215.7,-290.3,-223.5,-289.7,-232.5,-283.7,-239.9,-273.1,-271.6,-218.7,-297.4,-177.7,
+        -314.2,-153.4,-328.1,-137.3,-340,-127.2,-360.6,-111,-382.2,-99.5,-404.9,-92.8,-444.4,-87,-481.7,-85.5,
+        -509.9,-87.6,-543.4,-94.9,-580.1,-105.2,-621.2,-120.4,-647.2,-132.4,-669.9,-146,-690.9,-161.6,-713.1,-181.4,
+        -736.1,-206.6,-751.2,-228.6,-764.9,-252.7,-798.5,-341.6,-816.5,-380.5,-825.6,-396.1,-838,-407.6,-854.3,-414.9,
+        -873.8,-418.5,-897,-418,-918.6,-414.9,-939.7,-410.2,-960.3,-401.8,-977.1,-389.1,-987.2,-373,-991.2,-357.2,
+        -990,-337.3,-985.4,-322.4,-978.7,-307.5,-967.3,-295,-944.7,-274,-916.5,-250.7,-888.9,-226.7,-853.9,-200.4,
+        -813.9,-173.3,-773,-147.9,-727.2,-126.2,-686.3,-105.4,-644.3,-89.5,-576,-66,-500.9,-36.9,-410,-5.3,
+        -319.8,23,-257.4,44.4,-176.8,75.1,-158.3,79.7,-139.9,80.3,-120.5,76.6,-101.6,71.4,-67.5,58.4,
+        -36.2,42.8,-9.8,26.6,17.4,5.6,68.3,-41.7,138,-106.3,157.3,-122.2,171.1,-131.8,183.7,-140.1,
+        192.7,-145.4,197.5,-145.9,203.9,-143.2,219.7,-129.3,231,-119.9,240.2,-117.2,248.9,-118.9,259.1,-125.6,
+        275.9,-140.8,294.8,-154.3,315.9,-163.1,341.7,-165.3,365.7,-164,391.1,-158.8,416.5,-149,438.1,-138.7,
+        465.1,-120.4,489.4,-98,514.4,-70.3
+      ]
+    },
+    montreal: {
+      id: 'montreal', name: 'Montreal', short: 'Montreal', country: 'Canada', officialLength: 4361,
+      halfWidth: 8.2, runoff: 12, startAt: 0, startShift: 160,
+      tight: [[96, 99.6, 1.6]],          // the Wall of Champions: barriers right at the exit of the last chicane
+      pts: [
+        250.2,286.9,273.8,395.8,291.4,476,301.1,535.4,302.4,584.4,287.2,715.8,290,731.5,300.6,741.3,
+        339.9,758.6,347.7,764.3,351.4,775.7,350,787.2,344.5,798.7,333.9,807.5,320.5,812.7,302.9,812.7,
+        283.6,808.5,237.4,795.6,205.9,785.1,176,769,147.3,750.2,81.3,693.9,42,657.4,34.6,646,
+        32.8,636.6,33.3,627.2,40.1,606.3,42.5,593.4,41.1,582.9,36.5,574,-38.8,482.8,-52.2,471.4,
+        -77.6,453.6,-92.8,441.1,-109.4,419.2,-118.7,395.8,-125.2,371.8,-127.4,352.5,-127,210.2,-127,198.3,
+        -132,188.9,-141.3,181.6,-157.5,177.9,-179.2,183.1,-191.7,184.7,-206.9,180.5,-219.8,172.2,-229,163.3,
+        -237.4,152.4,-242.4,142.4,-249.4,122.7,-255.4,98.2,-262.3,67.9,-263.2,42.4,-272,-66.5,-271.1,-125.5,
+        -269.7,-172.9,-265.5,-225,-260,-266.1,-254.5,-298.5,-215.7,-453.8,-209.2,-467.9,-199.9,-473.6,-190.3,-475.7,
+        -176,-476.8,-164.9,-480.4,-154.2,-486.6,-142.7,-498.7,-133.9,-512.7,-126,-531.9,-87.7,-686.7,-72.5,-770.7,
+        -67.4,-829.6,-65.1,-890.1,-65.6,-909.9,-67.9,-930.7,-96.1,-1068.3,-97,-1076.6,-96.1,-1083.9,-89.6,-1091.2,
+        -77.1,-1093.3,-69.2,-1090.7,-63.7,-1084.5,-61.9,-1079.3,-58.6,-1048.5,-54,-1001.6,-52.2,-986,-46.2,-968.7,
+        -25.9,-927.6,-7.8,-891.1,83.1,-657.6,93.7,-627.4,228.6,13.7,234.1,40.3,232.8,49.1,226.8,56,
+        216.1,60.1,209.2,66.9,206.4,74.7,206.9,84.6,231.4,195.6
+      ]
+    },
+    baku: {
+      id: 'baku', name: 'Baku', country: 'Azerbaijan', officialLength: 6003,
+      halfWidth: 7.5, runoff: 6, street: true, startAt: 0, startShift: -150,
+      narrow: [[31.2, 39.4, 4.6]],       // the old town by the castle: only about 9 m between the walls
+      pts: [
+        1059.4,-414.5,1210,-478.7,1218,-485,1223.1,-494.3,1224.1,-503.2,1221.6,-516.2,1182,-600.6,1139.2,-694.5,
+        1096.5,-790.9,1089.5,-795.6,1080.5,-797.1,936.4,-739.9,760.2,-672.1,519.7,-564.7,312.4,-470.4,294.6,-460.3,
+        291.1,-438.7,368.1,-251.7,367.3,-239.3,314.7,-215.4,210.7,-171.3,140.1,-129,100,-103.8,82.7,-82.7,
+        83.1,-60.4,93.5,-33.7,87.1,-25.1,69.4,-17.7,-65.8,84.6,-160.7,157.1,-200.6,186.3,-212.3,198.5,
+        -221.6,203.2,-229.3,194.2,-281.1,46.7,-289.3,23.5,-298,20.3,-310.9,24.7,-327.6,15.4,-341.3,9,
+        -366.6,10.4,-381.8,8.4,-389.1,2.4,-393,-12.5,-402.5,-41.8,-412.5,-56.2,-427,-54.7,-486.8,-33.4,
+        -540.6,-11.7,-659.8,44,-747.2,96.3,-768.9,112.7,-781.7,137.8,-805,216.3,-832.4,311.7,-833.6,329.7,
+        -821.9,527.1,-823.1,545.8,-818.3,555.7,-617.3,660.7,-582,677.1,-542.7,696.6,-515.8,707.4,-501.8,704.2,
+        -488.8,684.7,-462.5,636.9,-434.3,584.2,-407.9,534,-400.7,524.3,-255,392.6,-234.2,373.4,-221.7,344.3,
+        -205.7,245.4,-200.4,223.8,-188.8,207,-164,188.6,34.7,36.2,71.1,9.8,93.3,-2.5,158.3,-32.4,
+        299,-91.9,434.7,-150.9,568.7,-207.8,672.4,-252,906.3,-351
+      ]
     }
   };
   // menus list the circuits in calendar order
   F1.TRACK_DEFS = (function (d) {
     const o = {};
-    ['jeddah', 'monaco', 'redbullring', 'silverstone', 'spa', 'monza', 'interlagos', 'abudhabi'].forEach(function (k) { if (d[k]) o[k] = d[k]; });
+    ['suzuka', 'jeddah', 'montreal', 'monaco', 'redbullring', 'silverstone', 'spa', 'monza', 'baku', 'interlagos', 'abudhabi'].forEach(function (k) { if (d[k]) o[k] = d[k]; });
     Object.keys(d).forEach(function (k) { if (!o[k]) o[k] = d[k]; });
     return o;
   })(F1.TRACK_DEFS);
@@ -288,10 +355,12 @@
       X.set(tmpX); Y.set(tmpY);
     }
     // re-parameterise by arc length after smoothing so spacing is exactly uniform
+    let posK = 1;
     {
       const c2 = new Float64Array(N + 1);
       for (let i = 0; i < N; i++) c2[i + 1] = c2[i] + Math.hypot(X[(i + 1) % N] - X[i], Y[(i + 1) % N] - Y[i]);
       const k2 = L / c2[N];
+      posK = k2;
       const nx = new Float64Array(N), ny = new Float64Array(N);
       let q = 0;
       for (let i = 0; i < N; i++) {
@@ -333,8 +402,44 @@
       T.curv[i] = s / 9;
     }
 
+    /* Where outline vertex v (may be fractional) ended up on the finished track, as s in metres. */
+    const vertexS = function (v) {
+      let sRaw = 0;
+      for (let i = 0; i < D; i++) {
+        if (dense[i].v <= v && (i === D - 1 || dense[i + 1].v > v)) {
+          const nextV = i === D - 1 ? P.length : dense[i + 1].v;
+          sRaw = (cum[i] + (v - dense[i].v) / Math.max(1e-9, nextV - dense[i].v) * (cum[i + 1] - cum[i])) * scale;
+          break;
+        }
+      }
+      const s0 = wrapS(sRaw - sStart, L);
+      const v0 = Math.floor(v), f = v - v0, a = P[v0 % P.length], b = P[(v0 + 1) % P.length];
+      const px = (a[0] + (b[0] - a[0]) * f) * scale * posK, py = (a[1] + (b[1] - a[1]) * f) * scale * posK;
+      let best = Infinity, bs = s0;
+      for (let k = -75; k <= 75; k++) {
+        const i = F1.idxAt(T, s0 + k * ds), d = Math.hypot(X[i] - px, Y[i] - py);
+        if (d < best) { best = d; bs = i * ds; }
+      }
+      return bs;
+    };
+    // usable half width at every point: the full width, except narrow sections (Baku's old town)
+    T.hwE = new Float64Array(N).fill(hw);
+    (def.narrow || []).forEach(function (z) {
+      const a = vertexS(z[0]), len = wrapS(vertexS(z[1]) - a, L), w = z[2], taper = 24;
+      for (let k = Math.ceil((a - taper) / ds); k <= Math.floor((a + len + taper) / ds); k++) {
+        const i = ((k % N) + N) % N, rel = k * ds - a;
+        const e = Math.min(1, rel < 0 ? -rel / taper : rel > len ? (rel - len) / taper : 0);
+        const hv = w + (hw - w) * e * e * (3 - 2 * e);
+        if (hv < T.hwE[i]) T.hwE[i] = hv;
+      }
+    });
+    T.bridge = def.bridge ? findBridge(T, vertexS(def.bridge.upAt)) : null;
+
     markCorners(T);
-    computeWalls(T, hw + def.runoff);
+    // narrow sections have walls instead of kerbs; no gravel traps under / on a bridge
+    for (let i = 0; i < N; i++) if (T.hwE[i] < hw - 0.3) { T.kerb[i] = 0; T.gravel[i] = 0; }
+    if (T.bridge) for (let i = 0; i < N; i++) if (F1.levelAt(T, i * ds) !== 0) T.gravel[i] = 0;
+    computeWalls(T, hw + def.runoff, def, vertexS);
     findDrsZones(T);
     computePit(T);
     // pole position goes on the inside of the first proper corner
@@ -398,7 +503,7 @@
   }
 
   /* Barrier distance: normally hw + runoff, closer where two parts of the circuit run near each other. */
-  function computeWalls(T, maxWall) {
+  function computeWalls(T, maxWall, def, vertexS) {
     const N = T.n, X = T.x, Y = T.y, L = T.length, ds = T.ds;
     const cell = 60, grid = new Map();
     const key = function (cx, cy) { return cx * 100003 + cy; };
@@ -424,6 +529,12 @@
       }
       T.wall[i] = Math.max(T.hw + (T.street ? 1.8 : 4), Math.min(maxWall, best / 2 - 3));   // street circuits: walls right by the track
     }
+    // narrow sections: walls just outside the usable width; 'tight' sections: barriers right by the track
+    for (let i = 0; i < N; i++) if (T.hwE[i] < T.hw - 0.01) T.wall[i] = Math.min(T.wall[i], T.hwE[i] + 0.5);
+    ((def && def.tight) || []).forEach(function (z) {
+      const a = vertexS(z[0]), len = wrapS(vertexS(z[1]) - a, L);
+      forRange(T, a, a + len, function (i) { T.wall[i] = Math.min(T.wall[i], T.hw + z[2]); });
+    });
     // smooth so barriers do not zig-zag
     const tmp = new Float32Array(N);
     for (let it = 0; it < 3; it++) {
@@ -548,9 +659,65 @@
     return F1.trackPoint(T, second ? g.mid - Math.min(7, Math.max(5.5, (wrapS(g.s1 - g.s0, T.length)) / 2 - 1)) : g.mid, P.side * P.boxOff);
   };
 
+  /* A road that crosses over another one (Suzuka). Finds where the centreline crosses itself; the branch
+     nearest upS is the upper road (on the bridge). Cars within 'span' metres of the crossing along their
+     own road are on level +1 (bridge) or -1 (underneath): cars on different levels never touch. */
+  function findBridge(T, upS) {
+    const N = T.n, X = T.x, Y = T.y, L = T.length, ds = T.ds;
+    const cell = 30, grid = new Map(), key = function (cx, cy) { return cx * 100003 + cy; };
+    for (let i = 0; i < N; i++) {
+      const k = key(Math.floor(X[i] / cell), Math.floor(Y[i] / cell));
+      if (!grid.has(k)) grid.set(k, []);
+      grid.get(k).push(i);
+    }
+    let hit = null;
+    for (let i = 0; i < N && !hit; i++) {
+      const i2 = (i + 1) % N, cx = Math.floor(X[i] / cell), cy = Math.floor(Y[i] / cell);
+      for (let gx = cx - 1; gx <= cx + 1 && !hit; gx++) for (let gy = cy - 1; gy <= cy + 1 && !hit; gy++) {
+        const list = grid.get(key(gx, gy));
+        if (!list) continue;
+        for (let q = 0; q < list.length; q++) {
+          const j = list[q], j2 = (j + 1) % N;
+          let sd = Math.abs(i - j) * ds; if (sd > L / 2) sd = L - sd;
+          if (sd < 200) continue;
+          const rx = X[i2] - X[i], ry = Y[i2] - Y[i], sx = X[j2] - X[j], sy = Y[j2] - Y[j];
+          const den = rx * sy - ry * sx;
+          if (Math.abs(den) < 1e-9) continue;
+          const t = ((X[j] - X[i]) * sy - (Y[j] - Y[i]) * sx) / den, u = ((X[j] - X[i]) * ry - (Y[j] - Y[i]) * rx) / den;
+          if (t >= 0 && t <= 1 && u >= 0 && u <= 1) { hit = { a: (i + t) * ds, b: (j + u) * ds, x: X[i] + rx * t, y: Y[i] + ry * t }; break; }
+        }
+      }
+    }
+    if (!hit) return null;
+    const near = function (s) { let d = Math.abs(s - upS) % L; return Math.min(d, L - d); };
+    const sU = near(hit.a) <= near(hit.b) ? hit.a : hit.b, sD = sU === hit.a ? hit.b : hit.a;
+    const iU = F1.idxAt(T, sU), iD = F1.idxAt(T, sD);
+    const sin = Math.abs(T.tx[iU] * T.ty[iD] - T.ty[iU] * T.tx[iD]);
+    const span = Math.max(30, Math.min(90, (T.hw + 8) * 2 / Math.max(0.35, sin)));
+    return { sU: sU, sD: sD, span: span, x: hit.x, y: hit.y, hdU: T.hd[iU], hdD: T.hd[iD], sin: sin,
+      up: [sU - span, sU + span], down: [sD - span, sD + span] };
+  }
+
+  /* +1 on the bridge, -1 underneath it, 0 anywhere else (s = distance along the track). */
+  F1.levelAt = function (T, s) {
+    const B = T.bridge;
+    if (!B) return 0;
+    const L = T.length;
+    let d = s - B.sU; d -= Math.round(d / L) * L;
+    if (d > -B.span && d < B.span) return 1;
+    d = s - B.sD; d -= Math.round(d / L) * L;
+    if (d > -B.span && d < B.span) return -1;
+    return 0;
+  };
+  /* The same from a position and heading only (for drawing a car whose track position is not known). */
+  F1.levelNear = function (T, x, y, a) {
+    const B = T.bridge;
+    if (!B || Math.hypot(x - B.x, y - B.y) > B.span + 12) return 0;
+    return Math.abs(Math.cos(a - B.hdU)) >= Math.abs(Math.cos(a - B.hdD)) ? 1 : -1;
+  };
+
   function computeRacingLine(T) {
-    const N = T.n, X = T.x, Y = T.y, NX = T.nx, NY = T.ny;
-    const lim = T.hw - 1.3;
+    const N = T.n, X = T.x, Y = T.y, NX = T.nx, NY = T.ny, HWE = T.hwE;
     const o = new Float64Array(N);
     const passes = [[24, 120], [12, 140], [6, 160], [3, 200], [1, 260]];
     for (const pass of passes) {
@@ -561,6 +728,7 @@
           const mx = 0.5 * (X[a] + NX[a] * o[a] + X[b] + NX[b] * o[b]);
           const my = 0.5 * (Y[a] + NY[a] * o[a] + Y[b] + NY[b] * o[b]);
           let t = (mx - X[i]) * NX[i] + (my - Y[i]) * NY[i];
+          const lim = HWE[i] - 1.3;
           if (t > lim) t = lim; else if (t < -lim) t = -lim;
           o[i] = t;
         }
@@ -587,7 +755,7 @@
 
   /* Nearest point on the centreline. hint = previous index (fast local search) or -1 (full search).
      Writes idx, s, d (signed: + is right of the travel direction), dist, cx, cy into out. */
-  F1.queryTrack = function (T, x, y, hint, out) {
+  F1.queryTrack = function (T, x, y, hint, out, heading) {
     const N = T.n, X = T.x, Y = T.y;
     let bi = 0, bd = Infinity;
     if (hint === undefined || hint === null || hint < 0) {
@@ -595,6 +763,16 @@
         const dx = x - X[i], dy = y - Y[i];
         const d = dx * dx + dy * dy;
         if (d < bd) { bd = d; bi = i; }
+      }
+      // at a bridge the nearest road may be the other level: the car's heading tells which road it is on
+      if (T.bridge && heading !== undefined && F1.levelAt(T, bi * T.ds) !== 0) {
+        const B = T.bridge, other = F1.levelAt(T, bi * T.ds) > 0 ? B.sD : B.sU, m = Math.ceil(B.span / T.ds);
+        let oi = -1, od = Infinity;
+        for (let k = -m; k <= m; k++) {
+          const i = F1.idxAt(T, other + k * T.ds), dx = x - X[i], dy = y - Y[i], d = dx * dx + dy * dy;
+          if (d < od) { od = d; oi = i; }
+        }
+        if (oi >= 0 && Math.sqrt(od) < Math.sqrt(bd) + 12 && Math.abs(Math.cos(heading - T.hd[oi])) > Math.abs(Math.cos(heading - T.hd[bi]))) { bi = oi; bd = od; }
       }
     } else {
       for (let k = -28; k <= 28; k++) {

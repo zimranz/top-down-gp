@@ -4,7 +4,7 @@
   const F1 = (root.F1 = root.F1 || {});
 
   // Game version: goes up by one with every update
-  F1.VERSION = 7;
+  F1.VERSION = 8;
 
   // Simple livery colours: primary = main body, secondary = engine cover / wings, accent = helmet & details.
   // ui = the team colour used for menus, the timing tower, labels and the minimap (bright on dark backgrounds).

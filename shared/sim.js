@@ -74,7 +74,8 @@
 
   F1.resetCar = function (c, T) {
     F1.queryTrack(T, c.x, c.y, c.seg, Q);
-    const p = F1.trackPoint(T, Q.s, clamp(Q.d, -T.hw + 2, T.hw - 2));
+    const hwE = T.hwE ? T.hwE[Q.idx] : T.hw;
+    const p = F1.trackPoint(T, Q.s, clamp(Q.d, -hwE + 2, hwE - 2));
     c.x = p.x; c.y = p.y; c.a = p.h;
     c.vx = 0; c.vy = 0; c.w = 0; c.delta = 0; c.slide = false; c.drsOpen = false;
     F1.queryTrack(T, c.x, c.y, Q.idx, Q);
@@ -406,7 +407,7 @@
       let k1 = minK;
       while (k1 < minK + 60 && v[(i + k1 + 1) % N] < minV + 0.6) k1++;
       const apexI = (i + Math.round((minK + k1) / 2)) % N;
-      out.push({ s: i * T.ds, apex: apexI * T.ds, turn: T.curv[apexI] >= 0 ? 1 : -1, vMin: minV });
+      out.push({ s: i * T.ds, apex: apexI * T.ds, turn: T.curv[apexI] >= 0 ? 1 : -1, vMin: minV, drop: b - minV });
     }
     T._bz[level] = out;
     return out;
@@ -499,7 +500,8 @@
     const prof = F1.speedProfile(T, S.aiLevel);
     const look = 8 + sp * 0.3;
     const i = F1.idxAt(T, c.s + look);
-    const room = T.hw - 1.05;
+    const hwE = Math.min(T.hwE[i], T.hwE[c.seg]);          // usable half width (less in narrow sections)
+    const room = hwE - 1.05;
     const cv = c.vx * T.tx[c.seg] + c.vy * T.ty[c.seg];      // speed along the track
     const zones = F1.brakeZones(T, S.aiLevel);
     const race = S.type === 'race';
@@ -626,6 +628,7 @@
         if (mkType === 'wide' && mkRel > mk.apexRel - 5) { want -= mk.turn * (3.5 + 5 * mk.sev); edge = T.hw + 4; }
         if (mkType === 'kerb' && mkRel > mk.apexRel - 35 && mkRel < mk.apexRel + 12) { want = mk.turn * (T.hw + 0.7); edge = T.hw + 1.3; }
         if (mkType === 'lockup' || mkType === 'dive') edge = T.hw + 4;
+        if (hwE < T.hw - 0.05) edge = Math.min(edge, hwE - 0.4);     // between walls: a mistake stays off them
       }
     }
 
@@ -637,7 +640,7 @@
     if (lo > hi) lo = hi = (lo + hi) / 2;               // squeezed between two cars: hold the middle
     if (latT < lo) latT = lo; else if (latT > hi) latT = hi;
     // squeezed towards the edge by a car alongside: we get forced wide onto the kerb / grass
-    if (lo > edge || hi < -edge) edge = Math.min(Math.max(lo, -hi), T.hw + 1.6);
+    if (lo > edge || hi < -edge) edge = Math.min(Math.max(lo, -hi), hwE < T.hw - 0.05 ? hwE - 0.3 : T.hw + 1.6);
     if (offTrack && rejoinBlocked) latT = c.d;          // wait at the edge until the cars have gone past
     latT = clamp(latT, -Math.max(edge, c.dist), Math.max(edge, c.dist));
     ai.latT = latT;
@@ -720,7 +723,8 @@
       for (let z = 0; z < zones.length; z++) {
         const Z = zones[z];
         if (!passed(ai.lastS, c.s, Z.s, L)) continue;
-        const attacking = ai.pass && !ai.pass.urgent && ai.pass.side === Z.turn && race;
+        // a late lunge only into a proper braking zone (hairpins, chicanes), not quick esses
+        const attacking = ai.pass && !ai.pass.urgent && ai.pass.side === Z.turn && race && Z.drop >= 25;
         let p = attacking ? lvl.divebomb : lvl.mistake / zones.length;
         if (race && c.lapsDone === 0) p *= 0.6;                 // a bit more careful in the opening-lap pack
         else if (chased) p *= 1.5;                              // pressure from the car behind
@@ -949,7 +953,7 @@
   };
 
   Session.prototype.resolveContacts = function () {
-    const cars = this.cars;
+    const cars = this.cars, T = this.track;
     for (let i = 0; i < cars.length; i++) {
       const A = cars[i];
       if (A.out) continue;
@@ -958,6 +962,7 @@
         if (B.out) continue;
         const dx = B.x - A.x, dy = B.y - A.y;
         if (dx * dx + dy * dy > 33) continue;
+        if (T.bridge && F1.levelAt(T, A.s) * F1.levelAt(T, B.s) < 0) continue;   // one on the bridge, one underneath
         const imp = F1.collideCars(A, B, true);
         if (imp > 1500) this.fx.push([Math.round(F1.lastContact.x * 10) / 10, Math.round(F1.lastContact.y * 10) / 10, Math.round(imp)]);
       }
@@ -1120,6 +1125,8 @@
     if (this.type === 'race') {
       arr.sort(function (a, b) {
         if (a.out !== b.out) return a.out ? 1 : -1;
+        // drivers who left: behind everyone still running, the later they left the higher they are placed
+        if (a.out && b.out && (a.outAt || 0) !== (b.outAt || 0)) return (b.outAt || 0) - (a.outAt || 0);
         if (a.finished && b.finished) return a.finishPos - b.finishPos;
         if (a.finished !== b.finished) return a.finished ? -1 : 1;
         return b.raceDist - a.raceDist;
@@ -1208,7 +1215,7 @@
       const fl = this.fastest ? this.byId[this.fastest.id] : null;
       const rows = order.map(function (c, i) {
         let gap;
-        if (c.out) gap = 'DNF';
+        if (c.out) gap = c.left ? 'LEFT' : 'DNF';
         else if (i === 0) gap = w.finished ? F1.fmtLap(w.finishTime - self.startTime + w.penalty) : 'LEADER';
         else if (c.finished && c.lapsDone >= w.lapsDone) gap = '+' + ((c.finishTime + c.penalty) - (w.finishTime + w.penalty)).toFixed(3) + 's';
         else {
@@ -1217,10 +1224,11 @@
           if (behind <= 0) gap = '+' + (c.gap + c.penalty).toFixed(3) + 's';
           else gap = '+' + behind + (behind === 1 ? ' LAP' : ' LAPS');
         }
-        // F1 points, +1 for the fastest lap if that driver finishes in the top 10
-        const isFl = c === fl, flPt = isFl && !c.out && i < 10;
-        const pts = c.out ? 0 : (POINTS[i] || 0) + (flPt ? 1 : 0);
-        return { pos: i + 1, id: c.id, driverId: c.driverId, isAI: c.isAI, name: c.name, laps: c.lapsDone, best: c.bestLap, gap: gap, out: c.out, pts: pts,
+        // F1 points for the position (drivers who left are still classified, behind the others),
+        // +1 for the fastest lap if that driver is in the top 10
+        const isFl = c === fl, flPt = isFl && i < 10;
+        const pts = (POINTS[i] || 0) + (flPt ? 1 : 0);
+        return { pos: i + 1, id: c.id, driverId: c.driverId, isAI: c.isAI, name: c.name, laps: c.lapsDone, best: c.bestLap, gap: gap, out: c.out, left: !!c.left, pts: pts,
           grid: c.grid, gained: c.out ? 0 : c.grid - (i + 1), ovt: c.overtakes, pen: c.penalty, fl: isFl, flPt: flPt };
       });
       this.stats = this.raceStats(rows);
@@ -1269,10 +1277,13 @@
     this.updateOrder();
   };
 
-  Session.prototype.retire = function (id) {
+  /* A driver leaves (online): the car is taken off the track. reason 'left' = the player left the room. */
+  Session.prototype.retire = function (id, reason) {
     const c = this.byId[id];
     if (!c || c.out) return;
     c.out = true;
+    c.outAt = this.time;
+    if (reason === 'left') c.left = true;
     c.vx = 0; c.vy = 0; c.w = 0;
     this.updateOrder();
   };

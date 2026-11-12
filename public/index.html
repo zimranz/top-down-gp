@@ -18,7 +18,7 @@
     <section id="home" class="screen active">
       <div class="brand">
         <div class="logo">TOP-DOWN <span>GP</span></div>
-        <div class="tag">2026 grid · 11 teams · 22 drivers · 8 circuits</div>
+        <div class="tag">2026 grid · 11 teams · 22 drivers · 11 circuits</div>
       </div>
       <div class="menu">
         <button class="btn big" data-go="practice">Practice</button>
@@ -26,11 +26,12 @@
         <button class="btn big" data-go="gp">Grand Prix</button>
         <button class="btn big" data-go="champ">Championship</button>
         <button class="btn big red" data-go="online">Online with friends</button>
+        <button class="btn big season hidden" id="home-rejoin">Rejoin season<small id="home-rejoin-sub"></small></button>
         <button class="btn" data-act="settings">Settings</button>
       </div>
       <div class="keys">
         <span><b>↑ / W</b> throttle</span><span><b>↓ / S</b> brake</span><span><b>← → / A D</b> steer</span>
-        <span><b>Shift / Space</b> DRS</span><span><b>R</b> reset car</span><span><b>C</b> camera</span><span><b>Esc</b> pause</span>
+        <span><b>Shift / Space</b> DRS</span><span><b>R</b> reset car</span><span><b>C</b> camera</span><span><b>F</b> full screen</span><span><b>Esc</b> pause</span>
       </div>
       <div class="version" id="version"></div>
     </section>
@@ -146,7 +147,7 @@
       <div class="cols">
         <div class="col narrow">
           <h3>Calendar</h3>
-          <p class="note cal-note">Click the tracks in the order you want to race them (2 to 8 races).</p>
+          <p class="note cal-note">Click the tracks in the order you want to race them (2 to 11 races).</p>
           <div class="tracks" id="champ-tracks"></div>
           <h3>Opponents</h3>
           <div class="row"><input type="range" id="champ-ai" min="1" max="21" value="15"><span class="val" id="champ-ai-val">15</span></div>
@@ -183,6 +184,7 @@
       </div>
       <div class="results-foot">
         <span id="st-note"></span>
+        <label class="st-car hidden" id="st-car-wrap">Your car<select id="st-car"></select></label>
         <div class="foot-btns">
           <button class="btn ghost" id="st-menu">Back to menu</button>
           <button class="btn" id="st-new">New season</button>
@@ -209,6 +211,13 @@
           <button class="btn" id="online-join">Join</button>
         </div>
         <div class="error" id="online-error"></div>
+        <div class="season-box hidden" id="online-season">
+          <div><b>Your online championship</b><span id="os-sub"></span></div>
+          <div class="row">
+            <button class="btn red" id="os-rejoin">Rejoin season</button>
+            <button class="btn ghost" id="os-end">End season</button>
+          </div>
+        </div>
         <p class="note">Up to 8 players per room. Empty seats are filled with AI drivers.</p>
       </div>
     </section>
@@ -226,7 +235,12 @@
           <ul class="players" id="lobby-players"></ul>
           <h3>Session settings <span class="muted" id="lobby-hostnote"></span></h3>
           <div class="settings-grid" id="lobby-settings">
-            <label>Track<select id="set-track"></select></label>
+            <label class="span2">Mode<select id="set-mode"><option value="single">Single race weekend</option><option value="champ">Championship (a season of races)</option></select></label>
+            <div class="lobby-cal span2" id="lobby-cal">
+              <div class="cal-head">Calendar <span id="lobby-cal-n"></span></div>
+              <div class="cal-chips" id="lobby-cal-chips"></div>
+            </div>
+            <label id="set-track-wrap">Track<select id="set-track"></select></label>
             <label>Practice 1<select id="set-p1"></select></label>
             <label>Practice 2<select id="set-p2"></select></label>
             <label>Practice 3<select id="set-p3"></select></label>
@@ -304,6 +318,16 @@
     </div>
   </div>
 
+  <!-- online championship: paused until the host comes back -->
+  <div id="hostaway" class="modal hidden">
+    <div class="modal-box">
+      <div class="pause-sign" aria-hidden="true"><span></span><span></span></div>
+      <h2>Season paused</h2>
+      <p id="hostaway-text">Waiting for the host to come back…</p>
+      <button class="btn ghost" id="hostaway-leave">Leave the room</button>
+    </div>
+  </div>
+
   <!-- SETTINGS -->
   <div id="settings" class="modal hidden">
     <div class="modal-box">
@@ -320,6 +344,11 @@
       <label>Camera distance <span class="muted-inline">(press C while driving)</span>
         <div class="seg" id="set-zoom">
           <button data-v="close">Close</button><button data-v="normal">Normal</button><button data-v="far">Far</button>
+        </div>
+      </label>
+      <label>Speed shown in
+        <div class="seg" id="set-units">
+          <button data-v="kmh">km/h</button><button data-v="mph">mph</button>
         </div>
       </label>
       <label class="check"><input type="checkbox" id="set-labels"> Show driver names above cars</label>
@@ -350,6 +379,16 @@
       </svg>
     </button>
     <div class="lbl">Sound on (M)</div>
+  </div>
+
+  <div id="fsbtn" class="hidden">
+    <button type="button" aria-label="Full screen (F)" title="Full screen (F)">
+      <svg viewBox="0 0 24 24" width="24" height="24" aria-hidden="true">
+        <path class="enter" d="M4 9V4h5M15 4h5v5M20 15v5h-5M9 20H4v-5" fill="none" stroke="#fff" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"/>
+        <path class="exit" d="M9 4v5H4M20 9h-5V4M15 20v-5h5M4 15h5v5" fill="none" stroke="#fff" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"/>
+      </svg>
+    </button>
+    <div class="lbl">Full screen (F)</div>
   </div>
 
   <div id="pausebtn" class="hidden">

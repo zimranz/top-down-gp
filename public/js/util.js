@@ -5,7 +5,7 @@
 
   // ------------------------------------------------------------- settings
   const Settings = {
-    data: { steering: 5, camera: 'rotate', zoom: 'normal', labels: true, name: '' },
+    data: { steering: 5, camera: 'rotate', zoom: 'normal', labels: true, name: '', units: 'kmh' },
     load: function () {
       try {
         const raw = window.localStorage.getItem('topdowngp.settings');
@@ -14,6 +14,7 @@
       this.data.steering = F1.clamp(Math.round(Number(this.data.steering) || 5), 1, 12);
       if (['close', 'normal', 'far'].indexOf(this.data.zoom) < 0) this.data.zoom = 'normal';
       if (typeof this.data.ghost !== 'boolean') this.data.ghost = true;
+      if (this.data.units !== 'mph') this.data.units = 'kmh';
     },
     save: function () {
       try { window.localStorage.setItem('topdowngp.settings', JSON.stringify(this.data)); } catch (e) { /* ignore */ }
