@@ -399,6 +399,9 @@
   const unlock = function () { Audio.unlock(); };
   window.addEventListener('pointerdown', unlock, true);
   window.addEventListener('keydown', unlock, true);
+  // phones only let sound start when a finger lifts or on a tap
+  window.addEventListener('touchend', unlock, true);
+  window.addEventListener('click', unlock, true);
 
   Audio.rpmFor = rpmFor;
   window.GameAudio = Audio;

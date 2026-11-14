@@ -23,6 +23,7 @@ const STAGE_TITLE = { p1: 'PRACTICE 1', p2: 'PRACTICE 2', p3: 'PRACTICE 3', qual
 const NEXT_IN = 12;      // seconds between the sessions of a weekend
 const RESUME_MS = 3000;  // a paused season carries on after a 3-2-1
 const MAX_ROUNDS = Object.keys(F1.TRACK_DEFS).length;
+const MAX_RACE_LAPS = 20;
 
 const app = express();
 app.use(express.static(path.join(__dirname, 'public')));
@@ -86,7 +87,7 @@ function newRoom(code, hostId) {
     hostId: hostId,
     players: new Map(),
     settings: { mode: 'single', track: 'monza', calendar: ['suzuka', 'montreal', 'silverstone', 'monza', 'baku'],
-      p1: 0, p2: 0, p3: 0, qualiLaps: 2, raceLaps: 5, aiCount: 21, aiLevel: 'medium' },
+      p1: 0, p2: 0, p3: 0, qualiLaps: 2, reverseGrid: false, raceLaps: 5, aiCount: 21, aiLevel: 'medium' },
     state: 'lobby',
     session: null,
     carOf: new Map(), ownerOf: new Map(), inputQ: new Map(), lastIn: new Map(), ack: new Map(), lastSeq: new Map(),
@@ -111,7 +112,7 @@ function roomPayload(room) {
     resumeIn: room.resumeAt ? Math.max(0, room.resumeAt - Date.now()) : 0,
     season: se ? { done: se.done, played: se.rounds.length, of: se.calendar.length, next: se.done ? null : se.calendar[se.rounds.length] } : null,
     players: Array.from(room.players.values()).map(function (p) {
-      return { id: p.id, name: p.name, driverId: p.driverId, inSession: room.carOf.has(p.id), seat: !!p.eid };
+      return { id: p.id, name: p.name, driverId: p.driverId, inSession: room.carOf.has(p.id), seat: !!p.eid, ready: !!p.ready };
     })
   };
 }
@@ -137,7 +138,8 @@ function sessionInfo(room) {
 
 // ------------------------------------------------------------- championship
 /* A season: { v, key (the host's secret), calendar, opts, aiDrivers, entrants:[{ eid, name, driverId, human, token, from }],
-   rounds:[{ track, res:[{ eid, d, pos, pts, out: null|'left'|'absent' }] }], done }.
+   rounds:[{ track, res:[{ eid, d, pos, pts, out: null|'left'|'absent' }] }], done,
+   cur: null | { stage, grid } = the round in progress: the next session to run and the grid from qualifying }.
    The same drivers race all season: players keep their car, the AI drivers are fixed when it starts. */
 function driverTaken(se, driverId) {
   return se.entrants.some(function (e) { return e.driverId === driverId; });
@@ -187,7 +189,8 @@ function startSeason(room) {
   const ai = shuffle(F1.DRIVERS.filter(function (d) { return !taken.has(d.id); })).slice(0, aiCount).map(function (d) { return d.id; });
   const se = {
     v: 1, key: newKey(), calendar: st.calendar.slice(0, MAX_ROUNDS),
-    opts: { p1: st.p1, p2: st.p2, p3: st.p3, qualiLaps: st.qualiLaps, raceLaps: st.raceLaps, aiLevel: st.aiLevel, aiCount: ai.length },
+    opts: { p1: st.p1, p2: st.p2, p3: st.p3, qualiLaps: st.qualiLaps, reverseGrid: !!st.reverseGrid && st.qualiLaps > 0, raceLaps: st.raceLaps,
+      aiLevel: st.aiLevel, aiCount: ai.length },
     aiDrivers: ai, entrants: [], rounds: [], done: false
   };
   humans.forEach(function (p) {
@@ -210,11 +213,19 @@ function startRound(room) {
   room.qualiOrder = null;
   room.weekendAI = se.aiDrivers.slice();
   room.lastResults = null;
-  room.stages = ['p1', 'p2', 'p3'].filter(function (k) { return o[k] > 0; });
-  if (o.qualiLaps > 0) room.stages.push('quali');
-  room.stages.push('race');
-  room.stageIdx = 0;
-  startSession(room, room.stages[0]);
+  room.stages = seasonStages(o);
+  // a round that was interrupted (the season was opened again from the host's copy): carry on with the
+  // next session, and the grid from qualifying if it had been run
+  const cur = se.cur && se.cur.stage > 0 && se.cur.stage < room.stages.length ? se.cur : null;
+  if (cur && cur.grid) room.qualiOrder = cur.grid.slice();
+  room.stageIdx = cur ? cur.stage : 0;
+  startSession(room, room.stages[room.stageIdx]);
+}
+function seasonStages(o) {
+  const st = ['p1', 'p2', 'p3'].filter(function (k) { return o[k] > 0; });
+  if (o.qualiLaps > 0) st.push('quali');
+  st.push('race');
+  return st;
 }
 
 /* Championship order: points, then most wins, most 2nd places, ... (eids). */
@@ -252,6 +263,7 @@ function recordRound(room, track, results) {
       res.push({ eid: e.eid, d: e.driverId, pos: pos, pts: F1.POINTS[pos - 1] || 0, out: 'absent' });
     });
   se.rounds.push({ track: track, res: res });
+  se.cur = null;
   if (se.rounds.length >= se.calendar.length) se.done = true;
 }
 
@@ -264,6 +276,8 @@ function seasonPayload(room, p) {
   room.players.forEach(function (q) { if (q.eid) here.add(q.eid); });
   const out = {
     calendar: se.calendar, opts: se.opts, rounds: se.rounds, done: se.done, you: p.eid || null,
+    cur: se.cur ? se.cur.stage : 0,          // > 0: the round in progress carries on with that session
+    code: room.code, host: (room.players.get(room.hostId) || {}).name || room.awayName || null,
     entrants: se.entrants.map(function (e) { return { eid: e.eid, name: e.name, driverId: e.driverId, human: e.human, here: here.has(e.eid), from: e.from || 0 }; })
   };
   if (p.id === room.hostId) out.save = { code: room.code, key: se.key, season: se };
@@ -282,7 +296,8 @@ function cleanSeason(s, key) {
   if (cal.length < 2) return null;
   const o = s.opts || {};
   const opts = { p1: intIn(o.p1, 0, 3, 0), p2: intIn(o.p2, 0, 3, 0), p3: intIn(o.p3, 0, 3, 0), qualiLaps: intIn(o.qualiLaps, 0, 5, 2),
-    raceLaps: intIn(o.raceLaps, 1, 7, 5), aiLevel: F1.AI_LEVELS[o.aiLevel] ? o.aiLevel : 'medium', aiCount: 0 };
+    raceLaps: intIn(o.raceLaps, 1, MAX_RACE_LAPS, 5), aiLevel: F1.AI_LEVELS[o.aiLevel] ? o.aiLevel : 'medium', aiCount: 0 };
+  opts.reverseGrid = !!o.reverseGrid && opts.qualiLaps > 0;
   const used = new Set(), entrants = [];
   (Array.isArray(s.entrants) ? s.entrants : []).slice(0, GRID_SIZE + 8).forEach(function (e) {
     if (!e || !F1.driver(e.driverId) || used.has(e.driverId)) return;
@@ -306,7 +321,20 @@ function cleanSeason(s, key) {
       return { eid: x.eid, d: ids[x.eid].driverId, pos: intIn(x.pos, 1, 40, 40), pts: intIn(x.pts, 0, 26, 0), out: x.out === 'left' || x.out === 'absent' ? x.out : null };
     }) });
   }
-  return { v: 1, key: typeof key === 'string' && key.length >= 16 ? key.slice(0, 64) : newKey(), calendar: cal, opts: opts, aiDrivers: aiDrivers, entrants: entrants, rounds: rounds, done: false };
+  // the round in progress (only if every finished round was read back)
+  let cur = null;
+  if (s.cur && typeof s.cur === 'object' && rounds.length === list.length) {
+    const st = intIn(s.cur.stage, 0, seasonStages(opts).length - 1, 0);
+    let grid = null;
+    if (Array.isArray(s.cur.grid)) {
+      const seen = new Set();
+      grid = s.cur.grid.filter(function (id) { const ok = typeof id === 'string' && used.has(id) && !seen.has(id); seen.add(id); return ok; });
+      if (!grid.length) grid = null;
+    }
+    if (st > 0) cur = { stage: st, grid: grid };
+  }
+  return { v: 1, key: typeof key === 'string' && key.length >= 16 ? key.slice(0, 64) : newKey(), calendar: cal, opts: opts, aiDrivers: aiDrivers, entrants: entrants,
+    rounds: rounds, done: false, cur: cur };
 }
 
 /* The host ends the season (or it is over and they go back to the lobby). */
@@ -411,6 +439,7 @@ function startSession(room, stage) {
   });
   room.session = S;
   room.state = type;
+  room.players.forEach(function (q) { q.ready = false; });
   room.carOf = new Map();
   room.ownerOf = new Map();
   room.inputQ = new Map();
@@ -492,15 +521,23 @@ function onSessionEnd(room) {
   room.carOf = new Map();
   room.awayCar = null;
   room.resumeAt = 0;
-  if (S.type === 'quali') room.qualiOrder = results.map(function (r) { return r.driverId; });
+  // the race grid: the qualifying order, flipped when Reverse grid is on
+  const reverse = S.type === 'quali' && !!(room.season ? room.season.opts.reverseGrid : room.settings.reverseGrid);
+  if (S.type === 'quali') room.qualiOrder = reverse ? F1.reverseGrid(results) : results.map(function (r) { return r.driverId; });
   const stages = room.stages || [S.type];
   const next = room.stageIdx + 1 < stages.length ? stages[room.stageIdx + 1] : null;
   const round = room.season ? room.season.rounds.length + 1 : 0;
   if (next) {
     // practice or qualifying done: show the results, then the next session starts by itself
     room.state = 'stageResults';
-    room.lastResults = { type: S.type, stage: room.stage, track: S.track.id, results: results, next: next, nextIn: NEXT_IN, round: round };
+    room.lastResults = { type: S.type, stage: room.stage, track: S.track.id, results: results, next: next, nextIn: NEXT_IN, round: round,
+      grid: reverse ? room.qualiOrder : null };
     io.to(room.code).emit('sessionEnd', room.lastResults);
+    if (room.season) {
+      // saved after every session: if the room has to be opened again, the round carries on from here
+      room.season.cur = { stage: room.stageIdx + 1, grid: room.qualiOrder ? room.qualiOrder.slice() : null };
+      broadcastSeason(room);
+    }
     if (!room.hostAway) scheduleNext(room);
   } else if (room.season) {
     // a race of the season: points into the championship, then the host starts the next round
@@ -660,7 +697,7 @@ io.on('connection', function (socket) {
     room = newRoom(code.length === 4 && !rooms.has(code) ? code : newCode(), socket.id);
     room.season = se;
     Object.assign(room.settings, { mode: 'champ', calendar: se.calendar.slice(), p1: se.opts.p1, p2: se.opts.p2, p3: se.opts.p3,
-      qualiLaps: se.opts.qualiLaps, raceLaps: se.opts.raceLaps, aiLevel: se.opts.aiLevel, aiCount: se.opts.aiCount });
+      qualiLaps: se.opts.qualiLaps, reverseGrid: se.opts.reverseGrid, raceLaps: se.opts.raceLaps, aiLevel: se.opts.aiLevel, aiCount: se.opts.aiCount });
     room.state = 'seasonBreak';
     joinRoom(socket, room, msg.name, msg.token, true);
     ack({ ok: true, code: room.code, moved: room.code !== code });
@@ -679,6 +716,25 @@ io.on('connection', function (socket) {
     const room = roomOfHost(socket);
     if (!room || !room.season || room.season.done || room.state !== 'seasonBreak' || room.hostAway) return;
     startRound(room);
+  });
+
+  // quick messages (ready-made): between sessions only, at most one every 2 seconds per player
+  socket.on('msg', function (i) {
+    const room = rooms.get(socket.data.room);
+    if (!room || room.session || !Number.isInteger(i) || i < 0 || i >= F1.QUICK_LIST.length) return;
+    const p = room.players.get(socket.id), now = Date.now();
+    if (!p || now - (p.msgAt || 0) < 1900) return;
+    p.msgAt = now;
+    io.to(room.code).emit('msg', { id: socket.id, m: i });
+  });
+  // "Ready" tick in the lobby
+  socket.on('ready', function (v) {
+    const room = rooms.get(socket.data.room);
+    if (!room || (room.state !== 'lobby' && room.state !== 'results')) return;
+    const p = room.players.get(socket.id);
+    if (!p || p.ready === (v === true)) return;
+    p.ready = v === true;
+    broadcastRoom(room);
   });
 
   socket.on('leaveRoom', function () { leaveRoom(socket); });
@@ -716,7 +772,8 @@ io.on('connection', function (socket) {
     if (s.track && F1.TRACK_DEFS[s.track]) st.track = s.track;
     ['p1', 'p2', 'p3'].forEach(function (k) { if (s[k] !== undefined) st[k] = intIn(s[k], 0, 3, st[k]); });
     if (s.qualiLaps !== undefined) st.qualiLaps = intIn(s.qualiLaps, 0, 5, st.qualiLaps);
-    if (s.raceLaps !== undefined) st.raceLaps = intIn(s.raceLaps, 1, 7, st.raceLaps);
+    if (s.reverseGrid !== undefined) st.reverseGrid = s.reverseGrid === true;
+    if (s.raceLaps !== undefined) st.raceLaps = intIn(s.raceLaps, 1, MAX_RACE_LAPS, st.raceLaps);
     if (s.aiCount !== undefined) st.aiCount = intIn(s.aiCount, 0, GRID_SIZE - 1, st.aiCount);
     if (s.aiLevel && F1.AI_LEVELS[s.aiLevel]) st.aiLevel = s.aiLevel;
     broadcastRoom(room);
@@ -765,6 +822,7 @@ io.on('connection', function (socket) {
     if (room.timer) { clearTimeout(room.timer); room.timer = null; }
     room.state = 'lobby';
     room.lastResults = null;
+    room.players.forEach(function (q) { q.ready = false; });
     broadcastRoom(room);
   });
 

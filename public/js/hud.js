@@ -43,6 +43,39 @@
     }
   }
 
+  /* Sector times of your current lap: the colours of the S1-S3 blocks and the pop-up after sectors 1 and 2.
+     Green / yellow compare with the same sector of your personal-best lap on this track (saved with it);
+     until one is saved, with your best lap of this session. Purple: the fastest by anyone this session. */
+  function fmtSector(t) { return t >= 60 ? F1.fmtLap(t) : t.toFixed(3); }
+  const SEC_COL = { purple: ['#9b30ff', '#c77dff'], green: ['#19c94a', '#7dff9b'], yellow: ['#ffd600', '#ffe46b'] };
+  function SectorTracker(trackId) {
+    this.track = trackId;
+    this.cols = [null, null, null];
+    this.clearAt = 0;
+    this.sess = null;          // sector times of your best lap this session
+    this.sessLap = Infinity;
+  }
+  SectorTracker.prototype.onSector = function (e, msgs) {
+    const pb = window.PB.get(this.track), saved = pb && pb.sec && pb.sec.length === 3 ? pb.sec : null;
+    const base = saved || this.sess, gap = base ? e.t - base[e.n] : null;
+    const col = e.best ? 'purple' : gap === null || gap <= 0 ? 'green' : 'yellow';
+    if (e.n === 0) this.cols = [null, null, null];
+    this.cols[e.n] = col;
+    this.clearAt = e.n === 2 ? performance.now() + 6000 : 0;      // the finished lap stays up for a moment
+    if (e.n < 2 && msgs) {
+      const sub = gap === null ? (e.best ? 'FASTEST OF THE SESSION' : null)
+        : (gap <= 0 ? '−' : '+') + Math.abs(gap).toFixed(3) + (saved ? '  VS YOUR BEST LAP' : '  VS YOUR SESSION BEST');
+      msgs.add('SECTOR ' + (e.n + 1) + '   ' + fmtSector(e.t), { sub: sub, color: SEC_COL[col][0], subColor: SEC_COL[col][1], key: 'sector', dur: 2600 });
+    }
+  };
+  SectorTracker.prototype.onLap = function (e) {
+    if (e.sec && !e.pen && e.t < this.sessLap) { this.sessLap = e.t; this.sess = e.sec; }
+  };
+  SectorTracker.prototype.view = function () {
+    if (this.clearAt && performance.now() > this.clearAt) { this.cols = [null, null, null]; this.clearAt = 0; }
+    return this.cols;
+  };
+
   /* o = { type, laps, track, order, rows:{id:{laps,last,best,gap,lapStart,fin,out,qdone,dist}}, entries:{id:{driverId}},
            myId, phase (0 countdown, 1 running, 2 finishing, 3 done), lights, time, timeLeft, fastestId,
            own (car state or null), msgs, ping, started, wrongT, stuckT } */
@@ -100,6 +133,8 @@
       hud.unit = mph ? 'MPH' : 'KM/H';
       hud.gear = window.gearFor(sp, vf);
       hud.drs = own.drsOpen ? 'open' : own.drsAllowed ? 'avail' : 'off';
+      const touch = window.Input.touch.active;
+      hud.drsHint = touch ? 'DRS — TAP DRS' : 'DRS — PRESS ' + window.KeyBind.label('drs').toUpperCase();
       hud.pit = !!own.inPit;
       hud.posText = 'P' + pos + ' / ' + order.length;
       const has = function (v) { return v !== null && v !== undefined; };
@@ -113,10 +148,12 @@
       hud.bestPurple = o.fastestId === o.myId;
       const pb = window.PB.get(T.id);
       hud.pb = pb ? F1.fmtLap(pb.t) : null;
+      hud.sectors = o.sectors || null;
       hud.wrongWay = o.wrongT > 1.2;
-      if (performance.now() - o.started < 12000 && (o.phase === 0 || o.type === 'practice')) hud.hint = window.controlsHint();
+      if (!touch && performance.now() - o.started < 12000 && (o.phase === 0 || o.type === 'practice')) hud.hint = window.controlsHint();
       if (o.stuckT > 3 || o.wrongT > 4) {
-        hud.msgs = hud.msgs.concat([{ text: 'STUCK?', sub: 'Press R to put the car back on track', color: '#ffd600' }]);
+        hud.stuck = true;
+        hud.msgs = hud.msgs.concat([{ text: 'STUCK?', sub: touch ? 'Tap the reset button (↺) to put the car back on track' : 'Press R to put the car back on track', color: '#ffd600' }]);
       }
     } else if (o.myId === null) {
       hud.msgs = hud.msgs.concat([{ text: 'SPECTATING', sub: 'You will join the next session', color: '#ffd600' }]);
@@ -124,5 +161,19 @@
     return hud;
   }
 
-  window.HUD = { eventMessage: eventMessage, build: buildHud };
+  /* Banked corners (Zandvoort): say once per corner and session that the slope gives more grip. seen = {} kept by the game. */
+  function bankHint(T, car, msgs, seen) {
+    if (!T.bank || !car || car.out || !(T.bank[car.seg] > 1.08)) return;
+    for (let z = 0; z < T.banked.length; z++) {
+      const b = T.banked[z];
+      let rel = car.s - b.s0; rel -= Math.floor(rel / T.length) * T.length;
+      if (rel <= b.s1 - b.s0 && !seen[z]) {
+        seen[z] = true;
+        msgs.add('BANKED CORNER', { sub: 'The slope presses the car down: more grip, carry more speed', color: '#3fb6ff', key: 'bank', dur: 3800 });
+      }
+    }
+  }
+
+  window.HUD = { eventMessage: eventMessage, build: buildHud, bankHint: bankHint };
+  window.SectorTracker = SectorTracker;
 })();

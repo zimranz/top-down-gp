@@ -46,6 +46,7 @@
     this.resumeT = 0;                  // after Resume: a 3-2-1 countdown with the game still frozen
     this.ended = false;
     this.msgs = new window.Messages();
+    this.sectors = new window.SectorTracker(this.T.id);
     this.fx = [];
     this.wrongT = 0;
     this.stuckT = 0;
@@ -129,8 +130,10 @@
         }
         continue;
       }
+      if (e.k === 'sec' && e.id === this.myId) this.sectors.onSector(e, this.msgs);
       if (e.k === 'lap' && e.id === this.myId) {
-        e.record = window.PB.offer(this.T.id, e.t, this.me.driverId);
+        e.record = window.PB.offer(this.T.id, e.t, this.me.driverId, e.pen ? null : e.sec);
+        this.sectors.onLap(e);
         if (this.tt) e.ttRank = window.TTBoard.offer(this.T.id, e.t, this.me.driverId);
         this.saveGhost(e.t);
       }
@@ -140,6 +143,7 @@
     const fx = this.S.drainFx();
     for (let i = 0; i < fx.length; i++) this.fx.push(fx[i]);
     if (this.me) {
+      if (this.T.bank && this.kind !== 'attract' && !this.ff) window.HUD.bankHint(this.T, this.me, this.msgs, this.bankSeen || (this.bankSeen = {}));
       this.wrongT = F1.isWrongWay(this.me, this.T) ? this.wrongT + F1.DT : 0;
       const sp = Math.hypot(this.me.vx, this.me.vy);
       this.stuckT = sp < 2 && this.S.phase !== 'countdown' && !this.me.inPit && this.S.time > 4 ? this.stuckT + F1.DT : 0;
@@ -237,7 +241,7 @@
       myId: this.myId, phase: PH[S.phase], lights: S.lights, time: S.time,
       timeLeft: isFinite(S.timeLimit) ? Math.max(0, S.timeLimit - S.time) : -1,
       fastestId: S.fastest ? S.fastest.id : null, own: this.me, msgs: this.msgs, ping: null,
-      started: this.started, wrongT: this.wrongT, stuckT: this.stuckT
+      started: this.started, wrongT: this.wrongT, stuckT: this.stuckT, sectors: this.sectors.view()
     });
     if (this.resumeT > 0) { hud.resume = Math.ceil(this.resumeT); hud.hint = null; }
     return hud;

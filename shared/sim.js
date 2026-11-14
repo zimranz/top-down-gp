@@ -198,7 +198,8 @@
     const ca = Math.cos(c.a), sa = Math.sin(c.a);
     let vf = c.vx * ca + c.vy * sa;
     let vl = -c.vx * sa + c.vy * ca;
-    const latRef = Math.min(P.LAT_MAX, P.LAT0 + P.LAT_K * sp * sp);
+    let latRef = Math.min(P.LAT_MAX, P.LAT0 + P.LAT_K * sp * sp);
+    if (T.bank) latRef *= T.bank[Q.idx];           // a banked corner: more grip
     let latAvail = latRef * grip;
     if (c.dirty < 1) latAvail *= c.dirty;          // dirty air behind another car
     const vfa = Math.abs(vf);
@@ -370,10 +371,11 @@
     T._prof = T._prof || {};
     if (T._prof[level]) return T._prof[level];
     const Lv = level === 'limit' ? LIMIT : AI_LEVELS[level] || AI_LEVELS.medium;
-    const N = T.n, K = T.rlK, ds = T.ds;
+    const N = T.n, K = T.rlK, ds = T.ds, BK = T.bank;
     const v = new Float64Array(N);
     for (let i = 0; i < N; i++) {
-      const k = Math.abs(K[i]), m = Lv.lat;
+      // banked corners can be taken faster (the AI uses a little over half of the extra grip, to keep a margin)
+      const k = Math.abs(K[i]), m = BK ? Lv.lat * (1 + (BK[i] - 1) * 0.55) : Lv.lat;
       let vmax = 105;
       if (k > P.LAT_K * m) vmax = Math.min(vmax, Math.sqrt((P.LAT0 * m) / (k - P.LAT_K * m)));
       vmax = Math.min(vmax, Math.sqrt((P.LAT_MAX * m) / Math.max(k, 1e-6)));
@@ -650,7 +652,8 @@
     const lx = dx * ca + dy * sa, ly = -dx * sa + dy * ca;
     const curv = (2 * ly) / Math.max(1, lx * lx + ly * ly);
     const vf = c.vx * ca + c.vy * sa, vfa = Math.abs(vf);
-    const latRef = Math.min(P.LAT_MAX, P.LAT0 + P.LAT_K * sp * sp);
+    let latRef = Math.min(P.LAT_MAX, P.LAT0 + P.LAT_K * sp * sp);
+    if (T.bank) latRef *= T.bank[c.seg];             // the same steering range as the car has there (banked corner)
     const maxDelta = Math.min(P.STEER_MAX, Math.atan(CAR.WB * latRef / Math.max(vfa * vfa, 1)) * 1.05);
     let steer = Math.atan(CAR.WB * curv) / maxDelta;
     if (lx < 0) steer = ly > 0 ? 1 : -1;
@@ -825,6 +828,7 @@
     this.finishCount = 0;
     this.finalLapAnnounced = false;
     this.fastest = null;
+    this.secBest = [null, null, null];     // fastest time anyone has set in each sector this session
     this.loopFirst = [];
     this.detLast = T.drs.map(function () { return null; });
     this.results = null;
@@ -848,6 +852,7 @@
       c.qualiDone = false;
       c.tlOff = false; c.tlWarn = 0; c.penalty = 0; c.lapPen = 0; c.jumped = false;
       c.grid = k + 1; c.overtakes = 0; c.troubleT = -99;
+      c.secRef = undefined; c.secN = 0; c.secAt = 0; c.secT = [0, 0, 0];    // sector timing on the current lap
       c.drsElig = T.drs.map(function () { return opts.type !== 'race'; });
       c.input = F1.NEUTRAL;
       c.prevS = c.s;
@@ -1003,6 +1008,20 @@
         this.onLine(c, this.time - dt + frac * dt);
       }
     }
+    // sector lines at one third and two thirds of the lap: each sector of a timed lap is timed on its own
+    if (c.lapStart !== null && !c.finished) {
+      if (c.secRef !== c.lapStart) { c.secRef = c.lapStart; c.secN = 0; }
+      if (c.secN < 2) {
+        const b = L * (c.secN + 1) / 3;
+        if (passed(ps, ns, b, L)) {
+          let d = ns - ps; if (d < 0) d += L;
+          let rel = b - ps; if (rel < 0) rel += L;
+          const at = this.time - dt + (rel / Math.max(1e-6, d)) * dt - c.lapStart;     // lap time at the sector line
+          this.onSector(c, c.secN, at - (c.secN ? c.secAt : 0));
+          c.secAt = at; c.secN++;
+        }
+      }
+    }
     for (let z = 0; z < T.drs.length; z++) if (passed(ps, ns, T.drs[z].detect, L)) this.onDetection(c, z);
     c.raceDist = (c.lineCount - 1) * L + c.s;
     this.trackLimits(c, dt);
@@ -1088,7 +1107,25 @@
     c.lapPen = 0;
   };
 
+  /* A sector of a timed lap is done (n = 0, 1, 2). Players get an event; 'best' = the fastest by anyone so far. */
+  Session.prototype.onSector = function (c, n, t) {
+    c.secT[n] = t;
+    const best = this.secBest[n] === null || t < this.secBest[n];
+    if (best) this.secBest[n] = t;
+    if (!c.isAI) this.events.push({ k: 'sec', id: c.id, n: n, t: Math.round(t * 1000) / 1000, best: best && this.cars.length > 1 });
+  };
+
   Session.prototype.recordLap = function (c, lt, pen) {
+    // the third sector is the rest of the lap (when the first two were timed on this lap)
+    let sec = null;
+    if (c.secRef === c.lapStart && c.secN === 2) {
+      const s3 = lt - (pen || 0) - c.secAt;
+      c.secN = 3;
+      if (s3 > 0) {
+        this.onSector(c, 2, s3);
+        sec = [Math.round(c.secT[0] * 1000) / 1000, Math.round(c.secT[1] * 1000) / 1000, Math.round(s3 * 1000) / 1000];
+      }
+    }
     c.lastLap = lt;
     c.laps.push(lt);
     const pb = c.bestLap === null || lt < c.bestLap;
@@ -1097,6 +1134,7 @@
     if (fastest) this.fastest = { id: c.id, time: lt };
     const e = { k: 'lap', id: c.id, t: lt, pb: pb, fastest: fastest, n: c.laps.length };
     if (pen) e.pen = pen;
+    if (sec && !c.isAI) e.sec = sec;
     this.events.push(e);
   };
 
@@ -1244,6 +1282,14 @@
       else gap = '+' + (c.bestLap - pole).toFixed(3) + 's';
       return { pos: i + 1, id: c.id, driverId: c.driverId, isAI: c.isAI, name: c.name, laps: c.lapsDone, best: c.bestLap, gap: gap, out: dnf, tl: c.tlWarn };
     });
+  };
+
+  /* Reverse grid: the qualifying order flipped, so the fastest starts last. Drivers without a lap time
+     stay at the back (not setting a time must not put you on pole). Takes qualifying results, gives driver ids. */
+  F1.reverseGrid = function (results) {
+    const timed = results.filter(function (r) { return !r.out && r.best !== null && r.best !== undefined && r.best > 0; });
+    const rest = results.filter(function (r) { return timed.indexOf(r) < 0; });
+    return timed.slice().reverse().concat(rest).map(function (r) { return r.driverId; });
   };
 
   /* After the race: fastest lap, most overtakes, biggest climber and the Driver of the day

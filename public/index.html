@@ -2,7 +2,12 @@
 <html lang="en">
 <head>
   <meta charset="utf-8">
-  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no">
+  <meta name="mobile-web-app-capable" content="yes">
+  <meta name="apple-mobile-web-app-capable" content="yes">
+  <meta name="apple-mobile-web-app-status-bar-style" content="black">
+  <meta name="apple-mobile-web-app-title" content="Top-Down GP">
+  <meta name="theme-color" content="#0b0b0e">
   <title>Top-Down GP</title>
   <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 64 64'%3E%3Crect width='64' height='64' rx='12' fill='%23e10600'/%3E%3Cpath d='M14 40h36l-4-12H22z' fill='%23fff'/%3E%3C/svg%3E">
   <link rel="preconnect" href="https://fonts.googleapis.com">
@@ -18,7 +23,7 @@
     <section id="home" class="screen active">
       <div class="brand">
         <div class="logo">TOP-DOWN <span>GP</span></div>
-        <div class="tag">2026 grid · 11 teams · 22 drivers · 11 circuits</div>
+        <div class="tag">2026 grid · 11 teams · 22 drivers · 14 circuits</div>
       </div>
       <div class="menu">
         <button class="btn big" data-go="practice">Practice</button>
@@ -27,9 +32,12 @@
         <button class="btn big" data-go="champ">Championship</button>
         <button class="btn big red" data-go="online">Online with friends</button>
         <button class="btn big season hidden" id="home-rejoin">Rejoin season<small id="home-rejoin-sub"></small></button>
-        <button class="btn" data-act="settings">Settings</button>
+        <div class="menu-row">
+          <button class="btn" data-go="career">Career</button>
+          <button class="btn" data-act="settings">Settings</button>
+        </div>
       </div>
-      <div class="keys">
+      <div class="keys" id="home-keys">
         <span><b>↑ / W</b> throttle</span><span><b>↓ / S</b> brake</span><span><b>← → / A D</b> steer</span>
         <span><b>Shift / Space</b> DRS</span><span><b>R</b> reset car</span><span><b>C</b> camera</span><span><b>F</b> full screen</span><span><b>Esc</b> pause</span>
       </div>
@@ -88,6 +96,23 @@
       </div>
     </section>
 
+    <!-- CAREER -->
+    <section id="career" class="screen panel">
+      <div class="panel-head">
+        <button class="btn ghost" data-go="home">← Back</button>
+        <h2>Career</h2>
+        <span></span>
+      </div>
+      <div class="results-wrap career-wrap">
+        <div class="career-stats" id="career-stats"></div>
+        <p class="tt-note" id="career-note"></p>
+        <table class="results career-table">
+          <thead><tr><th>Track</th><th class="r">Best lap</th><th>Set in</th><th class="r">Races</th><th class="r">Wins</th><th class="r">Podiums</th><th class="r">Best finish</th></tr></thead>
+          <tbody id="career-tracks"></tbody>
+        </table>
+      </div>
+    </section>
+
     <!-- GRAND PRIX SETUP -->
     <section id="gp" class="screen panel">
       <div class="panel-head">
@@ -101,6 +126,7 @@
         <label>Practice 2<select id="gp-p2"></select></label>
         <label>Practice 3<select id="gp-p3"></select></label>
         <label>Qualifying<select id="gp-quali"></select></label>
+        <label title="The race starts in the opposite order to qualifying: the fastest starts last">Reverse grid<select id="gp-reverse"><option value="0">Off</option><option value="1">On</option></select></label>
         <label>Race<select id="gp-race"></select></label>
         <span class="wk-note">Practice starts in your pit box and ends after your timed laps</span>
       </div>
@@ -141,13 +167,14 @@
         <label>Practice 2<select id="champ-p2"></select></label>
         <label>Practice 3<select id="champ-p3"></select></label>
         <label>Qualifying<select id="champ-quali"></select></label>
+        <label title="Every race starts in the opposite order to qualifying: the fastest starts last">Reverse grid<select id="champ-reverse"><option value="0">Off</option><option value="1">On</option></select></label>
         <label>Race<select id="champ-race"></select></label>
         <span class="wk-note">Points: 25-18-15-12-10-8-6-4-2-1 for the top 10</span>
       </div>
       <div class="cols">
         <div class="col narrow">
           <h3>Calendar</h3>
-          <p class="note cal-note">Click the tracks in the order you want to race them (2 to 11 races).</p>
+          <p class="note cal-note">Click the tracks in the order you want to race them (2 to 14 races).</p>
           <div class="tracks" id="champ-tracks"></div>
           <h3>Opponents</h3>
           <div class="row"><input type="range" id="champ-ai" min="1" max="21" value="15"><span class="val" id="champ-ai-val">15</span></div>
@@ -167,9 +194,9 @@
     <!-- CHAMPIONSHIP STANDINGS -->
     <section id="standings" class="screen panel">
       <div class="panel-head">
-        <span></span>
+        <span><span class="st-room hidden" id="st-room">Room <b class="room-code" id="st-code">----</b></span></span>
         <h2 id="st-title">Standings</h2>
-        <span></span>
+        <span><button type="button" class="btn small hidden" id="st-copy">Copy invite link</button></span>
       </div>
       <div class="champ-banner hidden" id="st-banner"></div>
       <div class="standings-wrap">
@@ -186,6 +213,7 @@
         <span id="st-note"></span>
         <label class="st-car hidden" id="st-car-wrap">Your car<select id="st-car"></select></label>
         <div class="foot-btns">
+          <button type="button" class="btn ghost msg-open hidden" id="st-msg">Messages</button>
           <button class="btn ghost" id="st-menu">Back to menu</button>
           <button class="btn" id="st-new">New season</button>
           <button class="btn red" id="st-next">Next race</button>
@@ -212,7 +240,7 @@
         </div>
         <div class="error" id="online-error"></div>
         <div class="season-box hidden" id="online-season">
-          <div><b>Your online championship</b><span id="os-sub"></span></div>
+          <div><b id="os-title">Your online championship</b><span id="os-sub"></span></div>
           <div class="row">
             <button class="btn red" id="os-rejoin">Rejoin season</button>
             <button class="btn ghost" id="os-end">End season</button>
@@ -233,6 +261,10 @@
         <div class="col narrow">
           <h3>Players <span class="muted" id="lobby-count"></span></h3>
           <ul class="players" id="lobby-players"></ul>
+          <div class="lobby-actions">
+            <button type="button" class="btn small" id="lobby-ready">Ready</button>
+            <button type="button" class="btn small msg-open" id="lobby-msg"><svg viewBox="0 0 24 24" width="16" height="16" aria-hidden="true"><path d="M4 5h16v11H9l-5 4z" fill="none" stroke="currentColor" stroke-width="2" stroke-linejoin="round"/></svg> Messages</button>
+          </div>
           <h3>Session settings <span class="muted" id="lobby-hostnote"></span></h3>
           <div class="settings-grid" id="lobby-settings">
             <label class="span2">Mode<select id="set-mode"><option value="single">Single race weekend</option><option value="champ">Championship (a season of races)</option></select></label>
@@ -245,6 +277,7 @@
             <label>Practice 2<select id="set-p2"></select></label>
             <label>Practice 3<select id="set-p3"></select></label>
             <label>Qualifying laps<select id="set-quali"></select></label>
+            <label title="The race starts in the opposite order to qualifying: the fastest starts last">Reverse grid<select id="set-reverse"><option value="0">Off</option><option value="1">On</option></select></label>
             <label>Race laps<select id="set-race"></select></label>
             <label>AI cars<select id="set-ai"></select></label>
             <label>AI difficulty<select id="set-level"><option value="easy">Easy</option><option value="medium">Medium</option><option value="hard">Hard</option></select></label>
@@ -269,13 +302,14 @@
       <div class="results-wrap">
         <div class="race-stats hidden" id="race-stats"></div>
         <table class="results" id="results-table">
-          <thead><tr><th>Pos</th><th>Driver</th><th>Team</th><th class="r">Time / Gap</th><th class="r">Best lap</th><th class="r">Laps</th><th class="r race-col">Grid</th><th class="r race-col" title="Overtakes">Overtakes</th><th class="r pts-col">Pts</th></tr></thead>
+          <thead><tr><th>Pos</th><th>Driver</th><th>Team</th><th class="r">Time / Gap</th><th class="r">Best lap</th><th class="r">Laps</th><th class="r race-col grid-col" id="results-grid-head">Grid</th><th class="r race-col" title="Overtakes">Overtakes</th><th class="r pts-col">Pts</th></tr></thead>
           <tbody id="results-body"></tbody>
         </table>
       </div>
       <div class="results-foot">
         <span id="results-note"></span>
         <div class="foot-btns">
+          <button type="button" class="btn ghost msg-open hidden" id="results-msg">Messages</button>
           <button class="btn ghost" id="results-menu">Back to menu</button>
           <button class="btn" id="results-restart">Restart weekend</button>
           <button class="btn red" id="results-standings">Championship standings</button>
@@ -294,6 +328,7 @@
       <p class="muted" id="pause-note"></p>
       <button class="btn red big" id="pause-resume">Resume</button>
       <button class="btn" data-act="settings">Settings</button>
+      <button class="btn touch-only" id="pause-fs">Full screen</button>
       <button class="btn" id="pause-restart">Restart</button>
       <button class="btn" id="pause-end">End session now</button>
       <button class="btn ghost" id="pause-quit">Quit to menu</button>
@@ -328,11 +363,21 @@
     </div>
   </div>
 
+  <!-- quick messages (online): ready-made, no typing -->
+  <div id="msgmenu" class="modal hidden">
+    <div class="modal-box">
+      <h2>Messages</h2>
+      <div id="msg-groups"></div>
+      <button type="button" class="btn ghost" id="msg-close">Close</button>
+    </div>
+  </div>
+  <div id="msgpop" aria-live="polite"></div>
+
   <!-- SETTINGS -->
   <div id="settings" class="modal hidden">
     <div class="modal-box">
       <h2>Settings</h2>
-      <label class="slider"><span class="slider-title">Steering sensitivity <b id="set-steer-val">5</b></span>
+      <label class="slider key-only"><span class="slider-title">Steering sensitivity <b id="set-steer-val">5</b></span>
         <input type="range" id="set-steer" min="1" max="12" step="1">
         <span class="hint-row"><span>Smooth</span><span>Sharp</span></span>
       </label>
@@ -341,7 +386,7 @@
           <button data-v="rotate">Rotate with car</button><button data-v="fixed">Fixed (north up)</button>
         </div>
       </label>
-      <label>Camera distance <span class="muted-inline">(press C while driving)</span>
+      <label>Camera distance <span class="muted-inline key-only">(press C while driving)</span>
         <div class="seg" id="set-zoom">
           <button data-v="close">Close</button><button data-v="normal">Normal</button><button data-v="far">Far</button>
         </div>
@@ -351,6 +396,16 @@
           <button data-v="kmh">km/h</button><button data-v="mph">mph</button>
         </div>
       </label>
+      <label class="slider touch-only"><span class="slider-title">Touch steering sensitivity <b id="set-touch-val">5</b></span>
+        <input type="range" id="set-touch" min="1" max="10" step="1">
+        <span class="hint-row"><span>Long slide</span><span>Short slide</span></span>
+      </label>
+      <p class="note touch-only">Left thumb: slide left and right to steer. Right thumb: GO and BRAKE. Slide up from GO onto DRS when it lights up.</p>
+      <div class="keys-box" id="keys-box">
+        <div class="sound-head"><span>Driving keys</span><button type="button" class="btn small" id="keys-reset">Reset keys</button></div>
+        <div class="keys-grid" id="keys-grid"></div>
+        <p class="note" id="keys-note">Click a key, then press the new one. Each action can have two keys.</p>
+      </div>
       <label class="check"><input type="checkbox" id="set-labels"> Show driver names above cars</label>
       <label class="check"><input type="checkbox" id="set-ghost"> Ghost car of your best lap (practice sessions)</label>
       <div class="sound-box">
@@ -396,6 +451,38 @@
     <div class="lbl">Pause (P)</div>
   </div>
 
+  <!-- on-screen controls (phones and tablets): slide to steer on the left, pedals on the right -->
+  <div id="touchui" class="hidden">
+    <div id="t-steer">
+      <span class="t-label">SLIDE TO STEER</span>
+      <div class="t-track"><i class="l"></i><i class="r"></i></div>
+      <div class="t-knob" id="t-knob"></div>
+    </div>
+    <div id="t-brake" class="t-pedal"><span>BRAKE</span></div>
+    <div id="t-gas" class="t-pedal"><span>GO</span></div>
+    <div id="t-drs">DRS</div>
+    <button type="button" id="t-pause" class="t-btn" aria-label="Pause"><span></span><span></span></button>
+    <button type="button" id="t-reset" class="t-btn" aria-label="Put the car back on track">
+      <svg viewBox="0 0 24 24" width="22" height="22" aria-hidden="true">
+        <path d="M1.5 4.5v6h6" fill="none" stroke="#fff" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"/>
+        <path d="M3.9 15a9 9 0 1 0 2.1-9.3L1.5 10.5" fill="none" stroke="#fff" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"/>
+      </svg>
+    </button>
+  </div>
+  <!-- a phone held upright while driving -->
+  <div id="rotate" class="hidden">
+    <div class="rot-box">
+      <svg viewBox="0 0 64 64" width="84" height="84" aria-hidden="true">
+        <rect x="7" y="5" width="24" height="42" rx="4" fill="none" stroke="rgba(255,255,255,0.32)" stroke-width="3"/>
+        <rect x="17" y="35" width="42" height="24" rx="4" fill="#121217" stroke="#fff" stroke-width="3"/>
+        <path d="M38 8c10 1 16 8 17 17" fill="none" stroke="#ffd600" stroke-width="3" stroke-linecap="round"/>
+        <path d="M50 20l5 6 5-7" fill="none" stroke="#ffd600" stroke-width="3" stroke-linecap="round" stroke-linejoin="round"/>
+      </svg>
+      <b>Turn your phone sideways</b>
+      <span id="rotate-sub">You drive with the phone held wide</span>
+    </div>
+  </div>
+
   <script src="/socket.io/socket.io.js"></script>
   <script src="/shared/data.js"></script>
   <script src="/shared/tracks.js"></script>
@@ -405,6 +492,7 @@
   <script src="js/ghost.js"></script>
   <script src="js/render.js"></script>
   <script src="js/hud.js"></script>
+  <script src="js/touch.js"></script>
   <script src="js/game-local.js"></script>
   <script src="js/game-online.js"></script>
   <script src="js/main.js"></script>

@@ -53,6 +53,7 @@
     this.timing = null;
     this.rows = {};
     this.msgs = new window.Messages();
+    this.sectors = new window.SectorTracker(this.T.id);
     this.fx = [];
     this.ended = false;
     this.alpha = 0;
@@ -282,7 +283,11 @@
     const self = this;
     for (let i = 0; i < evs.length; i++) {
       const e = evs[i];
-      if (e.k === 'lap' && e.id === this.myId) e.record = window.PB.offer(this.T.id, e.t, this.code(this.myId));
+      if (e.k === 'sec' && e.id === this.myId) this.sectors.onSector(e, this.msgs);
+      if (e.k === 'lap' && e.id === this.myId) {
+        e.record = window.PB.offer(this.T.id, e.t, this.code(this.myId), e.pen ? null : e.sec);
+        this.sectors.onLap(e);
+      }
       window.HUD.eventMessage(this.msgs, e, this.myId, function (id) { return self.code(id); });
       window.GameAudio.event(e, this.myId);
     }
@@ -299,6 +304,7 @@
     if (this.pending.length > 90) this.pending.shift();
     this.ownPrev = { x: own.x, y: own.y, a: own.a };
     this.simulate(inp, this.pending.length, this.snapT);
+    if (this.T.bank) window.HUD.bankHint(this.T, own, this.msgs, this.bankSeen || (this.bankSeen = {}));
     this.wrongT = F1.isWrongWay(own, this.T) ? this.wrongT + DT : 0;
     this.stuckT = Math.hypot(own.vx, own.vy) < 2 && this.phase >= 1 && !own.inPit ? this.stuckT + DT : 0;
   };
@@ -423,9 +429,9 @@
       timeLeft: tm && tm.tl >= 0 ? tm.tl : -1,
       fastestId: tm && tm.f ? tm.f[0] : null,
       own: this.own, msgs: this.msgs, ping: this.net.ping,
-      started: this.started, wrongT: this.wrongT, stuckT: this.stuckT
+      started: this.started, wrongT: this.wrongT, stuckT: this.stuckT, sectors: this.sectors.view()
     });
-    hud.conn = this.connStatus(now, window.innerWidth < 820);
+    hud.conn = this.connStatus(now, window.innerWidth < 820 || !!(window.TouchUI.L && window.TouchUI.L.phone));
     if (this.resumeT > 0) { hud.resume = Math.ceil(this.resumeT); hud.hint = null; }
     return hud;
   };

@@ -64,6 +64,18 @@
     save: function (o) { try { window.localStorage.setItem('topdowngp.onlineSeason', JSON.stringify(o)); } catch (e) { /* ignore */ } },
     clear: function () { try { window.localStorage.removeItem('topdowngp.onlineSeason'); } catch (e) { /* ignore */ } }
   };
+  /* A friend's season you are racing in, remembered so you can come back without the invite link:
+     { code, host, played, of, at }. Forgotten after 45 days, or when the season is over. */
+  const FriendSeason = {
+    load: function () {
+      try {
+        const o = JSON.parse(window.localStorage.getItem('topdowngp.joinedSeason') || 'null');
+        return o && /^[A-Z0-9]{4}$/.test(o.code || '') && Date.now() - (o.at || 0) < 45 * 86400000 ? o : null;
+      } catch (e) { return null; }
+    },
+    save: function (o) { try { window.localStorage.setItem('topdowngp.joinedSeason', JSON.stringify(o)); } catch (e) { /* ignore */ } },
+    clear: function () { try { window.localStorage.removeItem('topdowngp.joinedSeason'); } catch (e) { /* ignore */ } }
+  };
 
   // ------------------------------------------------------------- helpers
   function show(id) {
@@ -82,6 +94,7 @@
     $('soundbtn').classList.toggle('ingame', !!inGame);
     $('fsbtn').classList.toggle('hidden', !fsSupported || (!inGame && !home));
     $('fsbtn').classList.toggle('ingame', !!inGame);
+    window.TouchUI.show(!!inGame, !!inGame || (mode === 'online' && !!room));     // the on-screen controls (phones and tablets) are up while you drive
   }
   /* Full screen (button or F): the game fills the whole screen, without the browser's bars. */
   const fsSupported = !!(document.documentElement.requestFullscreen || document.documentElement.webkitRequestFullscreen);
@@ -90,14 +103,21 @@
     const de = document.documentElement;
     const fail = function () { toast('Full screen is not available here'); };
     try {
-      const p = fsElement() ? (document.exitFullscreen || document.webkitExitFullscreen).call(document) : (de.requestFullscreen || de.webkitRequestFullscreen).call(de);
+      const going = !fsElement();
+      const p = going ? (de.requestFullscreen || de.webkitRequestFullscreen).call(de) : (document.exitFullscreen || document.webkitExitFullscreen).call(document);
       if (p && p.catch) p.catch(fail);
+      // on a phone, full screen also turns the picture sideways where the phone allows it
+      if (going && Input.touch.active && window.screen && window.screen.orientation && window.screen.orientation.lock) {
+        const lock = function () { try { const q = window.screen.orientation.lock('landscape'); if (q && q.catch) q.catch(function () { /* not allowed here */ }); } catch (e) { /* not supported */ } };
+        if (p && p.then) p.then(lock, function () { /* no full screen */ }); else lock();
+      }
     } catch (e) { fail(); }
   }
   function syncFsUI() {
     const on = !!fsElement();
     $('fsbtn').classList.toggle('on', on);
-    $('fsbtn').querySelector('.lbl').textContent = on ? 'Exit full screen' : 'Full screen (F)';
+    $('fsbtn').querySelector('.lbl').textContent = on ? 'Exit full screen' : Input.touch.active ? 'Full screen' : 'Full screen (F)';
+    $('pause-fs').textContent = on ? 'Exit full screen' : 'Full screen';
     $('fsbtn').querySelector('button').setAttribute('aria-label', on ? 'Exit full screen (F)' : 'Full screen (F)');
   }
   document.addEventListener('fullscreenchange', syncFsUI);
@@ -107,13 +127,13 @@
     const muted = !!GameAudio.vol.muted;
     $('soundbtn').classList.toggle('muted', muted);
     $('soundbtn').querySelector('button').setAttribute('aria-pressed', muted ? 'true' : 'false');
-    $('soundbtn').querySelector('.lbl').textContent = muted ? 'Sound off (M)' : 'Sound on (M)';
+    $('soundbtn').querySelector('.lbl').textContent = (muted ? 'Sound off' : 'Sound on') + (Input.touch.active ? '' : ' (M)');
     if ($('set-mute')) $('set-mute').checked = muted;
   }
   function toggleSound() {
     const muted = GameAudio.toggleMute();
     syncSoundUI();
-    toast(muted ? 'Sound off (M to turn it back on)' : 'Sound on');
+    toast(muted && !Input.touch.active ? 'Sound off (M to turn it back on)' : muted ? 'Sound off' : 'Sound on');
   }
   let toastT = null;
   function toast(msg) {
@@ -139,18 +159,30 @@
   }
   /* The Rejoin season button (home screen) and the season box (online screen), when you host a season. */
   function updateSeasonButtons() {
-    const sv = OnlineSeason.load();
-    $('home-rejoin').classList.toggle('hidden', !sv);
-    $('online-season').classList.toggle('hidden', !sv);
-    if (!sv) return;
-    const n = sv.season.rounds.length, of = sv.season.calendar.length, next = F1.TRACK_DEFS[sv.season.calendar[n]];
-    $('home-rejoin-sub').textContent = 'Round ' + (n + 1) + ' of ' + of + (next ? ' · ' + next.name : '') + ' · room ' + sv.code;
-    $('os-sub').textContent = (n ? n + ' of ' + of + ' races done' : 'Not started yet') + (next ? ' · next: ' + next.name : '') + ' · room ' + sv.code;
+    const sv = OnlineSeason.load(), fr = sv ? null : FriendSeason.load();
+    $('home-rejoin').classList.toggle('hidden', !sv && !fr);
+    $('online-season').classList.toggle('hidden', !sv && !fr);
+    if (sv) {
+      const n = sv.season.rounds.length, of = sv.season.calendar.length, next = F1.TRACK_DEFS[sv.season.calendar[n]];
+      $('home-rejoin-sub').textContent = 'Round ' + (n + 1) + ' of ' + of + (next ? ' · ' + next.name : '') + ' · room ' + sv.code;
+      $('os-title').textContent = 'Your online championship';
+      $('os-sub').textContent = (n ? n + ' of ' + of + ' races done' : 'Not started yet') + (next ? ' · next: ' + next.name : '') + ' · room ' + sv.code;
+      $('os-end').textContent = 'End season';
+    } else if (fr) {
+      // a friend's season you are racing in
+      const who = fr.host ? fr.host + "'s season" : 'Online season';
+      $('home-rejoin-sub').textContent = who + (fr.of ? ' · round ' + Math.min(fr.of, (fr.played || 0) + 1) + ' of ' + fr.of : '') + ' · room ' + fr.code;
+      $('os-title').textContent = fr.host ? fr.host + "'s championship" : 'Online championship';
+      $('os-sub').textContent = 'You are racing in this season' + (fr.of ? ' · ' + (fr.played || 0) + ' of ' + fr.of + ' races done' : '') + ' · room ' + fr.code;
+      $('os-end').textContent = 'Remove';
+    }
   }
   function goHome() {
     $('busy').classList.add('hidden');
     $('confirm').classList.add('hidden');
     $('hostaway').classList.add('hidden');
+    $('msgmenu').classList.add('hidden');
+    $('msgpop').innerHTML = '';
     confirmAction = null;
     season = null;
     updateSeasonButtons();
@@ -173,6 +205,7 @@
       const pb = window.PB.get(id);
       b.append(cv, el('div', 'tname', T.name), el('div', 'tlen', (T.length / 1000).toFixed(3) + ' km · ' + T.country),
         el('div', 'tpb' + (pb ? '' : ' none'), pb ? 'PB ' + F1.fmtLap(pb.t) : 'No personal best yet'));
+      if (T.night) b.appendChild(el('span', 'night-badge', 'Night'));
       b.dataset.id = id;
       b.disabled = !!disabled;
       b.addEventListener('click', function () {
@@ -293,6 +326,18 @@
   $('tt-start').addEventListener('click', startTT);
 
   // ------------------------------------------------------------- grand prix
+  const MAX_RACE_LAPS = 20;
+  /* The Reverse grid switch of a weekend bar (needs qualifying: greyed out with a random grid). */
+  function reverseInit(prefix, opts) {
+    const sel = $(prefix + '-reverse'), q = $(prefix + '-quali');
+    const sync = function () {
+      sel.disabled = !(opts.qualiLaps > 0);
+      sel.value = opts.reverseGrid && opts.qualiLaps > 0 ? '1' : '0';
+    };
+    sel.onchange = function () { opts.reverseGrid = this.value === '1'; };
+    q.onchange = function () { opts.qualiLaps = Number(this.value); sync(); };
+    sync();
+  }
   function lapOptions(sel, min, max, value, noneLabel) {
     const opts = [];
     if (noneLabel) opts.push([0, noneLabel]);
@@ -311,8 +356,8 @@
       $('gp-' + k).onchange = function () { gpOpts[k] = Number(this.value); };
     });
     lapOptions($('gp-quali'), 1, 5, gpOpts.qualiLaps, 'None (random grid)');
-    lapOptions($('gp-race'), 1, 7, gpOpts.raceLaps);
-    $('gp-quali').onchange = function () { gpOpts.qualiLaps = Number(this.value); };
+    lapOptions($('gp-race'), 1, MAX_RACE_LAPS, gpOpts.raceLaps);
+    reverseInit('gp', gpOpts);
     $('gp-race').onchange = function () { gpOpts.raceLaps = Number(this.value); };
     show('gp');
   }
@@ -352,9 +397,14 @@
       title: round ? 'R' + round + ' ' + STAGE_NAME[stage].toUpperCase() : type === 'practice' ? STAGE_NAME[stage].toUpperCase() : null,
       onEnd: function (results, g) {
         if (mode !== 'gp' || game.S.results !== results) return;
-        if (type === 'quali') gp.grid = results.map(function (r) { return r.driverId; });
+        const rev = type === 'quali' && !!o.reverseGrid;
+        // career: races, wins, podiums, fastest laps and pole positions
+        const own = results.find(function (r) { return !r.isAI; });
+        if (own && type === 'race') Career.race({ track: o.track, pos: own.pos, out: !!own.out, fl: !!own.fl, pts: own.pts || 0, laps: own.laps || 0, online: false });
+        if (own && type === 'quali' && own.pos === 1 && own.best !== null && !own.out) Career.pole();
+        if (type === 'quali') gp.grid = rev ? F1.reverseGrid(results) : results.map(function (r) { return r.driverId; });
         if (type === 'race' && gp.champ && !gp.recorded) recordRound(gp.champ, o.track, results);
-        showResults({ type: type, stage: stage, track: o.track, results: results, round: round, stats: g && g.S.stats }, gp.champ ? 'champ' : 'gp');
+        showResults({ type: type, stage: stage, track: o.track, results: results, round: round, stats: g && g.S.stats, grid: rev ? gp.grid : null }, gp.champ ? 'champ' : 'gp');
       }
     });
     R.resetEffects();
@@ -393,6 +443,7 @@
       const b = el('button', 'track-card');
       const cv = el('canvas');
       b.append(cv, el('div', 'tname', T.name), el('div', 'tlen', (T.length / 1000).toFixed(3) + ' km · ' + T.country));
+      if (T.night) b.appendChild(el('span', 'night-badge', 'Night'));
       b.dataset.id = id;
       b.addEventListener('click', function () {
         const k = champOpts.calendar.indexOf(id);
@@ -427,8 +478,8 @@
       $('champ-' + k).onchange = function () { champOpts[k] = Number(this.value); };
     });
     lapOptions($('champ-quali'), 1, 5, champOpts.qualiLaps, 'None (random grid)');
-    lapOptions($('champ-race'), 1, 7, champOpts.raceLaps);
-    $('champ-quali').onchange = function () { champOpts.qualiLaps = Number(this.value); };
+    lapOptions($('champ-race'), 1, MAX_RACE_LAPS, champOpts.raceLaps);
+    reverseInit('champ', champOpts);
     $('champ-race').onchange = function () { champOpts.raceLaps = Number(this.value); };
     // a season already under way?
     const c = Champ.load();
@@ -455,7 +506,8 @@
     Settings.save();
     const pool = F1.DRIVERS.map(function (d) { return d.id; }).filter(function (id) { return id !== champOpts.driverId; });
     const o = champOpts;
-    const c = { v: 1, opts: { driverId: o.driverId, aiCount: o.aiCount, aiLevel: o.aiLevel, p1: o.p1, p2: o.p2, p3: o.p3, qualiLaps: o.qualiLaps, raceLaps: o.raceLaps },
+    const c = { v: 1, opts: { driverId: o.driverId, aiCount: o.aiCount, aiLevel: o.aiLevel, p1: o.p1, p2: o.p2, p3: o.p3, qualiLaps: o.qualiLaps, raceLaps: o.raceLaps,
+      reverseGrid: !!o.reverseGrid && o.qualiLaps > 0 },
       calendar: o.calendar.slice(), aiDrivers: shuffled(pool).slice(0, o.aiCount), rounds: [], done: false };
     Champ.save(c);
     startRound(c);
@@ -469,6 +521,7 @@
     c.rounds.push({ track: track, res: results.map(function (r) { return { d: r.driverId, pos: r.pos, pts: r.pts || 0, out: !!r.out }; }) });
     if (c.rounds.length >= c.calendar.length) c.done = true;
     Champ.save(c);
+    if (c.done) Career.season(standings(c).drivers[0].id === c.opts.driverId);
   }
   /* Drivers' and constructors' points; ties go to whoever has more wins, then more 2nd places, and so on. */
   function standings(c) {
@@ -499,7 +552,8 @@
   /* Standings screen (your championship or an online season):
      o = { title, banner: { text, small } | null, calendar, drivers: [{ me, name, sub, color, cells: [{ text, cls, title }], pts }],
            teams: [{ me, name, color, pts }], note, next, newb, menu, car: { options, value } | null } */
-  const CODES = { suzuka: 'JPN', jeddah: 'KSA', montreal: 'CAN', monaco: 'MON', redbullring: 'AUT', silverstone: 'GBR', spa: 'BEL', monza: 'ITA', baku: 'AZE', interlagos: 'BRA', abudhabi: 'UAE' };
+  const CODES = { suzuka: 'JPN', jeddah: 'KSA', montreal: 'CAN', monaco: 'MON', redbullring: 'AUT', silverstone: 'GBR', spa: 'BEL', zandvoort: 'NED', monza: 'ITA',
+    baku: 'AZE', singapore: 'SGP', interlagos: 'BRA', lasvegas: 'LVG', abudhabi: 'UAE' };
   function renderStandings(o) {
     $('st-title').textContent = o.title;
     const banner = $('st-banner');
@@ -509,6 +563,8 @@
       banner.append(document.createTextNode(o.banner.text));
       banner.appendChild(el('small', null, o.banner.small));
     }
+    // a long season (more than 8 rounds): the drivers' table gets the full width, the constructors go underneath
+    document.querySelector('#standings .standings-wrap').classList.toggle('many', o.calendar.length > 8);
     // drivers: a column per round (finishing position), then the total
     const head = $('st-drivers-head');
     head.innerHTML = '';
@@ -555,6 +611,11 @@
     $('st-menu').textContent = o.menu;
     $('st-car-wrap').classList.toggle('hidden', !o.car);
     if (o.car) fillSelect($('st-car'), o.car.options, o.car.value);
+    // an online season: the room code, the invite link and the messages are at hand between rounds
+    $('st-room').classList.toggle('hidden', !o.code);
+    $('st-copy').classList.toggle('hidden', !o.code);
+    $('st-msg').classList.toggle('hidden', !o.code);
+    if (o.code) $('st-code').textContent = o.code;
     $('pause').classList.add('hidden');
     show('standings');
   }
@@ -622,6 +683,7 @@
     }
     const next = done ? null : F1.getTrack(sv.calendar[n]);
     const hostP = room.players.find(function (p) { return p.id === room.hostId; });
+    const stageList = ['p1', 'p2', 'p3'].filter(function (k) { return sv.opts[k] > 0; }).concat(sv.opts.qualiLaps > 0 ? ['quali'] : [], ['race']);
     // joined during the season and not raced yet: you can still pick a free car
     let car = null;
     if (me && !sv.rounds.some(function (rd) { return rd.res.some(function (x) { return x.eid === me.eid; }); })) {
@@ -648,10 +710,12 @@
       teams: st.teams.map(function (r) { return { me: r.id === myTeam, name: F1.team(r.id).name, color: teamColor(F1.team(r.id)), pts: r.pts }; }),
       note: done ? (isHost ? 'Season complete. Back to the lobby to start another one.' : 'Season complete.')
         : isHost ? 'The season is saved in your browser. If you leave, it pauses until you come back.'
-        : 'Waiting for ' + (hostP ? hostP.name : 'the host') + ' to start ' + (n ? 'round ' + (n + 1) : 'the first round') + '…',
-      next: isHost && next ? 'Start round ' + (n + 1) + ': ' + next.name : null,
+        : 'Waiting for ' + (hostP ? hostP.name : 'the host') + (sv.cur > 0 ? ' to carry on with round ' + (n + 1) : ' to start ' + (n ? 'round ' + (n + 1) : 'the first round')) + '…',
+      // a round that was interrupted carries on with its next session (the season is saved after every session)
+      next: !(isHost && next) ? null : sv.cur > 0 && stageList[sv.cur]
+        ? 'Continue round ' + (n + 1) + ': ' + STAGE_NAME[stageList[sv.cur]] + ' at ' + next.name : 'Start round ' + (n + 1) + ': ' + next.name,
       newb: isHost && done ? 'Back to lobby' : null,
-      menu: 'Leave room', car: car
+      menu: 'Leave room', car: car, code: room.code
     });
   }
   $('champ-start').addEventListener('click', startSeason);
@@ -681,10 +745,56 @@
       else if (go === 'champ') openChamp();
       else if (go === 'tt') openTT();
       else if (go === 'online') openOnline();
+      else if (go === 'career') openCareer();
       else show(go);
     });
   });
   document.querySelectorAll('[data-act="settings"]').forEach(function (b) { b.addEventListener('click', openSettings); });
+
+  // ------------------------------------------------------------- career
+  /* Your records across every mode: totals, and for each track your best lap, races, wins and best finish. */
+  function openCareer() {
+    const d = Career.load(), box = $('career-stats');
+    box.innerHTML = '';
+    const tile = function (label, num, sub, gold) {
+      const c = el('div', 'stat-card' + (gold ? ' gold' : ''));
+      const n = el('div', 'num', String(num));
+      if (sub) n.appendChild(el('small', null, ' ' + sub));
+      c.append(el('div', 'lbl', label), n);
+      box.appendChild(c);
+    };
+    tile('Races', d.races);
+    tile('Wins', d.wins, null, d.wins > 0);
+    tile('Podiums', d.podiums);
+    tile('Pole positions', d.poles);
+    tile('Fastest laps', d.fl);
+    tile('Championships', d.titles, d.seasons ? 'of ' + d.seasons : null, d.titles > 0);
+    const since = new Date(d.since).toLocaleDateString(undefined, { day: 'numeric', month: 'short', year: 'numeric' });
+    $('career-note').textContent = d.races
+      ? d.points + (d.points === 1 ? ' point and ' : ' points and ') + d.laps + (d.laps === 1 ? ' racing lap so far' : ' racing laps so far') + (d.online.races ? ' · online: ' + d.online.races + (d.online.races === 1 ? ' race, ' : ' races, ') + d.online.wins + (d.online.wins === 1 ? ' win' : ' wins') : '') + ' · counting since ' + since + '.'
+      : 'Races, wins and championships are counted from now on, in every mode (Grand Prix, Championship and online). Your best laps from before are already here.';
+    const body = $('career-tracks');
+    body.innerHTML = '';
+    Object.keys(F1.TRACK_DEFS).forEach(function (id) {
+      const T = F1.TRACK_DEFS[id], pb = window.PB.get(id), t = d.tracks[id];
+      const tr = el('tr');
+      tr.appendChild(el('td', 'drv', T.name));
+      tr.appendChild(el('td', 'r' + (pb ? ' purple' : ' none'), pb ? F1.fmtLap(pb.t) : '—'));
+      const car = el('td', pb && pb.d && F1.driver(pb.d) ? null : 'none');
+      if (pb && pb.d && F1.driver(pb.d)) {
+        const dr = F1.driver(pb.d), bar = el('span', 'bar');
+        bar.style.background = teamColor(F1.team(dr.team));
+        car.append(bar, document.createTextNode(F1.team(dr.team).name));
+      } else car.textContent = '—';
+      tr.appendChild(car);
+      tr.appendChild(el('td', 'r' + (t && t.races ? '' : ' none'), t && t.races ? String(t.races) : '—'));
+      tr.appendChild(el('td', 'r' + (t && t.wins ? '' : ' none'), t && t.wins ? String(t.wins) : '—'));
+      tr.appendChild(el('td', 'r' + (t && t.podiums ? '' : ' none'), t && t.podiums ? String(t.podiums) : '—'));
+      tr.appendChild(el('td', 'r' + (t && t.best ? (t.best === 1 ? ' best1' : '') : ' none'), t && t.best ? 'P' + t.best : '—'));
+      body.appendChild(tr);
+    });
+    show('career');
+  }
 
   // ------------------------------------------------------------- settings
   function openSettings() {
@@ -695,6 +805,10 @@
     segInit($('set-camera'), d.camera, function (v) { d.camera = v; Settings.save(); });
     segInit($('set-zoom'), d.zoom || 'normal', function (v) { d.zoom = v; Settings.save(); });
     segInit($('set-units'), d.units === 'mph' ? 'mph' : 'kmh', function (v) { d.units = v; Settings.save(); });
+    $('set-touch').value = d.touchSteer;
+    $('set-touch-val').textContent = d.touchSteer;
+    $('set-touch').oninput = function () { d.touchSteer = Number(this.value); $('set-touch-val').textContent = this.value; Settings.save(); };
+    renderKeys();
     $('set-labels').checked = !!d.labels;
     $('set-labels').onchange = function () { d.labels = this.checked; Settings.save(); };
     $('set-ghost').checked = d.ghost !== false;
@@ -717,7 +831,64 @@
     $('settings').classList.remove('hidden');
     Input.active = false;
   }
+  /* Driving keys: click a key button, then press the new key (Esc cancels, Backspace empties the slot). */
+  const KeyBind = window.KeyBind, Career = window.Career;
+  let keyListen = null;          // { action, slot } while waiting for a key press
+  function renderKeys() {
+    const grid = $('keys-grid');
+    grid.innerHTML = '';
+    KeyBind.ACTIONS.forEach(function (a) {
+      grid.appendChild(el('span', null, KeyBind.LABELS[a]));
+      [0, 1].forEach(function (slot) {
+        const code = KeyBind.get(a)[slot], on = keyListen && keyListen.action === a && keyListen.slot === slot;
+        const b = el('button', 'keybtn' + (on ? ' listening' : code ? '' : ' empty'), on ? 'Press a key…' : KeyBind.name(code));
+        b.type = 'button';
+        b.addEventListener('click', function () {
+          keyListen = on ? null : { action: a, slot: slot };
+          keyNote(keyListen ? 'Press the key for "' + KeyBind.LABELS[a] + '" (Esc to cancel, Backspace for no key).' : null);
+          renderKeys();
+          b.blur();
+        });
+        grid.appendChild(b);
+      });
+    });
+    $('keys-reset').disabled = KeyBind.isDefault();
+    renderKeyHints();
+  }
+  function keyNote(text, warn) {
+    $('keys-note').textContent = text || 'Click a key, then press the new one. Each action can have two keys.';
+    $('keys-note').classList.toggle('warn', !!warn);
+  }
+  /* The key list on the home screen follows your choices. */
+  function renderKeyHints() {
+    const box = $('home-keys');
+    box.innerHTML = '';
+    [[KeyBind.label('accel'), 'throttle'], [KeyBind.label('brake'), 'brake'], [KeyBind.steerLabel(), 'steer'], [KeyBind.label('drs'), 'DRS'],
+      ['R', 'reset car'], ['C', 'camera'], ['F', 'full screen'], ['Esc', 'pause']].forEach(function (k) {
+      const sp = el('span');
+      sp.append(el('b', null, k[0]), document.createTextNode(' ' + k[1]));
+      box.appendChild(sp);
+    });
+  }
+  renderKeyHints();
+  $('keys-reset').addEventListener('click', function () { keyListen = null; KeyBind.reset(); keyNote(null); renderKeys(); });
+  // while waiting for a key, the press goes to the key setting and nowhere else
+  window.addEventListener('keydown', function (e) {
+    if (!keyListen) return;
+    e.preventDefault();
+    e.stopImmediatePropagation();
+    const code = KeyBind.norm(e.code);
+    if (code === 'Escape') { keyListen = null; keyNote(null); renderKeys(); return; }
+    if (code === 'Backspace' || code === 'Delete') { KeyBind.set(keyListen.action, keyListen.slot, null); keyListen = null; keyNote(null); renderKeys(); return; }
+    const why = KeyBind.blocked(code);
+    if (why) { keyNote(why + ' — press another key (Esc to cancel).', true); return; }
+    KeyBind.set(keyListen.action, keyListen.slot, code);
+    keyListen = null;
+    keyNote(null);
+    renderKeys();
+  }, true);
   $('settings-close').addEventListener('click', function () {
+    keyListen = null;
     $('settings').classList.add('hidden');
     Input.active = mode !== 'menu' && $('overlay').classList.contains('hidden') && $('pause').classList.contains('hidden');
   });
@@ -755,6 +926,27 @@
     updatePauseBtn();
   }
   $('pausebtn').querySelector('button').addEventListener('click', function (e) { e.currentTarget.blur(); openPause(); });
+  // phones and tablets: the on-screen controls (touch.js)
+  let uprightPaused = false;
+  $('pause-fs').classList.toggle('hidden', !fsSupported);
+  $('pause-fs').addEventListener('click', function () { toggleFullscreen(); });
+  window.TouchUI.init({
+    pause: openPause,
+    /* A phone held upright while driving: a notice covers the screen. Offline the game waits, and counts down 3-2-1 once
+       the phone is turned sideways again; online the session carries on, as it does behind the pause menu. */
+    rotate: function (upright) {
+      const local = !!game && game.kind === 'local' && mode !== 'menu';
+      $('rotate-sub').textContent = local ? 'The game waits until you do' : 'The session carries on while you turn it';
+      if (!local) { uprightPaused = false; return; }
+      if (upright) {
+        if (!game.paused || game.resumeT > 0) { game.paused = true; game.cancelResume(); uprightPaused = true; }
+      } else if (uprightPaused) {
+        uprightPaused = false;
+        if (game.paused && !pauseOpen() && !game.ended && game.S.phase !== 'done') game.startResume();
+      }
+    },
+    mode: function () { syncSoundUI(); syncFsUI(); }
+  });
   $('pause-resume').addEventListener('click', function () { resume(); });
   $('pause-restart').addEventListener('click', function () {
     resume(true);
@@ -842,6 +1034,7 @@
     if (e.code !== 'Escape' && e.code !== 'KeyP') return;
     const tag = e.target && e.target.tagName;
     if (e.code === 'KeyP' && (tag === 'INPUT' || tag === 'SELECT')) return;
+    if (!$('msgmenu').classList.contains('hidden')) { $('msgmenu').classList.add('hidden'); return; }
     if (!$('settings').classList.contains('hidden')) { $('settings-close').click(); return; }
     if (!$('confirm').classList.contains('hidden')) { closeConfirm(true); return; }
     if (pauseOpen()) resume(); else openPause();
@@ -868,11 +1061,13 @@
     socket.on('ev', function (m) { if (game && game.kind === 'online') game.onEvents(m); });
     socket.on('sessionEnd', onSessionEnd);
     socket.on('season', onSeason);
+    socket.on('msg', onQuickMsg);
     socket.on('seasonEnded', function (m) {
       if (game && game.kind === 'online') game.ended = true;
       season = null;
-      const sv = OnlineSeason.load();
+      const sv = OnlineSeason.load(), fr = FriendSeason.load();
       if (sv && room && sv.code === room.code) OnlineSeason.clear();
+      if (fr && room && fr.code === room.code) FriendSeason.clear();
       if (!(m && m.finished)) toast('The host has ended the championship');
     });
     socket.on('disconnect', function () {
@@ -899,7 +1094,8 @@
     $('online-error').textContent = '';
     updateSeasonButtons();
     show('online');
-    setTimeout(function () { ($('online-name').value ? $('online-code') : $('online-name')).focus(); }, 50);
+    // (not on a phone: the on-screen keyboard would jump up and cover the screen)
+    if (!Input.touch.active) setTimeout(function () { ($('online-name').value ? $('online-code') : $('online-name')).focus(); }, 50);
     ensureNet();
   }
   function playerName() {
@@ -953,7 +1149,7 @@
   /* Your season: open the room again (as the host) from the copy in this browser. */
   function rejoinSeason() {
     const sv = OnlineSeason.load();
-    if (!sv) { updateSeasonButtons(); return; }
+    if (!sv) { rejoinFriendSeason(); return; }
     openOnline();
     const n = ensureNet();
     $('online-error').textContent = 'Opening your season…';
@@ -964,11 +1160,32 @@
       if (res.moved) toast('Your season is in room ' + res.code + ' now — send your friends the new invite link');
     });
   }
+  /* A friend's season: join its room again with the code this browser remembered. */
+  function rejoinFriendSeason() {
+    const fr = FriendSeason.load();
+    if (!fr) { updateSeasonButtons(); return; }
+    openOnline(fr.code);
+    const n = ensureNet();
+    $('online-error').textContent = 'Joining the season…';
+    n.socket.emit('joinRoom', { code: fr.code, name: playerName(), token: myToken() }, function (res) {
+      if (!res || !res.ok) {
+        $('online-error').textContent = /No room/.test((res && res.error) || '')
+          ? (fr.host || 'The host') + ' has not opened the season again yet. Try again when they are back.' : (res && res.error) || 'Could not join';
+        return;
+      }
+      $('online-error').textContent = '';
+      history.replaceState(null, '', '?room=' + res.code);
+    });
+  }
   $('home-rejoin').addEventListener('click', rejoinSeason);
   $('os-rejoin').addEventListener('click', rejoinSeason);
   $('os-end').addEventListener('click', function () {
     const sv = OnlineSeason.load();
-    if (!sv) return;
+    if (!sv) {
+      // a friend's season: just forget it in this browser
+      if (FriendSeason.load()) { FriendSeason.clear(); updateSeasonButtons(); toast('Removed — you can still join again with the room code'); }
+      return;
+    }
     askConfirm({
       title: 'End your season?', yes: 'End the season', no: 'Keep it',
       text: 'The championship ends for everyone and can\'t be continued. Results so far are not kept.',
@@ -981,6 +1198,7 @@
       }
     });
   });
+  $('st-copy').addEventListener('click', function () { $('lobby-copy').click(); });
   $('lobby-copy').addEventListener('click', function () {
     if (!room) return;
     const link = location.origin + location.pathname + '?room=' + room.code;
@@ -989,6 +1207,62 @@
     else window.prompt('Copy this link:', link);
   });
   $('lobby-start').addEventListener('click', function () { if (net) net.socket.emit('start'); });
+  $('lobby-ready').addEventListener('click', function () {
+    if (!net || !room) return;
+    const meP = room.players.find(function (p) { return p.id === net.id(); });
+    net.socket.emit('ready', !(meP && meP.ready));
+  });
+
+  // ------------------------------------------------------------- quick messages (online, ready-made)
+  const bubbles = {};            // player id -> { text, until }: shown next to the name in the lobby
+  let msgNext = 0;               // one message every 2 seconds
+  (function buildMsgMenu() {
+    const box = $('msg-groups');
+    let i = 0;
+    F1.QUICK_MSGS.forEach(function (g) {
+      const grp = el('div', 'msg-group'), row = el('div', 'row');
+      grp.appendChild(el('h4', null, g.title));
+      g.items.forEach(function (text) {
+        const idx = i++, b = el('button', 'msg-btn', text);
+        b.type = 'button';
+        b.addEventListener('click', function () { sendQuickMsg(idx); });
+        row.appendChild(b);
+      });
+      grp.appendChild(row);
+      box.appendChild(grp);
+    });
+  })();
+  function sendQuickMsg(i) {
+    if (!net || !room) return;
+    const now = performance.now();
+    if (now < msgNext) { toast('One message every 2 seconds'); return; }
+    msgNext = now + 2000;
+    net.socket.emit('msg', i);
+    $('msgmenu').classList.add('hidden');
+  }
+  document.querySelectorAll('.msg-open').forEach(function (b) {
+    b.addEventListener('click', function () { if (room && net) $('msgmenu').classList.remove('hidden'); });
+  });
+  $('msg-close').addEventListener('click', function () { $('msgmenu').classList.add('hidden'); });
+  $('msgmenu').addEventListener('click', function (e) { if (e.target === this) this.classList.add('hidden'); });
+  /* A message from someone in the room: a bubble by their name in the lobby, a pop-up on the other screens. */
+  function onQuickMsg(m) {
+    if (!room || !m) return;
+    const p = room.players.find(function (x) { return x.id === m.id; }), text = F1.QUICK_LIST[m.m];
+    if (!p || !text) return;
+    if ($('lobby').classList.contains('active')) {
+      bubbles[p.id] = { text: text, until: performance.now() + 4500 };
+      renderLobby(room);
+      setTimeout(function () { if (room && $('lobby').classList.contains('active')) renderLobby(room); }, 4600);
+      return;
+    }
+    const box = $('msgpop'), it = el('div', 'msgpop-item');
+    it.append(el('b', null, p.name + (net && p.id === net.id() ? ' (you)' : '') + ':'), document.createTextNode(text));
+    box.appendChild(it);
+    while (box.children.length > 4) box.removeChild(box.firstChild);
+    setTimeout(function () { it.classList.add('out'); }, 4200);
+    setTimeout(function () { if (it.parentNode) it.parentNode.removeChild(it); }, 4600);
+  }
   $('results-lobby').addEventListener('click', function () { if (net) net.socket.emit('backToLobby'); });
 
   function fillSelect(sel, options, value) {
@@ -1017,9 +1291,15 @@
       if (t) dot.style.background = teamColor(t);
       li.append(dot, el('span', null, p.name + (p.id === me ? ' (you)' : '')));
       if (p.id === r.hostId) li.appendChild(el('span', 'host', 'HOST'));
+      if (p.ready) li.appendChild(el('span', 'ready', '✓ READY'));
       li.appendChild(el('span', 'pdrv', d ? '#' + d.number + ' ' + d.name : 'picking…'));
+      const bub = bubbles[p.id];
+      if (bub && bub.until > performance.now()) li.appendChild(el('span', 'bubble', bub.text));
       list.appendChild(li);
     });
+    const meP = r.players.find(function (p) { return p.id === me; });
+    $('lobby-ready').classList.toggle('on', !!(meP && meP.ready));
+    $('lobby-ready').textContent = meP && meP.ready ? '✓ Ready' : 'Ready';
     const s = r.settings;
     // championship: a calendar of 2 to 11 tracks instead of one track
     const champ = s.mode === 'champ', cal = s.calendar || [];
@@ -1048,13 +1328,15 @@
     fillSelect($('set-track'), Object.keys(F1.TRACK_DEFS).map(function (id) { return [id, F1.TRACK_DEFS[id].name]; }), s.track);
     ['p1', 'p2', 'p3'].forEach(function (k) { fillSelect($('set-' + k), [[0, 'Skip'], [1, '1 lap'], [2, '2 laps'], [3, '3 laps']], s[k] || 0); });
     fillSelect($('set-quali'), [[0, 'None (random grid)'], [1, '1 lap'], [2, '2 laps'], [3, '3 laps'], [4, '4 laps'], [5, '5 laps']], s.qualiLaps);
-    const raceOpts = []; for (let i = 1; i <= 7; i++) raceOpts.push([i, i + (i === 1 ? ' lap' : ' laps')]);
-    fillSelect($('set-race'), raceOpts, Math.min(7, s.raceLaps));
+    const raceOpts = []; for (let i = 1; i <= MAX_RACE_LAPS; i++) raceOpts.push([i, i + (i === 1 ? ' lap' : ' laps')]);
+    fillSelect($('set-race'), raceOpts, Math.min(MAX_RACE_LAPS, s.raceLaps));
+    $('set-reverse').value = s.reverseGrid && s.qualiLaps > 0 ? '1' : '0';
     const aiMax = 22 - r.players.length, aiOpts = [];
     for (let i = 0; i <= 21; i++) aiOpts.push([i, i > aiMax ? i + ' (max ' + aiMax + ')' : (i === aiMax ? i + ' (full grid)' : String(i))]);
     fillSelect($('set-ai'), aiOpts, s.aiCount);
     $('set-level').value = s.aiLevel;
     ['set-mode', 'set-track', 'set-p1', 'set-p2', 'set-p3', 'set-quali', 'set-race', 'set-ai', 'set-level'].forEach(function (id) { $(id).disabled = !isHost; });
+    $('set-reverse').disabled = !isHost || !(s.qualiLaps > 0);       // a reverse grid needs qualifying
     $('lobby-hostnote').textContent = isHost ? '' : '(host decides)';
     $('lobby-start').style.display = isHost ? '' : 'none';
     const first = ['p1', 'p2', 'p3'].find(function (k) { return s[k] > 0; }) || (s.qualiLaps > 0 ? 'quali' : 'race');
@@ -1075,11 +1357,12 @@
       });
     }
   }
-  ['set-mode', 'set-track', 'set-p1', 'set-p2', 'set-p3', 'set-quali', 'set-race', 'set-ai', 'set-level'].forEach(function (id) {
+  ['set-mode', 'set-track', 'set-p1', 'set-p2', 'set-p3', 'set-quali', 'set-reverse', 'set-race', 'set-ai', 'set-level'].forEach(function (id) {
     $(id).addEventListener('change', function () {
-      const map = { 'set-mode': 'mode', 'set-track': 'track', 'set-p1': 'p1', 'set-p2': 'p2', 'set-p3': 'p3', 'set-quali': 'qualiLaps', 'set-race': 'raceLaps', 'set-ai': 'aiCount', 'set-level': 'aiLevel' };
+      const map = { 'set-mode': 'mode', 'set-track': 'track', 'set-p1': 'p1', 'set-p2': 'p2', 'set-p3': 'p3', 'set-quali': 'qualiLaps', 'set-reverse': 'reverseGrid',
+        'set-race': 'raceLaps', 'set-ai': 'aiCount', 'set-level': 'aiLevel' };
       const v = this.value, msg = {};
-      msg[map[id]] = (id === 'set-mode' || id === 'set-track' || id === 'set-level') ? v : Number(v);
+      msg[map[id]] = id === 'set-reverse' ? v === '1' : (id === 'set-mode' || id === 'set-track' || id === 'set-level') ? v : Number(v);
       if (net) net.socket.emit('settings', msg);
     });
   });
@@ -1089,6 +1372,7 @@
     room = r;
     roomAt = performance.now();
     mode = 'online';
+    if (!r.season) { const fr = FriendSeason.load(); if (fr && fr.code === r.code) FriendSeason.clear(); }
     const inSession = game && game.kind === 'online' && !game.ended;
     // an online season waits while its host is away, then carries on after a 3-2-1
     $('hostaway').classList.toggle('hidden', !r.hostAway);
@@ -1124,10 +1408,19 @@
   /* The season of this room (championship standings, your car), from the server. The host keeps a copy. */
   function onSeason(sv) {
     const first = !season;
+    // career: the season just finished while you were in it
+    if (sv && sv.done && season && !season.done && sv.you) {
+      const st = onlineStandings(sv);
+      Career.season(!!st.drivers.length && st.drivers[0].e.eid === sv.you);
+    }
     season = sv;
     if (sv && sv.save) {
       if (sv.done) OnlineSeason.clear();
       else OnlineSeason.save({ code: sv.save.code, key: sv.save.key, season: sv.save.season, at: Date.now() });
+    } else if (sv && sv.code) {
+      // racing in a friend's season: remember the room, for the Rejoin season button
+      if (sv.done || !sv.you) { const fr = FriendSeason.load(); if (fr && fr.code === sv.code) FriendSeason.clear(); }
+      else FriendSeason.save({ code: sv.code, host: sv.host || null, played: sv.rounds.length, of: sv.calendar.length, at: Date.now() });
     }
     if (sv && first && sv.rounds.length && !sv.done) {
       const me = sv.entrants.find(function (e) { return e.eid === sv.you; });
@@ -1147,6 +1440,7 @@
     clearInterval(resultsTimer);
     $('pause').classList.add('hidden');
     $('settings').classList.add('hidden');
+    $('msgmenu').classList.add('hidden');
     game = new window.OnlineGame(net, info);
     // joining a paused season (or the host coming back): wait with everyone else
     if (room && (room.hostAway || room.resumeIn)) game.setPause(!!room.hostAway, Math.max(0, (room.resumeIn || 0) - (performance.now() - roomAt)));
@@ -1156,6 +1450,12 @@
   }
 
   function onSessionEnd(m) {
+    // career: only a session you were driving in, and only once (the results can be sent again)
+    if (game && game.kind === 'online' && !game.ended && game.myId !== null && m && m.results) {
+      const code = game.code(game.myId), own = m.results.find(function (r) { return r.driverId === code && !r.isAI; });
+      if (own && m.type === 'race' && !own.left) Career.race({ track: m.track, pos: own.pos, out: !!own.out, fl: !!own.fl, pts: own.pts || 0, laps: own.laps || 0, online: true });
+      if (own && m.type === 'quali' && own.pos === 1 && own.best !== null && !own.out) Career.pole();
+    }
     if (game && game.kind === 'online') game.ended = true;
     mode = 'online';
     showResults(m, 'online');
@@ -1170,6 +1470,10 @@
     const body = $('results-body');
     body.innerHTML = '';
     $('results-table').classList.toggle('no-pts', m.type !== 'race');
+    // qualifying with a reverse grid: m.grid = driver ids in the order they start the race
+    const revGrid = m.type === 'quali' && m.grid && m.grid.length ? m.grid : null;
+    $('results-table').classList.toggle('rev', !!revGrid);
+    $('results-grid-head').textContent = revGrid ? 'Starts' : 'Grid';
     const me = net && net.id();
     const local = ctx === 'gp' || ctx === 'champ';
     const myPlayer = local ? { driverId: gp && gp.opts.driverId } : room && room.players.find(function (p) { return p.id === me; });
@@ -1190,7 +1494,7 @@
       tr.appendChild(el('td', 'r' + (r.best !== null && r.best === fastest && m.type === 'race' ? ' purple' : ''), r.best !== null ? F1.fmtLap(r.best) : '—'));
       tr.appendChild(el('td', 'r', String(r.laps)));
       // grid slot and places gained / lost
-      const gridTd = el('td', 'r race-col', r.grid ? 'P' + r.grid : '');
+      const gridTd = el('td', 'r race-col grid-col', revGrid ? 'P' + (revGrid.indexOf(r.driverId) + 1) : r.grid ? 'P' + r.grid : '');
       if (r.grid && !r.out && r.gained) gridTd.appendChild(el('span', r.gained > 0 ? 'up' : 'down', (r.gained > 0 ? '▲' : '▼') + Math.abs(r.gained)));
       tr.appendChild(gridTd);
       tr.appendChild(el('td', 'r race-col', r.ovt !== undefined ? String(r.ovt) : ''));
@@ -1204,13 +1508,15 @@
     if (local) {
       const mine = m.results.find(function (r) { return !r.isAI; });
       if (m.type === 'practice') $('results-note').textContent = mine && mine.best !== null ? 'Your best lap ' + F1.fmtLap(mine.best) + ' — P' + mine.pos : 'No lap time set';
-      else if (m.type === 'quali') $('results-note').textContent = mine ? 'You start the race from P' + mine.pos : '';
+      else if (m.type === 'quali') $('results-note').textContent = !mine ? '' : revGrid ? 'Reverse grid: you start the race from P' + (revGrid.indexOf(mine.driverId) + 1)
+        : 'You start the race from P' + mine.pos;
       else $('results-note').textContent = mine ? 'You finished P' + mine.pos + (mine.pts ? ' — ' + mine.pts + (mine.pts === 1 ? ' point' : ' points') : '') : '';
     } else if (m.next && m.nextIn) {
       let left = m.nextIn;
       const say = function () {
+        const myStart = revGrid && myPlayer ? revGrid.indexOf(myPlayer.driverId) + 1 : 0;
         return (m.next === 'race' ? 'The race' : STAGE_NAME[m.next]) + ' starts in ' + left + ' s' +
-          (m.next === 'race' && m.type === 'quali' ? ' — you start from your qualifying position' : '');
+          (m.next === 'race' && m.type === 'quali' ? (revGrid ? ' — reverse grid' + (myStart ? ': you start P' + myStart : '') : ' — you start from your qualifying position') : '');
       };
       $('results-note').textContent = say();
       resultsTimer = setInterval(function () {
@@ -1268,6 +1574,7 @@
     $('results-restart').style.display = isGp && !isChamp && raceDone && gp && gp.stages.length > 1 ? '' : 'none';
     $('results-standings').style.display = (isChamp || onlineSeason) && raceDone ? '' : 'none';
     $('results-menu').style.display = isGp ? '' : 'none';
+    $('results-msg').classList.toggle('hidden', isGp || !room);
     if (onlineSeason) {
       const done = season && season.done;
       $('results-note').textContent = isHost ? (done ? 'The season is over: see the final standings.' : 'Next: the championship standings, then start the next round.')

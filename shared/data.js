@@ -4,7 +4,17 @@
   const F1 = (root.F1 = root.F1 || {});
 
   // Game version: goes up by one with every update
-  F1.VERSION = 8;
+  F1.VERSION = 9;
+
+  // Quick messages for online rooms (ready-made, no typing). The server only passes on their number.
+  F1.QUICK_MSGS = [
+    { title: 'Before a race', items: ["Let's go!", 'Wait for me', 'Back in 2 minutes'] },
+    { title: 'After a race', items: ['Good race!', 'Well driven', 'Nice overtake', 'Sorry about that', 'So close!'] },
+    { title: 'What next', items: ['One more race?', 'Change the track?', 'Last one for me', 'Got to go!'] },
+    { title: 'Answers', items: ['Yes', 'No', '👍', '😂', '😢'] }
+  ];
+  F1.QUICK_LIST = [];
+  F1.QUICK_MSGS.forEach(function (g) { g.items.forEach(function (t) { F1.QUICK_LIST.push(t); }); });
 
   // Simple livery colours: primary = main body, secondary = engine cover / wings, accent = helmet & details.
   // ui = the team colour used for menus, the timing tower, labels and the minimap (bright on dark backgrounds).
