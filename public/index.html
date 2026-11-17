@@ -33,7 +33,7 @@
         <button class="btn big red" data-go="online">Online with friends</button>
         <button class="btn big season hidden" id="home-rejoin">Rejoin season<small id="home-rejoin-sub"></small></button>
         <div class="menu-row">
-          <button class="btn" data-go="career">Career</button>
+          <button class="btn" data-go="career">Career statistics</button>
           <button class="btn" data-act="settings">Settings</button>
         </div>
       </div>
@@ -63,6 +63,12 @@
           </div>
           <h3>Collisions</h3>
           <label class="check"><input type="checkbox" id="practice-coll" checked> Cars can hit each other</label>
+          <h3>Conditions</h3>
+          <div class="cond-box">
+            <label class="check" title="Right behind another car on a straight there is less air to push through: you go faster"><input type="checkbox" id="practice-draft"> Drafting <span class="muted-inline">(slipstream on the straights)</span></label>
+            <label class="check" title="Tyres wear out as you drive; in a race at least one pit stop is compulsory"><input type="checkbox" id="practice-tyres"> Tyre wear <span class="muted-inline">(and pit stops)</span></label>
+            <label class="check" title="Rain can come and go during a session, as it would at that track"><input type="checkbox" id="practice-weather"> Weather <span class="muted-inline">(off = always dry)</span></label>
+          </div>
         </div>
         <div class="col wide">
           <h3>Choose your driver</h3>
@@ -100,7 +106,7 @@
     <section id="career" class="screen panel">
       <div class="panel-head">
         <button class="btn ghost" data-go="home">← Back</button>
-        <h2>Career</h2>
+        <h2>Career statistics</h2>
         <span></span>
       </div>
       <div class="results-wrap career-wrap">
@@ -140,6 +146,12 @@
           <h3>AI difficulty</h3>
           <div class="seg" id="gp-level">
             <button data-v="easy">Easy</button><button data-v="medium" class="on">Medium</button><button data-v="hard">Hard</button>
+          </div>
+          <h3>Conditions</h3>
+          <div class="cond-box">
+            <label class="check" title="Right behind another car on a straight there is less air to push through: you go faster"><input type="checkbox" id="gp-draft"> Drafting <span class="muted-inline">(slipstream on the straights)</span></label>
+            <label class="check" title="Tyres wear out as you drive; in a race at least one pit stop is compulsory"><input type="checkbox" id="gp-tyres"> Tyre wear <span class="muted-inline">(and pit stops)</span></label>
+            <label class="check" title="Rain can come and go during a session, as it would at that track"><input type="checkbox" id="gp-weather"> Weather <span class="muted-inline">(off = always dry)</span></label>
           </div>
         </div>
         <div class="col wide">
@@ -182,6 +194,12 @@
           <h3>AI difficulty</h3>
           <div class="seg" id="champ-level">
             <button data-v="easy">Easy</button><button data-v="medium" class="on">Medium</button><button data-v="hard">Hard</button>
+          </div>
+          <h3>Conditions</h3>
+          <div class="cond-box">
+            <label class="check" title="Right behind another car on a straight there is less air to push through: you go faster"><input type="checkbox" id="champ-draft"> Drafting <span class="muted-inline">(slipstream on the straights)</span></label>
+            <label class="check" title="Tyres wear out as you drive; in a race at least one pit stop is compulsory"><input type="checkbox" id="champ-tyres"> Tyre wear <span class="muted-inline">(and pit stops)</span></label>
+            <label class="check" title="Rain can come and go during a session, as it would at that track"><input type="checkbox" id="champ-weather"> Weather <span class="muted-inline">(off = always dry)</span></label>
           </div>
         </div>
         <div class="col wide">
@@ -281,6 +299,9 @@
             <label>Race laps<select id="set-race"></select></label>
             <label>AI cars<select id="set-ai"></select></label>
             <label>AI difficulty<select id="set-level"><option value="easy">Easy</option><option value="medium">Medium</option><option value="hard">Hard</option></select></label>
+            <label title="Slipstream: right behind another car on a straight you go faster">Drafting<select id="set-draft"><option value="1">On</option><option value="0">Off</option></select></label>
+            <label title="Tyres wear out; in a race at least one pit stop is compulsory">Tyre wear<select id="set-tyres"><option value="1">On</option><option value="0">Off</option></select></label>
+            <label class="span2" title="Rain can come and go during a session">Weather<select id="set-weather"><option value="1">Changes (realistic)</option><option value="0">Off (always dry)</option></select></label>
           </div>
           <button class="btn red big" id="lobby-start">Start qualifying</button>
           <div class="waiting" id="lobby-waiting">Waiting for the host to start…</div>
@@ -302,7 +323,7 @@
       <div class="results-wrap">
         <div class="race-stats hidden" id="race-stats"></div>
         <table class="results" id="results-table">
-          <thead><tr><th>Pos</th><th>Driver</th><th>Team</th><th class="r">Time / Gap</th><th class="r">Best lap</th><th class="r">Laps</th><th class="r race-col grid-col" id="results-grid-head">Grid</th><th class="r race-col" title="Overtakes">Overtakes</th><th class="r pts-col">Pts</th></tr></thead>
+          <thead><tr><th>Pos</th><th>Driver</th><th>Team</th><th class="r">Time / Gap</th><th class="r">Best lap</th><th class="r">Laps</th><th class="race-col ty-col" title="Tyres used, in order">Tyres</th><th class="r race-col grid-col" id="results-grid-head">Grid</th><th class="r race-col" title="Overtakes">Overtakes</th><th class="r pts-col">Pts</th></tr></thead>
           <tbody id="results-body"></tbody>
         </table>
       </div>
@@ -376,7 +397,8 @@
   <!-- SETTINGS -->
   <div id="settings" class="modal hidden">
     <div class="modal-box">
-      <h2>Settings</h2>
+      <div class="modal-head"><h2>Settings</h2><button type="button" class="x-btn" id="settings-x" aria-label="Close settings" title="Close">
+        <svg viewBox="0 0 24 24" width="20" height="20" aria-hidden="true"><path d="M6 6l12 12M18 6L6 18" fill="none" stroke="currentColor" stroke-width="2.6" stroke-linecap="round"/></svg></button></div>
       <label class="slider key-only"><span class="slider-title">Steering sensitivity <b id="set-steer-val">5</b></span>
         <input type="range" id="set-steer" min="1" max="12" step="1">
         <span class="hint-row"><span>Smooth</span><span>Sharp</span></span>
@@ -396,11 +418,16 @@
           <button data-v="kmh">km/h</button><button data-v="mph">mph</button>
         </div>
       </label>
+      <label class="touch-only">Steering on the screen
+        <div class="seg" id="set-touchmode">
+          <button data-v="arrows">Arrow buttons</button><button data-v="slide">Slider</button>
+        </div>
+      </label>
       <label class="slider touch-only"><span class="slider-title">Touch steering sensitivity <b id="set-touch-val">5</b></span>
         <input type="range" id="set-touch" min="1" max="10" step="1">
-        <span class="hint-row"><span>Long slide</span><span>Short slide</span></span>
+        <span class="hint-row"><span id="set-touch-lo">Gentle</span><span id="set-touch-hi">Quick</span></span>
       </label>
-      <p class="note touch-only">Left thumb: slide left and right to steer. Right thumb: GO and BRAKE. Slide up from GO onto DRS when it lights up.</p>
+      <p class="note touch-only" id="set-touch-note"></p>
       <div class="keys-box" id="keys-box">
         <div class="sound-head"><span>Driving keys</span><button type="button" class="btn small" id="keys-reset">Reset keys</button></div>
         <div class="keys-grid" id="keys-grid"></div>
@@ -419,8 +446,40 @@
         </div>
         <p class="note" id="set-engine-note"></p>
       </div>
-      <button class="btn red" id="settings-close">Done</button>
+      <button class="btn red" id="settings-close">Save</button>
     </div>
+  </div>
+
+  <!-- phones and tablets: play in full screen (asked before a session starts) -->
+  <div id="fsnotice" class="modal hidden">
+    <div class="modal-box fsn-box">
+      <div class="fsn-icon" aria-hidden="true">
+        <svg viewBox="0 0 24 24" width="44" height="44"><path d="M4 9V4h5M15 4h5v5M20 15v5h-5M9 20H4v-5" fill="none" stroke="#fff" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"/></svg>
+      </div>
+      <h2 id="fsn-title">Play in full screen</h2>
+      <p id="fsn-text"></p>
+      <button class="btn red big" id="fsn-go">Go full screen</button>
+      <button class="btn" id="fsn-skip">Continue anyway</button>
+      <label class="check fsn-never"><input type="checkbox" id="fsn-never"> Don't show this again</label>
+    </div>
+  </div>
+
+  <!-- in your garage (practice and qualifying) -->
+  <div id="garage" class="hidden">
+    <div class="gar-box">
+      <div class="gar-head"><span class="gar-icon" aria-hidden="true"></span><b>In your garage</b></div>
+      <div class="gar-stats" id="gar-stats"></div>
+      <div class="gar-tyres hidden" id="gar-tyres"><div class="gar-tlabel">Tyres for your next run</div><div class="tyre-chips" id="gar-chips"></div></div>
+      <button type="button" class="btn red" id="gar-go">Go back out</button>
+      <div class="gar-hint" id="gar-hint"></div>
+    </div>
+  </div>
+
+  <!-- tyres in a race: on the grid before the start, and when the crew brings you in for a pit stop -->
+  <div id="tyrepick" class="hidden">
+    <div class="tp-title" id="tp-title"></div>
+    <div class="tyre-chips" id="tp-chips"></div>
+    <div class="tp-note" id="tp-note"></div>
   </div>
 
   <div id="toast"></div>
@@ -451,8 +510,10 @@
     <div class="lbl">Pause (P)</div>
   </div>
 
-  <!-- on-screen controls (phones and tablets): slide to steer on the left, pedals on the right -->
+  <!-- on-screen controls (phones and tablets): arrow buttons (or a slider) on the left, pedals on the right -->
   <div id="touchui" class="hidden">
+    <div id="t-left" class="t-arrow"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M15.5 4.5L7.5 12l8 7.5" fill="none" stroke="#fff" stroke-width="3.2" stroke-linecap="round" stroke-linejoin="round"/></svg></div>
+    <div id="t-right" class="t-arrow"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M8.5 4.5l8 7.5-8 7.5" fill="none" stroke="#fff" stroke-width="3.2" stroke-linecap="round" stroke-linejoin="round"/></svg></div>
     <div id="t-steer">
       <span class="t-label">SLIDE TO STEER</span>
       <div class="t-track"><i class="l"></i><i class="r"></i></div>
@@ -493,6 +554,7 @@
   <script src="js/render.js"></script>
   <script src="js/hud.js"></script>
   <script src="js/touch.js"></script>
+  <script src="js/dropdown.js"></script>
   <script src="js/game-local.js"></script>
   <script src="js/game-online.js"></script>
   <script src="js/main.js"></script>

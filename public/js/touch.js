@@ -1,7 +1,9 @@
 /* On-screen controls for phones and tablets.
-   Left thumb: slide left and right to steer, starting from wherever the thumb lands. Right thumb: the brake and
-   accelerator pedals; the DRS button sits on top of the accelerator, so the thumb can slide up onto it without
-   lifting. Two small buttons beside the minimap: pause, and put the car back on track.
+   Left thumb: two arrow buttons; hold one to steer (the longer you hold, the more the car turns, like the arrow keys),
+   and slide across to the other without lifting. (Settings can switch to the slider instead: slide left and right from
+   wherever the thumb lands.) Right thumb: the brake and accelerator pedals; the DRS button sits on top of the
+   accelerator, so the thumb can slide up onto it without lifting. Two small buttons beside the minimap: pause, and put
+   the car back on track.
    What the thumbs are doing goes into Input.touch, which Input.sample() reads. The page switches to these controls
    at the first touch, and back to the keyboard when a driving key is pressed. */
 (function () {
@@ -20,7 +22,8 @@
   const cb = {};
   let wanted = false;            // a session is on screen (no menu, no pause)
   let portrait = false;          // a phone held upright while driving: the "turn your phone" notice is up
-  const steers = {};             // fingers on the left half: touch id -> { x0, tL, tR, u } (the one slid furthest steers)
+  const steers = {};             // slider: fingers on the left half: touch id -> { x0, tL, tR, u } (the one slid furthest steers)
+  const arrows = {};             // arrow buttons: fingers on them: touch id -> { dir: -1 | 1, t: when it got there }
   const pedals = {};             // fingers on the right half: touch id -> { x, y, gas }
   let drsShown = '', stuckShown = false, labelGone = false;
 
@@ -29,36 +32,57 @@
     travel: function () { return TRAVEL[F1.clamp(Math.round(Number(Settings.data.touchSteer)) || 5, 1, 10) - 1]; }
   };
 
+  function slideMode() { return Settings.data.touchMode === 'slide'; }
+
   /* Where everything goes, for this screen size. Phones get smaller parts; on tablets the controls sit a little
-     higher, where the thumbs are when you hold one by its sides. */
+     higher, where the thumbs are when you hold one by its sides. The dashboard goes in the space left between the
+     two thumbs' controls, so nothing overlaps on any screen. */
   function layout() {
     const W = window.innerWidth, H = window.innerHeight;
     const phone = H < 520 || W < 700;
-    const o = { W: W, H: H, phone: phone };
+    const o = { W: W, H: H, phone: phone, slide: slideMode() };
     o.bottom = phone ? 10 : F1.clamp(Math.round((H - 420) * 0.22), 14, 110);
-    const gasW = phone ? 92 : 108, gasH = phone ? F1.clamp(Math.round(H * 0.36), 100, 132) : 150;
-    const brakeW = phone ? 84 : 98, brakeH = Math.round(gasH * 0.82), drsH = phone ? 36 : 44;
-    o.gas = { x: W - 14 - gasW, y: H - o.bottom - gasH, w: gasW, h: gasH };
-    o.brake = { x: o.gas.x - 10 - brakeW, y: H - o.bottom - brakeH, w: brakeW, h: brakeH };
-    o.drs = { x: o.gas.x, y: o.gas.y - 8 - drsH, w: gasW, h: drsH };
-    o.divX = o.gas.x - 5;                      // left of this line a finger brakes, right of it it accelerates
+    // right thumb: the pedals
+    const gasW = phone ? 70 : 81, gasH = phone ? F1.clamp(Math.round(H * 0.27), 76, 100) : 112;
+    const brakeW = phone ? 64 : 74, brakeH = Math.round(gasH * 0.82), drsH = phone ? 30 : 34, gap = phone ? 8 : 10;
+    o.gas = { x: W - 12 - gasW, y: H - o.bottom - gasH, w: gasW, h: gasH };
+    o.brake = { x: o.gas.x - gap - brakeW, y: H - o.bottom - brakeH, w: brakeW, h: brakeH };
+    o.drs = { x: o.gas.x, y: o.gas.y - 7 - drsH, w: gasW, h: drsH };
+    o.divX = o.gas.x - gap / 2;                // left of this line a finger brakes, right of it it accelerates
     o.side = W - o.brake.x;                    // width of the pedal block, from the right edge
+    // left thumb: two arrow buttons (or the slider's guide)
+    let aw = phone ? F1.clamp(Math.round(W * 0.105), 62, 80) : 92;
+    const ah = phone ? F1.clamp(Math.round(H * 0.24), 66, 84) : 92, agap = phone ? 8 : 10;
+    o.travel = api.travel();
+    o.vis = Math.min(o.travel, phone ? 56 : 80);
+    const half = o.vis + KNOB / 2;
+    let left = o.slide ? 12 + 2 * half : 12 + 2 * aw + agap;
+    // a very narrow screen: smaller arrows, so the dashboard still fits between the thumbs
+    const minDash = 220;
+    if (!o.slide && W - left - o.side - 20 < minDash) {
+      aw = Math.max(50, Math.floor((W - o.side - 20 - minDash - 12 - agap) / 2));
+      left = 12 + 2 * aw + agap;
+    }
+    o.left = { x: 12, y: H - o.bottom - ah, w: aw, h: ah };
+    o.right = { x: 12 + aw + agap, y: H - o.bottom - ah, w: aw, h: ah };
+    o.arrowDiv = o.right.x - agap / 2;          // left of this line: the left arrow
+    o.arrowTop = o.left.y;
+    o.gx = 12 + half;
+    o.gy = H - o.bottom - Math.round(ah / 2);
+    o.leftW = left;                            // width of the left thumb's block, from the left edge
     // top right: the minimap, with pause and "back on track" beside it
     o.mini = phone ? F1.clamp(Math.round(H * 0.27), 76, 112) : W < 820 ? 130 : 200;
     o.btn = phone ? 40 : 48;
     const bx = W - 12 - o.mini - 8 - o.btn;
     o.pause = { x: bx, y: 12, w: o.btn, h: o.btn };
     o.reset = { x: bx, y: 12 + o.btn + 6, w: o.btn, h: o.btn };
-    // dashboard: the usual one when it fits between the thumbs, else a slim one
-    const room = W - 2 * (o.side + 10);
+    // dashboard: in the middle of the space between the two blocks; the usual one when it fits, else a slim one
+    const x0 = left + 10, x1 = W - o.side - 10, room = x1 - x0;
     o.dash = !phone && room >= 560 ? 'full' : !phone && room >= 400 ? 'compact' : 'slim';
-    o.dashW = F1.clamp(room, 220, 400);
+    o.dashW = o.dash === 'full' ? 560 : o.dash === 'compact' ? 400 : F1.clamp(room, 200, 400);
+    o.dashCx = Math.round((x0 + x1) / 2);
+    o.dashX = Math.round(o.dashCx - o.dashW / 2);
     o.dashH = o.dash === 'full' ? 96 : o.dash === 'compact' ? 84 : 56;
-    // the steering guide: where it rests, and how far its knob moves on screen
-    o.travel = api.travel();
-    o.vis = Math.min(o.travel, phone ? 62 : 90);
-    o.gx = Math.max(o.vis + KNOB / 2 + 14, Math.round(W * 0.17));
-    o.gy = H - o.bottom - Math.round(phone ? gasH * 0.5 : 86);
     return o;
   }
 
@@ -72,9 +96,11 @@
   function release() {
     for (const id in pedals) delete pedals[id];
     for (const id in steers) delete steers[id];
-    T.held = false; T.steer = 0; T.throttle = 0; T.brake = 0; T.drs = false; T.drsTap = false;
+    for (const id in arrows) delete arrows[id];
+    T.held = false; T.steer = 0; T.dir = 0; T.throttle = 0; T.brake = 0; T.drs = false; T.drsTap = false;
     if (!els) return;
     els.gas.classList.remove('on'); els.brake.classList.remove('on'); els.drs.classList.remove('press'); els.steer.classList.remove('on');
+    els.left.classList.remove('on'); els.right.classList.remove('on');
     els.knob.style.transform = '';
   }
 
@@ -89,9 +115,13 @@
     if (!on || port) release();
     if (api.L) {
       const L = api.L, half = L.vis + KNOB / 2;
+      if (L.slide !== (root.classList.contains('slide'))) release();
       put(els.gas, L.gas); put(els.brake, L.brake); put(els.drs, L.drs); put(els.pause, L.pause); put(els.reset, L.reset);
+      put(els.left, L.left); put(els.right, L.right);
       put(els.steer, { x: L.gx - half, y: L.gy - 28, w: half * 2, h: 56 });
       root.classList.toggle('phone', L.phone);
+      root.classList.toggle('slide', L.slide);
+      T.mode = L.slide ? 'slide' : 'arrows';
     }
     if (port !== portrait) { portrait = port; if (cb.rotate) cb.rotate(port); }
   }
@@ -138,10 +168,27 @@
     if (!labelGone && a > 24) { labelGone = true; els.steer.classList.add('used'); }
     steerState();
   }
+  /* Arrow buttons: the newest finger on an arrow decides (two thumbs on both arrows: the last one pressed). */
+  function arrowState() {
+    let dir = 0, at = -1;
+    for (const id in arrows) { const a = arrows[id]; if (a.t > at) { at = a.t; dir = a.dir; } }
+    T.dir = dir;
+    T.held = dir !== 0;
+    els.left.classList.toggle('on', dir < 0); els.right.classList.toggle('on', dir > 0);
+  }
+  let arrowN = 0;
   function begin(t) {
     const L = api.L, x = t.clientX, y = t.clientY;
     if (hit(L.pause, x, y, 7)) { if (cb.pause) cb.pause(); return; }
     if (hit(L.reset, x, y, 7)) { Input.resetEdge = true; flash(els.reset); return; }
+    if (!L.slide && x < L.W * 0.5) {
+      // the lower left is the two arrows: whichever side of the line between them the finger is on
+      // (a touch higher up, over the timing tower, does nothing)
+      if (y < L.arrowTop - 50) return;
+      arrows[t.identifier] = { dir: x < L.arrowDiv ? -1 : 1, t: ++arrowN };
+      arrowState();
+      return;
+    }
     if (x >= L.W * 0.5) {
       // the lower right is the pedals: whichever side of the line between them the finger is on
       // (a touch higher up, near the minimap and its buttons, does nothing)
@@ -157,6 +204,13 @@
   }
   function move(t) {
     if (steers[t.identifier]) { steerMove(steers[t.identifier], t.clientX); return; }
+    const a = arrows[t.identifier];
+    if (a) {
+      // sliding from one arrow to the other: switch once the thumb is clearly across the line
+      const x = t.clientX, d = a.dir < 0 && x > api.L.arrowDiv + 7 ? 1 : a.dir > 0 && x < api.L.arrowDiv - 7 ? -1 : 0;
+      if (d) { a.dir = d; a.t = ++arrowN; arrowState(); }
+      return;
+    }
     const p = pedals[t.identifier];
     if (!p) return;
     p.x = t.clientX; p.y = t.clientY;
@@ -166,6 +220,7 @@
   }
   function end(t) {
     if (steers[t.identifier]) { delete steers[t.identifier]; steerState(); return; }
+    if (arrows[t.identifier]) { delete arrows[t.identifier]; arrowState(); return; }
     if (pedals[t.identifier]) { delete pedals[t.identifier]; pedalState(); }
   }
   function each(e, fn) {
@@ -180,7 +235,8 @@
   api.init = function (o) {
     Object.assign(cb, o || {});
     root = $('touchui');
-    els = { gas: $('t-gas'), brake: $('t-brake'), drs: $('t-drs'), pause: $('t-pause'), reset: $('t-reset'), steer: $('t-steer'), knob: $('t-knob') };
+    els = { gas: $('t-gas'), brake: $('t-brake'), drs: $('t-drs'), pause: $('t-pause'), reset: $('t-reset'), steer: $('t-steer'), knob: $('t-knob'),
+      left: $('t-left'), right: $('t-right') };
     root.addEventListener('touchstart', function (e) { each(e, begin); }, { passive: false });
     root.addEventListener('touchmove', function (e) { each(e, move); }, { passive: false });
     root.addEventListener('touchend', function (e) { each(e, end); }, { passive: false });

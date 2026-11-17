@@ -37,6 +37,8 @@
     this.S = new F1.Session({
       type: this.type, track: this.T, entries: entries, laps: opts.laps || 0,
       aiLevel: opts.aiLevel || 'medium', collisions: this.type === 'practice' ? opts.collisions !== false : true,
+      drafting: opts.drafting !== false, runs: this.type === 'practice' && !opts.attract && !this.tt,
+      tyres: !opts.attract && !this.tt && opts.tyres === true, weather: !opts.attract && !this.tt && opts.weather === true,
       seed: (rng() * 1e9) | 0, startMode: this.tt ? 'flying' : this.type === 'practice' && !opts.attract ? 'pit' : 'grid'
     });
     this.me = this.myId !== null ? this.S.byId[this.myId] : null;
@@ -115,7 +117,10 @@
   LocalGame.prototype.step = function (fast) {
     if (this.paused || (this.ff && !fast)) return;
     const inputs = {};
-    if (this.me) inputs[this.myId] = window.Input.sample(F1.DT);
+    if (this.me) {
+      inputs[this.myId] = window.Input.sample(F1.DT);
+      if (this.goOut) { inputs[this.myId].garageOut = true; this.goOut = false; }    // the garage's "Go back out" button
+    }
     this.S.step(inputs);
     if (this.rec && !this.me.out) this.rec.sample(this.S.time, this.me);
     const evs = this.S.drainEvents();
@@ -146,7 +151,7 @@
       if (this.T.bank && this.kind !== 'attract' && !this.ff) window.HUD.bankHint(this.T, this.me, this.msgs, this.bankSeen || (this.bankSeen = {}));
       this.wrongT = F1.isWrongWay(this.me, this.T) ? this.wrongT + F1.DT : 0;
       const sp = Math.hypot(this.me.vx, this.me.vy);
-      this.stuckT = sp < 2 && this.S.phase !== 'countdown' && !this.me.inPit && this.S.time > 4 ? this.stuckT + F1.DT : 0;
+      this.stuckT = sp < 2 && this.S.phase !== 'countdown' && !this.me.inPit && !this.me.gar && this.S.time > 4 ? this.stuckT + F1.DT : 0;
     }
   };
 
@@ -169,9 +174,15 @@
   LocalGame.prototype.render = function (R, alpha, dt) {
     const S = this.S, T = this.T;
     this.tickResume(dt);
-    const cars = [];
-    for (let i = 0; i < S.cars.length; i++) if (!S.cars[i].out) cars.push(this.view(S.cars[i], this.paused ? 1 : alpha));
-    let focus = this.me ? this.views[this.myId] : null;
+    const cars = [], garage = [];
+    for (let i = 0; i < S.cars.length; i++) {
+      const c = S.cars[i];
+      if (c.out) continue;
+      const v = this.view(c, this.paused ? 1 : alpha);
+      v.garage = !!c.gar;                    // in the garage or rolling in / out: drawn under the garage roof
+      if (v.garage) garage.push(v); else cars.push(v);
+    }
+    let focus = this.me && !this.me.out ? this.views[this.myId] : null;
     if (!focus && cars.length) focus = cars[0];
     // the ghost runs from the moment you start a timed lap
     const g = this.ghostLap();
@@ -181,8 +192,9 @@
         ghost: true, replay: true, me: false, delta: 0, drsOpen: false, surf: 0 });
       if (window.ghostAt(g, t, gv)) cars.unshift(gv);
     }
-    const frame = { track: T, cars: cars, labels: window.Settings.data.labels,
-      lights: S.phase === 'countdown' ? S.lights : 0, pitRed: S.phase === 'countdown' && this.type === 'race' };
+    const frame = { track: T, cars: cars, garage: garage, labels: window.Settings.data.labels,
+      lights: S.phase === 'countdown' ? S.lights : 0, pitRed: S.phase === 'countdown' && this.type === 'race',
+      weather: S.weatherOn ? { rain: S.rain, wet: S.wet, ld: S.lineDry } : null };
     R.updateCamera(focus, dt, this.kind === 'attract' ? true : window.Settings.data.camera === 'rotate', this.kind === 'attract' ? 'normal' : window.Settings.data.zoom);
     for (let i = 0; i < this.fx.length; i++) {
       const f = this.fx[i];
@@ -227,7 +239,8 @@
     const rows = {};
     for (let i = 0; i < S.cars.length; i++) {
       const c = S.cars[i];
-      rows[c.id] = { laps: c.lapsDone, last: c.lastLap, best: c.bestLap, gap: c.gap, lapStart: c.lapStart, fin: c.finished, out: c.out, qdone: c.qualiDone, dist: c.raceDist, pen: c.penalty };
+      rows[c.id] = { laps: c.lapsDone, last: c.lastLap, best: c.bestLap, gap: c.gap, lapStart: c.lapStart, fin: c.finished, out: c.out, qdone: c.qualiDone, dist: c.raceDist, pen: c.penalty,
+        gar: !!c.gar, pit: !c.gar && (c.inPit || !!(c.pitPlan && c.pitPlan.entered)), ty: c.tyre.c, tw: c.tyre.w, st: c.stops };
     }
     // live gap to the ghost (time trial, and practice when the ghost is on)
     let delta = null;
@@ -240,11 +253,36 @@
       type: this.type, laps: S.laps, track: this.T, order: S.order, rows: rows, entries: this.entries, title: this.opts.title, delta: delta,
       myId: this.myId, phase: PH[S.phase], lights: S.lights, time: S.time,
       timeLeft: isFinite(S.timeLimit) ? Math.max(0, S.timeLimit - S.time) : -1,
-      fastestId: S.fastest ? S.fastest.id : null, own: this.me, msgs: this.msgs, ping: null,
+      fastestId: S.fastest ? S.fastest.id : null, own: this.me, msgs: this.msgs, ping: null, tyres: S.tyres, tyresShow: this.tyresShown(),
+      weather: S.weatherOn ? { rain: S.rain, wet: S.wet, ld: S.lineDry } : null,
       started: this.started, wrongT: this.wrongT, stuckT: this.stuckT, sectors: this.sectors.view()
     });
     if (this.resumeT > 0) { hud.resume = Math.ceil(this.resumeT); hud.hint = null; }
     return hud;
+  };
+
+  /* Your car parked in your garage (practice and qualifying): what the garage panel shows. null = not parked. */
+  LocalGame.prototype.garageState = function () {
+    const me = this.me;
+    if (!me || me.out || !me.gar || me.gar.k !== 'park' || this.kind !== 'local') return null;
+    return { best: me.bestLap, pos: me.pos, laps: me.lapsDone, n: this.S.cars.length, first: !me.gMoved,
+      tyres: this.tyresShown() ? { cur: me.tyreNext || this.S.defaultTyre(me), opts: this.tyreOpts() } : null };
+  };
+
+  /* Tyres. Shown when they matter: tyre wear on (or rain). The choice: the dry tyres, and the rain ones when the weather is on. */
+  LocalGame.prototype.tyresShown = function () { return !!(this.S.tyres || this.S.weatherOn); };
+  LocalGame.prototype.tyreOpts = function () { return this.S.weatherOn ? F1.TYRE_KEYS.slice() : ['S', 'M', 'H']; };
+  LocalGame.prototype.pickTyre = function (k) { if (this.me && this.kind === 'local') this.S.setTyreChoice(this.myId, k); };
+  /* The tyre picker in a race: on the grid before the start (tyre wear on), and while the car is brought in for a pit
+     stop; then the stop itself. null = nothing to show. */
+  LocalGame.prototype.tyreState = function () {
+    const S = this.S, me = this.me;
+    if (!me || me.out || this.kind !== 'local' || S.type !== 'race') return null;
+    if (S.phase === 'countdown') return S.gridT > 0 ? { mode: 'grid', cur: me.tyre.c, opts: this.tyreOpts(), must: S.mustStop, laps: S.laps, wet: S.lineWet(), wear: S.tyres } : null;
+    if (me.finished) return null;
+    if (me.pitStop) return { mode: 'stop', cur: me.pitStop.k, left: me.pitStop.t0 + me.pitStop.dur - S.time };
+    if (me.pitPlan && me.pitPlan.entered && me.pitPlan.stage === 'in') return { mode: 'pit', cur: me.tyreNext || S.defaultTyre(me), opts: this.tyreOpts(), left: S.laps - me.lapsDone };
+    return null;
   };
 
   window.LocalGame = LocalGame;

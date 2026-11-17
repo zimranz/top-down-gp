@@ -87,7 +87,8 @@ function newRoom(code, hostId) {
     hostId: hostId,
     players: new Map(),
     settings: { mode: 'single', track: 'monza', calendar: ['suzuka', 'montreal', 'silverstone', 'monza', 'baku'],
-      p1: 0, p2: 0, p3: 0, qualiLaps: 2, reverseGrid: false, raceLaps: 5, aiCount: 21, aiLevel: 'medium' },
+      p1: 0, p2: 0, p3: 0, qualiLaps: 2, reverseGrid: false, raceLaps: 5, aiCount: 21, aiLevel: 'medium',
+      drafting: true, tyreWear: true, weather: true },      // race conditions (the host's switches)
     state: 'lobby',
     session: null,
     carOf: new Map(), ownerOf: new Map(), inputQ: new Map(), lastIn: new Map(), ack: new Map(), lastSeq: new Map(),
@@ -130,6 +131,10 @@ function sessionInfo(room) {
     track: S.track.id,
     laps: S.laps,
     aiLevel: S.aiLevel,
+    drafting: S.drafting,
+    tyres: S.tyres, mustStop: S.mustStop, gridT: S.gridT,      // tyre wear; a compulsory pit stop; seconds on the grid to pick tyres
+    weather: S.weatherOn,
+    plan: S.startTyre || 'S',                                    // the tyres a player starts on unless they pick
     entries: S.cars.map(function (c) {
       return { id: c.id, driverId: c.driverId, isAI: c.isAI, name: c.name, owner: room.ownerOf.get(c.id) || null };
     })
@@ -190,7 +195,7 @@ function startSeason(room) {
   const se = {
     v: 1, key: newKey(), calendar: st.calendar.slice(0, MAX_ROUNDS),
     opts: { p1: st.p1, p2: st.p2, p3: st.p3, qualiLaps: st.qualiLaps, reverseGrid: !!st.reverseGrid && st.qualiLaps > 0, raceLaps: st.raceLaps,
-      aiLevel: st.aiLevel, aiCount: ai.length },
+      aiLevel: st.aiLevel, aiCount: ai.length, drafting: st.drafting !== false, tyreWear: st.tyreWear !== false, weather: st.weather !== false },
     aiDrivers: ai, entrants: [], rounds: [], done: false
   };
   humans.forEach(function (p) {
@@ -298,6 +303,8 @@ function cleanSeason(s, key) {
   const opts = { p1: intIn(o.p1, 0, 3, 0), p2: intIn(o.p2, 0, 3, 0), p3: intIn(o.p3, 0, 3, 0), qualiLaps: intIn(o.qualiLaps, 0, 5, 2),
     raceLaps: intIn(o.raceLaps, 1, MAX_RACE_LAPS, 5), aiLevel: F1.AI_LEVELS[o.aiLevel] ? o.aiLevel : 'medium', aiCount: 0 };
   opts.reverseGrid = !!o.reverseGrid && opts.qualiLaps > 0;
+  // race conditions (a season saved before version 10 has none of them: it carries on as it was)
+  opts.drafting = o.drafting === true; opts.tyreWear = o.tyreWear === true; opts.weather = o.weather === true;
   const used = new Set(), entrants = [];
   (Array.isArray(s.entrants) ? s.entrants : []).slice(0, GRID_SIZE + 8).forEach(function (e) {
     if (!e || !F1.driver(e.driverId) || used.has(e.driverId)) return;
@@ -434,6 +441,10 @@ function startSession(room, stage) {
     laps: type === 'race' ? o.raceLaps : type === 'quali' ? o.qualiLaps : o[stage],
     aiLevel: o.aiLevel,
     collisions: true,
+    drafting: o.drafting !== false,
+    tyres: o.tyreWear !== false,                         // tyre wear (and in a race of 3+ laps a compulsory pit stop)
+    weather: o.weather !== false,                        // the weather (off = always dry)
+    runs: type === 'practice',                           // practice: the AI cars do runs and go back to their garages
     seed: Math.floor(Math.random() * 1e9),
     startMode: type === 'practice' ? 'pit' : 'grid'      // practice: you start in your team's garage
   });
@@ -446,6 +457,7 @@ function startSession(room, stage) {
   room.lastIn = new Map();
   room.ack = new Map();
   room.lastSeq = new Map();
+  room.tyrePick = new Map();
   room.awayCar = null;
   room.resumeAt = 0;
   entries.forEach(function (e) {
@@ -468,7 +480,9 @@ function snapshot(room, keepFx) {
     const c = S.cars[i];
     if (c.out) { cars.push([c.id, 0, 0, 0, 0, 0, 0, 0, 64, 0]); continue; }
     const lv = S.track.bridge ? F1.levelAt(S.track, c.s) : 0;       // on a bridge (512) or underneath it (1024)
-    let flags = (c.drsOpen ? 1 : 0) | (c.locked ? 2 : 0) | (c.slide ? 4 : 0) | (c.finished ? 32 : 0) | (c.lockFx ? 256 : 0) | (lv > 0 ? 512 : lv < 0 ? 1024 : 0);
+    let flags = (c.drsOpen ? 1 : 0) | (c.locked ? 2 : 0) | (c.slide ? 4 : 0) | (c.finished ? 32 : 0) | (c.lockFx ? 256 : 0) | (lv > 0 ? 512 : lv < 0 ? 1024 : 0) |
+      (c.gar ? 2048 : 0) | (c.gar && c.gar.k === 'park' ? 4096 : 0) | (c.inPit ? 8192 : 0) |    // in the garage (or rolling in / out), parked, in the pit lane
+      (!c.isAI && c.pitPlan && c.pitPlan.entered ? 16384 : 0);        // a player's pit stop: the car drives itself through the pits
     for (let z = 0; z < c.drsElig.length; z++) if (c.drsElig[z]) flags |= 8 << z;
     cars.push([c.id, r2(c.x), r2(c.y), r4(c.a), r2(c.vx), r2(c.vy), r3(c.w), r3(c.delta), flags, room.ack.get(c.id) || 0]);
   }
@@ -492,11 +506,15 @@ function timing(room) {
     o: S.order,
     r: S.cars.map(function (c) {
       return [c.id, c.lapsDone, c.lastLap === null ? -1 : r3(c.lastLap), c.bestLap === null ? -1 : r3(c.bestLap), r3(c.gap),
-        c.lapStart === null ? -1 : r3(c.lapStart), (c.finished ? 1 : 0) | (c.out && !c.parked ? 2 : 0) | (c.qualiDone ? 4 : 0), Math.round(c.raceDist), c.penalty];
+        c.lapStart === null ? -1 : r3(c.lapStart), (c.finished ? 1 : 0) | (c.out && !c.parked ? 2 : 0) | (c.qualiDone ? 4 : 0) |
+          (!c.gar && (c.inPit || (c.pitPlan && c.pitPlan.entered)) ? 8 : 0) | (c.gar ? 16 : 0), Math.round(c.raceDist), c.penalty,
+        // tyres: compound (0-4 = S M H I W), wear %, pit stops made, seconds left of a pit stop going on (tenths)
+        F1.TYRE_KEYS.indexOf(c.tyre.c), Math.round(c.tyre.w * 100), c.stops, c.pitStop ? Math.max(1, Math.round((c.pitStop.t0 + c.pitStop.dur - S.time) * 10)) : 0];
     }),
     f: S.fastest ? [S.fastest.id, r3(S.fastest.time)] : null,
     tl: isFinite(S.timeLimit) ? Math.max(0, Math.round(S.timeLimit - S.time)) : -1,
     st: S.startTime,
+    ty: S.tyres ? 1 : 0, ms: S.mustStop ? 1 : 0, wet: r3(S.wet), rain: r3(S.rain), ld: r3(S.lineDry),
     np: netInfo(room)
   };
 }
@@ -697,7 +715,8 @@ io.on('connection', function (socket) {
     room = newRoom(code.length === 4 && !rooms.has(code) ? code : newCode(), socket.id);
     room.season = se;
     Object.assign(room.settings, { mode: 'champ', calendar: se.calendar.slice(), p1: se.opts.p1, p2: se.opts.p2, p3: se.opts.p3,
-      qualiLaps: se.opts.qualiLaps, reverseGrid: se.opts.reverseGrid, raceLaps: se.opts.raceLaps, aiLevel: se.opts.aiLevel, aiCount: se.opts.aiCount });
+      qualiLaps: se.opts.qualiLaps, reverseGrid: se.opts.reverseGrid, raceLaps: se.opts.raceLaps, aiLevel: se.opts.aiLevel, aiCount: se.opts.aiCount,
+      drafting: se.opts.drafting, tyreWear: se.opts.tyreWear, weather: se.opts.weather });
     room.state = 'seasonBreak';
     joinRoom(socket, room, msg.name, msg.token, true);
     ack({ ok: true, code: room.code, moved: room.code !== code });
@@ -776,6 +795,9 @@ io.on('connection', function (socket) {
     if (s.raceLaps !== undefined) st.raceLaps = intIn(s.raceLaps, 1, MAX_RACE_LAPS, st.raceLaps);
     if (s.aiCount !== undefined) st.aiCount = intIn(s.aiCount, 0, GRID_SIZE - 1, st.aiCount);
     if (s.aiLevel && F1.AI_LEVELS[s.aiLevel]) st.aiLevel = s.aiLevel;
+    if (s.drafting !== undefined) st.drafting = s.drafting !== false;
+    if (s.tyreWear !== undefined) st.tyreWear = s.tyreWear !== false;
+    if (s.weather !== undefined) st.weather = s.weather !== false;
     broadcastRoom(room);
   });
 
@@ -826,12 +848,17 @@ io.on('connection', function (socket) {
     broadcastRoom(room);
   });
 
-  // driving input: [seq, throttle, brake, steer * 1000, flags (1 = DRS, 2 = reset)]
+  // driving input: [seq, throttle, brake, steer * 1000, flags (1 = DRS, 2 = reset, 4 = out of the garage), tyre pick (0 none, 1-5 = S M H I W)]
   socket.on('i', function (a) {
     const room = rooms.get(socket.data.room);
     if (!room || !room.session || !Array.isArray(a)) return;
     const carId = room.carOf.get(socket.id);
     if (carId === undefined) return;
+    const tp = intIn(a[5], 0, 5, 0);
+    if (tp !== (room.tyrePick.get(carId) || 0)) {      // a new tyre pick (grid: starting tyres; else the next set)
+      room.tyrePick.set(carId, tp);
+      room.session.setTyreChoice(carId, tp ? F1.TYRE_KEYS[tp - 1] : null);
+    }
     const now = Date.now();
     if (now - socket.data.inputWindow > 1000) { socket.data.inputWindow = now; socket.data.inputCount = 0; }
     if (++socket.data.inputCount > 150) return;
@@ -846,7 +873,8 @@ io.on('connection', function (socket) {
       brake: F1.clamp(Number(a[2]) || 0, 0, 1),
       steer: F1.clamp((Number(a[3]) || 0) / 1000, -1.8, 1.8),
       drs: !!((a[4] | 0) & 1),
-      reset: !!((a[4] | 0) & 2)
+      reset: !!((a[4] | 0) & 2),
+      garageOut: !!((a[4] | 0) & 4)        // the garage's "Go back out" button
     });
     if (q.length > 30) q.splice(0, q.length - 30);
   });

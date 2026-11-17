@@ -16,6 +16,7 @@
       if (typeof this.data.ghost !== 'boolean') this.data.ghost = true;
       if (this.data.units !== 'mph') this.data.units = 'kmh';
       this.data.touchSteer = F1.clamp(Math.round(Number(this.data.touchSteer) || 5), 1, 10);
+      if (this.data.touchMode !== 'slide') this.data.touchMode = 'arrows';      // phones: arrow buttons unless the slider was chosen
       this.data.keys = cleanKeys(this.data.keys);
     },
     save: function () {
@@ -23,7 +24,11 @@
     },
     // how fast the steering input ramps up (per second) and how much lock it reaches
     steerRate: function () { return 2.4 + (this.data.steering - 1) * 0.7; },
-    steerGain: function () { return 0.74 + (this.data.steering - 1) * 0.085; }
+    steerGain: function () { return 0.74 + (this.data.steering - 1) * 0.085; },
+    // phones (arrow buttons): the same feel as the keys, from the touch sensitivity 1-10 (5 = the keys' default)
+    touchKeyEq: function () { return [1, 2, 3, 4, 5, 6.4, 7.8, 9.2, 10.6, 12][F1.clamp(Math.round(Number(this.data.touchSteer)) || 5, 1, 10) - 1]; },
+    touchRate: function () { return 2.4 + (this.touchKeyEq() - 1) * 0.7; },
+    touchGain: function () { return 0.74 + (this.touchKeyEq() - 1) * 0.085; }
   };
 
   // ------------------------------------------------------------- personal bests (per track, this browser)
@@ -173,7 +178,7 @@
     resetEdge: false,
     active: false,
     // on-screen controls (phones and tablets), filled in by touch.js
-    touch: { active: false, steer: 0, held: false, out: 0, throttle: 0, brake: 0, drs: false, drsTap: false },
+    touch: { active: false, mode: 'arrows', steer: 0, dir: 0, arw: 0, held: false, out: 0, throttle: 0, brake: 0, drs: false, drsTap: false },
     init: function () {
       const self = this;
       window.addEventListener('keydown', function (e) {
@@ -212,11 +217,23 @@
         drs: this.down('drs'),
         reset: this.resetEdge
       };
-      // phone / tablet: the thumb steers directly (it follows the slide almost at once), the pedals and the DRS button add to the keys
+      // phone / tablet: the arrow buttons work like the arrow keys (the steering builds up while you hold one);
+      // the slider steers directly (it follows the slide almost at once). The pedals and the DRS button add to the keys.
       const t = this.touch;
       if (t.active) {
-        t.out = toward(t.out, t.held ? t.steer : 0, (t.held ? 12 : 14) * dt);
-        if (target === 0 && s === 0) out.steer = t.out * TOUCH_GAIN;
+        if (t.mode === 'slide') {
+          t.arw = 0;
+          t.out = toward(t.out, t.held ? t.steer : 0, (t.held ? 12 : 14) * dt);
+          if (target === 0 && s === 0) out.steer = t.out * TOUCH_GAIN;
+        } else {
+          const tr = Settings.touchRate(), tret = tr * 1.8, d = t.dir;
+          let a = t.arw;
+          if (d === 0) a = toward(a, 0, tret * dt);
+          else if (a !== 0 && Math.sign(a) !== d) a = toward(a, d, (tr + tret) * dt);
+          else a = toward(a, d, tr * dt);
+          t.arw = a; t.out = a;
+          if (target === 0 && s === 0) out.steer = a * Settings.touchGain();
+        }
         if (t.throttle > out.throttle) out.throttle = t.throttle;
         if (t.brake > out.brake) out.brake = t.brake;
         if (t.drs || t.drsTap) out.drs = true;

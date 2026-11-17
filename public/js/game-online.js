@@ -63,7 +63,17 @@
     this.tmpA = {}; this.tmpB = {}; this.tmpC = {};
     this.started = performance.now();
     this.collide = info.type === 'race';
-    this.near = [];       // nearby cars (track position) for dirty air on our own car
+    this.drafting = info.drafting !== false;     // slipstream on straights (the host's switch)
+    this.tyresOn = !!info.tyres;                  // tyre wear (the host's switch); in a race of 3+ laps a compulsory stop
+    this.weatherOn = !!info.weather;
+    this.mustStop = !!info.mustStop;
+    this.gridT = info.gridT || 0;
+    this.startTyre = info.plan || 'S';            // what you start on unless you pick
+    this.tyrePick = null;                         // your pick (sent with every input): grid = starting tyres, else the next set
+    this.wet = 0; this.lineDry = 0;
+    this.wxT = { rain: 0, wet: 0, ld: 0 };       // the weather from the server (4 times a second) ...
+    this.wxV = { rain: 0, wet: 0, ld: 0 };       // ... and as drawn (eased towards it)
+    this.near = [];       // nearby cars (track position) for dirty air and slipstream on our own car
     // connection check: how late snapshots arrive (your connection) and how late the server sent them (server)
     this.cq = { base: [], bmin: Infinity, bAt: 0, prevW: null, events: [], lastFrame: 0, stallAt: -1e9, shown: null };
     // online season paused (host away), then a 3-2-1 before it carries on
@@ -198,6 +208,8 @@
     const ox = own.x, oy = own.y, oa = own.a;
     own.x = a[1]; own.y = a[2]; own.a = a[3]; own.vx = a[4]; own.vy = a[5]; own.w = a[6]; own.delta = a[7];
     own.drsOpen = !!(flags & 1); own.locked = !!(flags & 2); own.slide = !!(flags & 4);
+    own.gar = flags & 2048 ? { k: flags & 4096 ? 'park' : 'move' } : null;      // in the garage: the server moves the car
+    own.auto = !!(flags & 16384);                 // a pit stop: the car drives itself through the pits (the server drives)
     own.drsElig[0] = !!(flags & 8); own.drsElig[1] = !!(flags & 16);
     own.finished = !!(flags & 32);
     F1.queryTrack(this.T, own.x, own.y, own.seg, Q);
@@ -216,11 +228,24 @@
 
   OnlineGame.prototype.simulate = function (inp, k, baseTick) {
     const own = this.own, T = this.T;
+    if (own.gar) { own.vx = 0; own.vy = 0; return; }
+    if (own.auto) {                               // the server drives: carry on as it was going
+      own.x += own.vx * DT; own.y += own.vy * DT; own.a += own.w * DT;
+      F1.queryTrack(T, own.x, own.y, own.seg, Q);
+      own.seg = Q.idx; own.s = Q.s; own.d = Q.d; own.dist = Q.dist;
+      return;
+    }
     own.locked = this.phase === 0;
+    const r = this.rows[this.myId];
+    let wetHere = this.wet;
+    if (wetHere > 0) wetHere *= 1 - 0.65 * this.lineDry * F1.clamp(1 - (Math.abs(own.d - T.rlOff[own.seg]) - 1) / 3, 0, 1);
+    own.tg = r && r.ty ? F1.tyreGrip(r.ty, r.tw, wetHere) : 1;     // the tyres (the same grip as on the server)
     const z = T.drsZone[F1.idxAt(T, own.s)];
     own.drsAllowed = z >= 0 && own.drsElig[z] && this.phase !== 0;
     const sub = DT / F1.SUBSTEPS;
-    own.dirty = this.collide ? this.ownDirty(baseTick + k) : 1;
+    const nearN = this.collide || this.drafting ? this.ownNear(baseTick + k) : 0;
+    own.dirty = this.collide && nearN ? this.ownAir(F1.dirtyAir) : 1;
+    own.tow = this.drafting && nearN ? this.ownAir(F1.slipstream) : 1;
     for (let i = 0; i < F1.SUBSTEPS; i++) {
       F1.stepCar(own, inp, T, sub);
       if (this.collide && this.phase >= 1) {
@@ -239,27 +264,31 @@
     }
   };
 
-  /* Dirty air on our own car: the same rule as the server, using where the other cars are predicted to be. */
-  OnlineGame.prototype.ownDirty = function (tick) {
+  /* Dirty air and slipstream on our own car: the same rules as the server, using where the other cars are predicted
+     to be. ownNear fills this.near (and returns how many), ownAir applies one rule to them. */
+  OnlineGame.prototype.ownNear = function (tick) {
     const own = this.own, T = this.T, near = this.near;
-    if (own.vx * own.vx + own.vy * own.vy < 900) return 1;
+    if (own.vx * own.vx + own.vy * own.vy < 900) { near.length = 0; return 0; }
     let n = 0;
     for (const id in this.remote) {
       const r = this.remote[id];
-      if (!r.st || r.out) continue;
+      if (!r.st || r.out || (r.flags & 2048)) continue;
       const dx = r.st.x - own.x, dy = r.st.y - own.y;
-      if (dx * dx + dy * dy > 1600) continue;
+      if (dx * dx + dy * dy > 3600) continue;
       const e = extrap(r.st, (tick - r.t) * DT, this.tmpC);
       // the last track position is only a good starting point if it is from the previous tick
       F1.queryTrack(T, e.x, e.y, r.segTick === tick - 1 && r.seg !== undefined ? r.seg : -1, Q, e.a);
       r.seg = Q.idx; r.segTick = tick;
-      if (!near[n]) near[n] = { s: 0, d: 0, out: false };
-      near[n].s = Q.s; near[n].d = Q.d; n++;
+      if (!near[n]) near[n] = { s: 0, d: 0, vx: 0, vy: 0, out: false };
+      near[n].s = Q.s; near[n].d = Q.d; near[n].vx = e.vx; near[n].vy = e.vy; near[n].inPit = !!(r.flags & 8192); n++;
     }
-    if (!n) return 1;
     near.length = n;
-    near.push(own);
-    const f = F1.dirtyAir(own, near, T.length);
+    return n;
+  };
+  OnlineGame.prototype.ownAir = function (rule) {
+    const near = this.near;
+    near.push(this.own);
+    const f = rule(this.own, near, this.T.length);
     near.pop();
     return f;
   };
@@ -269,9 +298,19 @@
     const rows = {};
     for (let i = 0; i < t.r.length; i++) {
       const a = t.r[i];
-      rows[a[0]] = { laps: a[1], last: a[2] < 0 ? null : a[2], best: a[3] < 0 ? null : a[3], gap: a[4], lapStart: a[5] < 0 ? null : a[5], fin: !!(a[6] & 1), out: !!(a[6] & 2), qdone: !!(a[6] & 4), dist: a[7], pen: a[8] || 0 };
+      rows[a[0]] = { laps: a[1], last: a[2] < 0 ? null : a[2], best: a[3] < 0 ? null : a[3], gap: a[4], lapStart: a[5] < 0 ? null : a[5], fin: !!(a[6] & 1), out: !!(a[6] & 2), qdone: !!(a[6] & 4),
+        pit: !!(a[6] & 8), gar: !!(a[6] & 16), dist: a[7], pen: a[8] || 0,
+        ty: a[9] >= 0 ? F1.TYRE_KEYS[a[9]] : null, tw: (a[10] || 0) / 100, st: a[11] || 0, ps: (a[12] || 0) / 10 };
     }
+    // a pit stop done: the pick was used (the next stop starts with no pick again)
+    const me = rows[this.myId], was = this.rows[this.myId];
+    if (me && was && me.st > (was.st || 0)) this.tyrePick = null;
     this.rows = rows;
+    if (t.wet !== undefined) {
+      this.wet = t.wet; this.lineDry = t.ld || 0;
+      this.wxT.wet = t.wet; this.wxT.rain = t.rain || 0; this.wxT.ld = t.ld || 0;
+      if (!this.wxInit) { this.wxInit = true; Object.assign(this.wxV, this.wxT); }
+    }
   };
 
   OnlineGame.prototype.code = function (id) {
@@ -298,7 +337,11 @@
     if (this.frozen || this.myId === null || !own || own.out || this.ended) return;
     const inp = window.Input.sample(DT);
     this.seq++;
-    this.net.emit('i', [this.seq, inp.throttle, inp.brake, Math.round(inp.steer * 1000), (inp.drs ? 1 : 0) | (inp.reset ? 2 : 0)]);
+    if (this.goOut) { inp.garageOut = true; this.goOut = false; }        // the garage's "Go back out" button
+    // the starting tyres are picked on the grid only: after the start the next pick is for a pit stop
+    if (this.type === 'race' && this.phase >= 1 && this.gridPickSent) { this.gridPickSent = false; this.tyrePick = null; }
+    const tp = this.tyrePick ? F1.TYRE_KEYS.indexOf(this.tyrePick) + 1 : 0;
+    this.net.emit('i', [this.seq, inp.throttle, inp.brake, Math.round(inp.steer * 1000), (inp.drs ? 1 : 0) | (inp.reset ? 2 : 0) | (inp.garageOut ? 4 : 0), tp]);
     this.pending.push({ seq: this.seq, inp: inp });
     this.lastInp = inp;
     if (this.pending.length > 90) this.pending.shift();
@@ -306,7 +349,7 @@
     this.simulate(inp, this.pending.length, this.snapT);
     if (this.T.bank) window.HUD.bankHint(this.T, own, this.msgs, this.bankSeen || (this.bankSeen = {}));
     this.wrongT = F1.isWrongWay(own, this.T) ? this.wrongT + DT : 0;
-    this.stuckT = Math.hypot(own.vx, own.vy) < 2 && this.phase >= 1 && !own.inPit ? this.stuckT + DT : 0;
+    this.stuckT = Math.hypot(own.vx, own.vy) < 2 && this.phase >= 1 && !own.inPit && !own.gar ? this.stuckT + DT : 0;
   };
 
   /* Tab hidden: tell the server to brake so the car does not keep the last key held. */
@@ -345,7 +388,7 @@
     }
     const P = this.predTick(now);
     const decay = Math.exp(-dt / 0.11);
-    const cars = [];
+    const cars = [], garage = [];
     const ghost = this.type === 'quali';
     for (const id in this.remote) {
       const r = this.remote[id];
@@ -356,7 +399,8 @@
       v.x = e.x + r.ex; v.y = e.y + r.ey; v.a = e.a + r.ea; v.vx = e.vx; v.vy = e.vy;
       v.delta = r.st.delta; v.drsOpen = !!(r.flags & 1); v.me = false; v.ghost = ghost; v.surf = 0; v.lock = !!(r.flags & 256);
       v.lvl = r.flags & 512 ? 1 : r.flags & 1024 ? -1 : 0;
-      cars.push(v);
+      v.garage = !!(r.flags & 2048);
+      if (v.garage) { v.ghost = false; garage.push(v); } else cars.push(v);
     }
     let focus = null;
     const own = this.own;
@@ -370,7 +414,8 @@
       v.vx = own.vx; v.vy = own.vy; v.delta = own.delta; v.drsOpen = own.drsOpen; v.surf = own.surf;
       v.me = true; v.ghost = false; v.lock = false;
       v.lvl = this.T.bridge ? F1.levelAt(this.T, own.s) : 0;
-      cars.push(v);
+      v.garage = !!own.gar;
+      if (v.garage) garage.push(v); else cars.push(v);
       focus = v;
     } else if (this.timing) {
       for (let i = 0; i < this.timing.o.length && !focus; i++) {
@@ -379,7 +424,11 @@
       }
     }
     if (!focus && cars.length) focus = cars[0];
-    const frame = { track: this.T, cars: cars, labels: window.Settings.data.labels,
+    if (this.weatherOn) {
+      const k = Math.min(1, dt * 1.5), V = this.wxV, Tg = this.wxT;
+      V.rain += (Tg.rain - V.rain) * k; V.wet += (Tg.wet - V.wet) * k; V.ld += (Tg.ld - V.ld) * k;
+    }
+    const frame = { track: this.T, cars: cars, garage: garage, labels: window.Settings.data.labels, weather: this.weatherOn ? this.wxV : null,
       lights: this.phase === 0 ? this.lights : 0, pitRed: this.phase === 0 && this.type === 'race' };
     R.updateCamera(focus, dt, window.Settings.data.camera === 'rotate', window.Settings.data.zoom);
     for (let i = 0; i < this.fx.length; i++) {
@@ -392,6 +441,39 @@
     this.frameCars = cars;
     R.drawWorld(frame, dt);
     R.drawHUD(this.hud(now), frame);
+  };
+
+  /* Your car parked in your garage: what the garage panel shows. null = not parked. */
+  OnlineGame.prototype.garageState = function () {
+    const own = this.own;
+    if (own && !own.gar) this.beenOut = true;
+    if (this.myId === null || !own || own.out || !own.gar || own.gar.k !== 'park' || this.ended) return null;
+    const r = this.rows[this.myId] || {}, order = this.timing ? this.timing.o : [];
+    return { best: r.best === undefined ? null : r.best, pos: order.indexOf(this.myId) + 1, laps: r.laps || 0, n: order.length, first: !this.beenOut,
+      tyres: this.tyresShown() ? { cur: this.tyrePick || (this.wet * (1 - 0.65 * this.lineDry) > 0.1 ? F1.wetTyre(Math.max(0.12, this.wet * (1 - 0.65 * this.lineDry))) : null) || 'S', opts: this.tyreOpts() } : null };
+  };
+
+  /* Tyres (see LocalGame): shown when tyre wear is on (or the weather); your pick goes to the server with your inputs. */
+  OnlineGame.prototype.tyresShown = function () { return this.tyresOn || this.weatherOn; };
+  OnlineGame.prototype.tyreOpts = function () { return this.weatherOn ? F1.TYRE_KEYS.slice() : ['S', 'M', 'H']; };
+  OnlineGame.prototype.pickTyre = function (k) {
+    if (this.myId === null || this.ended) return;
+    this.tyrePick = k;
+    if (this.type === 'race' && this.phase === 0) this.gridPickSent = true;
+  };
+  OnlineGame.prototype.tyreState = function () {
+    const own = this.own, r = this.rows[this.myId];
+    if (this.myId === null || !own || own.out || this.ended || this.type !== 'race') return null;
+    if (this.phase === 0) return this.gridT > 0 ? { mode: 'grid', cur: this.tyrePick || this.startTyre, opts: this.tyreOpts(), must: this.mustStop, laps: this.laps,
+      wet: this.wet * (1 - 0.65 * this.lineDry), wear: this.tyresOn } : null;
+    if (!r || r.fin) return null;
+    const lw = this.wet * (1 - 0.65 * this.lineDry);
+    const next = this.tyrePick || (lw > 0.1 ? F1.wetTyre(Math.max(0.12, lw)) : null) || F1.tyreForLaps(Math.max(1, this.laps - r.laps - 1));
+    if (r.ps > 0) return { mode: 'stop', cur: next, left: r.ps };
+    if (!own.auto) { this.autoAt = null; return null; }
+    if (this.autoAt === null || this.autoAt === undefined) this.autoAt = r.st;          // stops made when this visit began
+    if (r.st > this.autoAt) return null;                                               // done: driving out
+    return { mode: 'pit', cur: next, opts: this.tyreOpts(), left: this.laps - r.laps };
   };
 
   /* What the sound system needs this frame. */
@@ -428,7 +510,8 @@
       time: this.serverTime + Math.min(1, (now - this.snapRecv) / 1000),
       timeLeft: tm && tm.tl >= 0 ? tm.tl : -1,
       fastestId: tm && tm.f ? tm.f[0] : null,
-      own: this.own, msgs: this.msgs, ping: this.net.ping,
+      own: this.own, msgs: this.msgs, ping: this.net.ping, tyres: this.tyresOn, tyresShow: this.tyresShown(),
+      weather: this.weatherOn ? this.wxV : null,
       started: this.started, wrongT: this.wrongT, stuckT: this.stuckT, sectors: this.sectors.view()
     });
     hud.conn = this.connStatus(now, window.innerWidth < 820 || !!(window.TouchUI.L && window.TouchUI.L.phone));

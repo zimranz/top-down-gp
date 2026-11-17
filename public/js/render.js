@@ -35,6 +35,39 @@
     return c;
   }
 
+  let wetLampSprite = null;
+  /* The pool of light on a wet track: brighter, with a hard glint in the middle (the lamp reflected in the water). */
+  function getWetLampSprite() {
+    if (wetLampSprite) return wetLampSprite;
+    const c = document.createElement('canvas');
+    c.width = 64; c.height = 64;
+    const g = c.getContext('2d'), gr = g.createRadialGradient(32, 32, 0, 32, 32, 32);
+    gr.addColorStop(0, 'rgba(255,248,226,0.95)'); gr.addColorStop(0.12, 'rgba(255,244,214,0.6)'); gr.addColorStop(0.4, 'rgba(255,240,205,0.24)'); gr.addColorStop(1, 'rgba(255,236,190,0)');
+    g.fillStyle = gr; g.fillRect(0, 0, 64, 64);
+    wetLampSprite = c;
+    return c;
+  }
+  let spraySprite = null;
+  /* A soft grey-white puff (the spray thrown up behind a car on a wet track). */
+  function getSpraySprite() {
+    if (spraySprite) return spraySprite;
+    const c = document.createElement('canvas');
+    c.width = 64; c.height = 64;
+    const g = c.getContext('2d'), gr = g.createRadialGradient(32, 32, 0, 32, 32, 32);
+    gr.addColorStop(0, 'rgba(226,232,240,0.9)'); gr.addColorStop(0.45, 'rgba(214,222,232,0.45)'); gr.addColorStop(1, 'rgba(205,214,226,0)');
+    g.fillStyle = gr; g.fillRect(0, 0, 64, 64);
+    spraySprite = c;
+    return c;
+  }
+  /* '#rrggbb' colours mixed: a + (b - a) * t. */
+  function mixHex(a, b, t) {
+    const pa = parseInt(a.slice(1), 16), pb = parseInt(b.slice(1), 16);
+    const ch = function (sh) { const x = (pa >> sh) & 255, y = (pb >> sh) & 255; return Math.round(x + (y - x) * t); };
+    return 'rgb(' + ch(16) + ',' + ch(8) + ',' + ch(0) + ')';
+  }
+  /* A fixed pseudo-random number 0..1 for n (puddles: the same places every time). */
+  function hash01(n) { const x = Math.sin(n * 127.1 + 311.7) * 43758.5453; return x - Math.floor(x); }
+
   function lerpAngle(a, b, t) { return a + F1.wrapAngle(b - a) * t; }
 
   function Renderer(canvas) {
@@ -44,6 +77,7 @@
     this.cam = { x: 0, y: 0, a: -Math.PI / 2, z: 8, ready: false, lx: 0, ly: 0 };
     this.skids = [];
     this.parts = [];
+    this.rainP = []; this.splash = [];       // rain streaks and splashes (screen space)
     this.wheelPrev = {};
     this.lastFrame = performance.now();
     this.resize();
@@ -52,13 +86,21 @@
   }
 
   Renderer.prototype.resize = function () {
-    this.dpr = Math.min(2, window.devicePixelRatio || 1);
+    // lighter graphics (switched on by itself when frames take too long): one canvas pixel per screen pixel
+    this.dpr = Math.min(this.lite ? 1 : 2, window.devicePixelRatio || 1);
     this.w = window.innerWidth;
     this.h = window.innerHeight;
     this.cv.width = Math.round(this.w * this.dpr);
     this.cv.height = Math.round(this.h * this.dpr);
     this.cv.style.width = this.w + 'px';
     this.cv.style.height = this.h + 'px';
+  };
+
+  /* Lighter graphics: fewer pixels to draw and no full-screen night effects. */
+  Renderer.prototype.setLite = function (on) {
+    if (!!this.lite === !!on) return;
+    this.lite = !!on;
+    this.resize();
   };
 
   Renderer.prototype.resetEffects = function () {
@@ -140,6 +182,7 @@
     const n = P.garages.length;
     const cont = function (sv) { return sv < P.gA - 1 ? sv + L : sv; };   // keep s increasing past the line
     pit.building = strip(P.gA - 1.2, P.gB + 1.2, konst(P.garFront), konst(P.garBack), 4);
+    pit.roof = strip(P.gA - 1.2, P.gB + 1.2, konst(P.garFront + 1.7), konst(P.garBack), 4);     // over the cars parked inside
     pit.dividers = new Path2D();
     pit.ribs = new Path2D();
     along(pit.ribs, P.gA - 1.2, P.gB + 1.2, konst(P.garBack - 3), 6);
@@ -298,6 +341,17 @@
             ch.gravel.moveTo(a[0], a[1]); ch.gravel.lineTo(b[0], b[1]); ch.gravel.lineTo(c[0], c[1]); ch.gravel.lineTo(d[0], d[1]); ch.gravel.closePath();
           }
         }
+      }
+      // the racing line (after rain it dries first) and where water collects in heavy rain (near the edges)
+      ch.rline = new Path2D();
+      for (let k = c0; k <= c1; k++) { const i = k % N; if (k === c0) ch.rline.moveTo(T.rlX[i], T.rlY[i]); else ch.rline.lineTo(T.rlX[i], T.rlY[i]); }
+      ch.pud = new Path2D();
+      for (let k = c0; k < c1; k++) {
+        if (k % 8 || hash01(k) > 0.36) continue;
+        const i = k % N, side = hash01(k + 0.5) < 0.5 ? -1 : 1, d = side * (HWE[i] - 1.0 - hash01(k + 0.25) * 2.2);
+        const p = off(i, d), rx = 1.3 + hash01(k + 0.75) * 2.2, ry = 0.55 + hash01(k + 0.6) * 0.75;
+        ch.pud.moveTo(p[0] + rx * Math.cos(T.hd[i]), p[1] + rx * Math.sin(T.hd[i]));
+        ch.pud.ellipse(p[0], p[1], rx, ry, T.hd[i], 0, TAU);
       }
       G.chunks.push(ch);
     }
@@ -505,9 +559,77 @@
     G.gravelPattern = this.ctx.createPattern(gc, 'repeat');
     if (G.gravelPattern && G.gravelPattern.setTransform && window.DOMMatrix) G.gravelPattern.setTransform(new DOMMatrix().scale(0.25));
 
+    if (T.night) G.light = buildLightMaps(T, G);
     this.tracks[T.id] = G;
     return G;
   };
+
+  /* Shapes of the trees and city blocks in the 100 m squares tx0..tx1, ty0..ty1. */
+  function buildScene(G, tx0, tx1, ty0, ty1, night) {
+    const p1 = new Path2D(), p2 = new Path2D(), ph = new Path2D();
+    for (let gx = tx0; gx <= tx1; gx++) for (let gy = ty0; gy <= ty1; gy++) {
+      const list = G.trees.get(gx + ',' + gy);
+      if (!list) continue;
+      for (let q = 0; q < list.length; q++) {
+        const t = list[q], p = t[3] ? p2 : p1;
+        p.moveTo(t[0] + t[2], t[1]); p.arc(t[0], t[1], t[2], 0, TAU);
+        ph.moveTo(t[0] - t[2] * 0.25 + t[2] * 0.45, t[1] - t[2] * 0.3); ph.arc(t[0] - t[2] * 0.25, t[1] - t[2] * 0.3, t[2] * 0.45, 0, TAU);
+      }
+    }
+    const out = { p1: p1, p2: p2, ph: ph, bp: null };
+    if (!G.blocks.size) return out;
+    const bp = [new Path2D(), new Path2D(), new Path2D()], roof = new Path2D();
+    const win = new Path2D(), neon = NEON.map(function () { return new Path2D(); }), neonUsed = NEON.map(function () { return false; });
+    for (let gx = tx0; gx <= tx1; gx++) for (let gy = ty0; gy <= ty1; gy++) {
+      const list = G.blocks.get(gx + ',' + gy);
+      if (!list) continue;
+      for (let q = 0; q < list.length; q++) {
+        const k = list[q], p = k.pts, path = bp[k.shade];
+        path.moveTo(p[0][0], p[0][1]); path.lineTo(p[1][0], p[1][1]); path.lineTo(p[2][0], p[2][1]); path.lineTo(p[3][0], p[3][1]); path.closePath();
+        // a lighter roof panel
+        const mx = (p[0][0] + p[2][0]) / 2, my = (p[0][1] + p[2][1]) / 2;
+        for (let v = 0; v < 4; v++) { const x = mx + (p[v][0] - mx) * 0.62, y = my + (p[v][1] - my) * 0.62; if (v) roof.lineTo(x, y); else roof.moveTo(x, y); }
+        roof.closePath();
+        if (!night || !k.win) continue;
+        for (let v = 0; v < k.win.length; v++) { const wv = k.win[v]; win.rect(wv[0] - 0.9, wv[1] - 0.9, 1.8, 1.8); }
+        if (k.neon >= 0) {
+          const np = neon[k.neon];
+          neonUsed[k.neon] = true;
+          for (let v = 0; v < 4; v++) { const x = mx + (p[v][0] - mx) * 0.9, y = my + (p[v][1] - my) * 0.9; if (v) np.lineTo(x, y); else np.moveTo(x, y); }
+          np.closePath();
+        }
+      }
+    }
+    out.bp = bp; out.roof = roof; out.win = win; out.neon = neon; out.neonUsed = neonUsed;
+    return out;
+  }
+
+  /* Night races: the floodlight glow around the track is drawn once, into a picture of the whole circuit (about
+     2 m per pixel). Each frame then only lays that picture under the track, instead of drawing eleven very wide
+     soft strokes every frame (the slowest part of a night frame). */
+  function buildLightMaps(T, G) {
+    const N = T.n, X = T.x, Y = T.y;
+    let x0 = Infinity, y0 = Infinity, x1 = -Infinity, y1 = -Infinity;
+    for (let i = 0; i < N; i++) { if (X[i] < x0) x0 = X[i]; if (X[i] > x1) x1 = X[i]; if (Y[i] < y0) y0 = Y[i]; if (Y[i] > y1) y1 = Y[i]; }
+    const m = T.maxWall + 90;
+    x0 -= m; y0 -= m; x1 += m; y1 += m;
+    const sc = Math.max(2, Math.max(x1 - x0, y1 - y0) / 1800);          // metres per pixel
+    const cw = Math.ceil((x1 - x0) / sc), chh = Math.ceil((y1 - y0) / sc);
+    const make = function () {
+      const c = document.createElement('canvas');
+      c.width = cw; c.height = chh;
+      const g = c.getContext('2d');
+      g.setTransform(1 / sc, 0, 0, 1 / sc, -x0 / sc, -y0 / sc);
+      return { c: c, g: g };
+    };
+    // the glow: many thin layers, each a little narrower, for a smooth fall-off into the dark
+    const glow = make(), centre = new Path2D(), base = 2 * T.maxWall;
+    for (let i = 0; i <= N; i++) { const k = i % N; if (i) centre.lineTo(X[k], Y[k]); else centre.moveTo(X[k], Y[k]); }
+    glow.g.lineJoin = 'round'; glow.g.lineCap = 'round';
+    glow.g.strokeStyle = 'rgba(255,236,190,0.024)';
+    for (let v = 0; v < 11; v++) { glow.g.lineWidth = base + 126 - v * 11; glow.g.stroke(centre); }
+    return { glow: glow.c, x0: x0, y0: y0, w: cw * sc, h: chh * sc };
+  }
 
   // ------------------------------------------------------------- camera
   /* The car always stays in the upper-middle of the screen, clear of the dashboard at the bottom. */
@@ -578,59 +700,24 @@
     const vr = Math.hypot(this.w, this.h) / 2 / cam.z + 8;
     const vis = G.chunks.filter(function (ch) { return Math.hypot(ch.cx - vc[0], ch.cy - vc[1]) < ch.r + vr; });
 
-    // trees
+    // trees and city blocks: the shapes for the visible 100 m squares are put together only when that set of
+    // squares changes (every few seconds), not every frame
     const tx0 = Math.floor((vc[0] - vr) / 100), tx1 = Math.floor((vc[0] + vr) / 100);
     const ty0 = Math.floor((vc[1] - vr) / 100), ty1 = Math.floor((vc[1] + vr) / 100);
-    const p1 = new Path2D(), p2 = new Path2D(), ph = new Path2D();
-    for (let gx = tx0; gx <= tx1; gx++) for (let gy = ty0; gy <= ty1; gy++) {
-      const list = G.trees.get(gx + ',' + gy);
-      if (!list) continue;
-      for (let q = 0; q < list.length; q++) {
-        const t = list[q], p = t[3] ? p2 : p1;
-        p.moveTo(t[0] + t[2], t[1]); p.arc(t[0], t[1], t[2], 0, TAU);
-        ph.moveTo(t[0] - t[2] * 0.25 + t[2] * 0.45, t[1] - t[2] * 0.3); ph.arc(t[0] - t[2] * 0.25, t[1] - t[2] * 0.3, t[2] * 0.45, 0, TAU);
-      }
-    }
-    ctx.fillStyle = COL.tree1; ctx.fill(p1);
-    ctx.fillStyle = COL.tree2; ctx.fill(p2);
-    ctx.fillStyle = COL.treeHi; ctx.fill(ph);
-    // city blocks (street circuits)
-    if (G.blocks.size) {
-      const bp = [new Path2D(), new Path2D(), new Path2D()], roof = new Path2D();
-      for (let gx = tx0; gx <= tx1; gx++) for (let gy = ty0; gy <= ty1; gy++) {
-        const list = G.blocks.get(gx + ',' + gy);
-        if (!list) continue;
-        for (let q = 0; q < list.length; q++) {
-          const k = list[q], p = k.pts, path = bp[k.shade];
-          path.moveTo(p[0][0], p[0][1]); path.lineTo(p[1][0], p[1][1]); path.lineTo(p[2][0], p[2][1]); path.lineTo(p[3][0], p[3][1]); path.closePath();
-          // a lighter roof panel
-          const mx = (p[0][0] + p[2][0]) / 2, my = (p[0][1] + p[2][1]) / 2;
-          for (let v = 0; v < 4; v++) { const x = mx + (p[v][0] - mx) * 0.62, y = my + (p[v][1] - my) * 0.62; if (v) roof.lineTo(x, y); else roof.moveTo(x, y); }
-          roof.closePath();
-        }
-      }
-      for (let v = 0; v < 3; v++) { ctx.fillStyle = COL.bld[v]; ctx.fill(bp[v]); }
-      ctx.fillStyle = COL.roof; ctx.fill(roof);
+    const sceneKey = tx0 + ',' + tx1 + ',' + ty0 + ',' + ty1;
+    if (G.sceneKey !== sceneKey) { G.scene = buildScene(G, tx0, tx1, ty0, ty1, night); G.sceneKey = sceneKey; }
+    const SC = G.scene;
+    ctx.fillStyle = COL.tree1; ctx.fill(SC.p1);
+    ctx.fillStyle = COL.tree2; ctx.fill(SC.p2);
+    ctx.fillStyle = COL.treeHi; ctx.fill(SC.ph);
+    if (SC.bp) {
+      for (let v = 0; v < 3; v++) { ctx.fillStyle = COL.bld[v]; ctx.fill(SC.bp[v]); }
+      ctx.fillStyle = COL.roof; ctx.fill(SC.roof);
       if (night) {
         // lit windows, and neon outlines on some Las Vegas buildings
-        const win = new Path2D(), neon = NEON.map(function () { return new Path2D(); });
-        for (let gx = tx0; gx <= tx1; gx++) for (let gy = ty0; gy <= ty1; gy++) {
-          const list = G.blocks.get(gx + ',' + gy);
-          if (!list) continue;
-          for (let q = 0; q < list.length; q++) {
-            const k = list[q];
-            if (!k.win) continue;
-            for (let v = 0; v < k.win.length; v++) { const wv = k.win[v]; win.rect(wv[0] - 0.9, wv[1] - 0.9, 1.8, 1.8); }
-            if (k.neon >= 0) {
-              const p = k.pts, path = neon[k.neon], mx = (p[0][0] + p[2][0]) / 2, my = (p[0][1] + p[2][1]) / 2;
-              for (let v = 0; v < 4; v++) { const x = mx + (p[v][0] - mx) * 0.9, y = my + (p[v][1] - my) * 0.9; if (v) path.lineTo(x, y); else path.moveTo(x, y); }
-              path.closePath();
-            }
-          }
-        }
-        ctx.fillStyle = 'rgba(255,206,120,0.62)'; ctx.fill(win);
+        ctx.fillStyle = 'rgba(255,206,120,0.62)'; ctx.fill(SC.win);
         ctx.lineWidth = 0.9; ctx.lineJoin = 'miter';
-        for (let v = 0; v < NEON.length; v++) { ctx.strokeStyle = NEON[v]; ctx.globalAlpha = 0.85; ctx.stroke(neon[v]); }
+        for (let v = 0; v < NEON.length; v++) { if (!SC.neonUsed[v]) continue; ctx.strokeStyle = NEON[v]; ctx.globalAlpha = 0.85; ctx.stroke(SC.neon[v]); }
         ctx.globalAlpha = 1;
       }
     }
@@ -647,11 +734,10 @@
     // drawing them section by section leaves hairline seams where the sections meet
     const merge = function (key) { const p = new Path2D(); for (const ch of vis) p.addPath(ch[key]); return p; };
     // night: the floodlights light up a corridor around the track, fading into the dark
-    if (night) {
-      const centre = merge('center'), base = 2 * T.maxWall;
-      // many thin layers, each a little narrower: a smooth fall-off instead of visible rings
-      ctx.strokeStyle = 'rgba(255,236,190,0.024)';
-      for (let v = 0; v < 11; v++) { ctx.lineWidth = base + 126 - v * 11; ctx.stroke(centre); }
+    if (night && G.light && !this.lite) {
+      const Lm = G.light;
+      ctx.imageSmoothingEnabled = true;
+      ctx.drawImage(Lm.glow, Lm.x0, Lm.y0, Lm.w, Lm.h);
     }
     // barriers + run-off
     for (const ch of vis) for (const g of ch.runoff) { ctx.strokeStyle = COL.armco; ctx.lineWidth = 2 * g.w + 2.4; ctx.stroke(g.path); }
@@ -660,13 +746,28 @@
     for (const ch of vis) for (const g of ch.runoff) { ctx.lineWidth = 2 * g.w; ctx.stroke(g.path); }
     ctx.fillStyle = G.gravelPattern || COL.gravel;
     ctx.fill(merge('gravel'));
+    // rain: everything off the track gets darker (deeper green grass, wet run-off and buildings)
+    const wx = frame.weather, wet = wx ? wx.wet : 0, rain = wx ? wx.rain : 0, ld = wx ? wx.ld : 0;
+    if (wet > 0.02) {
+      ctx.save(); ctx.setTransform(1, 0, 0, 1, 0, 0);
+      ctx.fillStyle = T.street ? 'rgba(6,10,18,' + (0.26 * wet).toFixed(3) + ')' : 'rgba(2,24,10,' + (0.3 * wet).toFixed(3) + ')';
+      ctx.fillRect(0, 0, this.cv.width, this.cv.height);
+      ctx.restore();
+    }
     if (G.pit && Math.hypot(G.pit.cx - vc[0], G.pit.cy - vc[1]) < G.pit.r + vr) {
       ctx.save(); this.drawPit(ctx, G.pit, T, frame); ctx.restore();
     }
-    // asphalt
+    // asphalt (wet: darker, with a sheen across the screen like the sky reflected in it)
     ctx.lineJoin = 'round'; ctx.lineCap = 'round';
-    ctx.strokeStyle = COL.asphalt; ctx.lineWidth = 2 * T.hw;
+    ctx.strokeStyle = wet > 0.02 ? this.wetAsphalt(COL.asphalt, wet) : COL.asphalt; ctx.lineWidth = 2 * T.hw;
     ctx.stroke(merge('center'));
+    // drying: the racing line comes through first, lighter than the wet track around it
+    if (wet > 0.03 && ld > 0.05) {
+      ctx.globalAlpha = Math.min(1, wet * 4) * ld * 0.8;
+      ctx.strokeStyle = mixHex(COL.asphalt, '#575a60', 0.45); ctx.lineWidth = 3.2;
+      ctx.stroke(merge('rline'));
+      ctx.globalAlpha = 1;
+    }
     // banked corners: lighter towards the high side
     for (let v = 0; v < G.banks.length; v++) {
       const bk = G.banks[v];
@@ -693,6 +794,13 @@
     ctx.strokeStyle = 'rgba(255,255,255,0.9)'; ctx.lineWidth = 0.5; ctx.stroke(G.drsLines);
     ctx.setLineDash([1.2, 1.2]); ctx.lineWidth = 0.3; ctx.strokeStyle = 'rgba(255,255,255,0.6)'; ctx.stroke(G.drsDet); ctx.setLineDash([]);
 
+    // heavy rain: standing water near the edges
+    if (wet > 0.55 && !this.lite) {
+      const a = Math.min(1, (wet - 0.55) / 0.35), pud = merge('pud');
+      ctx.fillStyle = night ? 'rgba(40,50,66,' + (0.75 * a).toFixed(3) + ')' : 'rgba(84,98,118,' + (0.62 * a).toFixed(3) + ')'; ctx.fill(pud);
+      ctx.strokeStyle = 'rgba(196,214,234,' + (0.4 * a).toFixed(3) + ')'; ctx.lineWidth = 0.16; ctx.stroke(pud);
+    }
+
     // skid marks
     if (this.skids.length) {
       const sk = new Path2D();
@@ -708,7 +816,8 @@
 
     // night: floodlight posts behind the barriers, each with a pool of light
     if (night) {
-      const sprite = getLampSprite(), R = 17;
+      // (a wet track shines back: bigger, brighter pools of light)
+      const sprite = wet > 0.15 ? getWetLampSprite() : getLampSprite(), R = 17 * (1 + 0.3 * wet);
       ctx.globalCompositeOperation = 'lighter';
       for (const ch of vis) {
         if (!ch.lamps) continue;
@@ -743,6 +852,8 @@
       for (let i = 0; i < cars.length; i++) drawOne(cars[i]);
     }
 
+    // spray behind the cars on a wet track (over the cars behind: in heavy rain it hides them)
+    if (wet > 0.08) this.drawSpray(ctx, cars, wet * (1 - 0.5 * ld), vc, vr);
     // particles
     this.updateParticles(ctx, dt);
     // start-light gantry over the cars
@@ -750,7 +861,7 @@
 
     // labels in screen space
     ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
-    if (night) {
+    if (night && !this.lite) {
       // darker towards the edges of the screen: the light is where the cars are
       const key = this.w + 'x' + this.h;
       if (!this.vig || this.vigKey !== key) {
@@ -760,13 +871,99 @@
       }
       ctx.fillStyle = this.vig; ctx.fillRect(0, 0, this.w, this.h);
     }
+    // rain falling (and a greyer, darker picture when it pours)
+    if (rain > 0.01 || this.rainP.length) this.drawRain(ctx, rain, wet, dt);
     const small = !!(window.TouchUI && window.TouchUI.L && window.TouchUI.L.phone);     // a phone: smaller name tags
-    for (let i = 0; i < cars.length; i++) {
-      const c = cars[i];
+    const tagged = frame.garage && frame.garage.length ? cars.concat(frame.garage.filter(function (c) { return c.me; })) : cars;
+    for (let i = 0; i < tagged.length; i++) {
+      const c = tagged[i];
       const sp = this.toScreen(c.x, c.y);
       if (sp[0] < -60 || sp[1] < -60 || sp[0] > this.w + 60 || sp[1] > this.h + 60) continue;
       if (c.me) this.drawYouTag(ctx, sp[0], sp[1] - 3.6 * cam.z - (small ? 10 : 14), small);
       else if (frame.labels) this.drawLabel(ctx, sp[0], sp[1] - 3.2 * cam.z - (small ? 6 : 8), c, small);
+    }
+  };
+
+  /* Wet asphalt: darker, with a soft band of sheen across the screen (the sky reflected; it stays put on the screen
+     while the track moves under it, like a reflection). */
+  Renderer.prototype.wetAsphalt = function (dry, wet) {
+    const dark = mixHex(dry, '#15171c', 0.72 * wet), shine = mixHex(dry, '#5a6676', 0.36 * wet), mid = mixHex(dry, '#262a31', 0.62 * wet);
+    const a = this.toWorld(0, 0), b = this.toWorld(this.w, this.h);
+    const g = this.ctx.createLinearGradient(a[0], a[1], b[0], b[1]);
+    g.addColorStop(0, dark); g.addColorStop(0.22, mid); g.addColorStop(0.3, dark);
+    g.addColorStop(0.46, dark); g.addColorStop(0.56, shine); g.addColorStop(0.68, dark); g.addColorStop(1, dark);
+    return g;
+  };
+
+  /* Spray: soft grey puffs trailing behind each car, bigger and thicker the faster it goes and the wetter it is. */
+  Renderer.prototype.drawSpray = function (ctx, cars, wet, vc, vr) {
+    const sprite = getSpraySprite(), t = performance.now() / 1000, n = this.lite ? 2 : 4;
+    for (let i = 0; i < cars.length; i++) {
+      const c = cars[i];
+      if (c.ghost || c.replay || c.garage) continue;
+      if (Math.abs(c.x - vc[0]) > vr + 30 || Math.abs(c.y - vc[1]) > vr + 30) continue;
+      const sp = Math.hypot(c.vx || 0, c.vy || 0), k = Math.min(1, Math.max(0, (sp - 12) / 50)) * wet;
+      if (k < 0.04) continue;
+      const ux = c.vx / sp, uy = c.vy / sp, px = -uy, py = ux;
+      for (let j = 0; j < n; j++) {
+        const dist = 2.7 + j * (1.0 + sp * 0.036), r = (1.9 + j * 1.0) * (0.75 + 0.6 * k);
+        const wob = Math.sin(t * 9 + c.id * 1.7 + j * 2.1) * 0.35 * (1 + j * 0.3);
+        const x = c.x - ux * dist + px * wob, y = c.y - uy * dist + py * wob;
+        ctx.globalAlpha = Math.min(0.8, k * (0.78 - j * 0.1));
+        ctx.drawImage(sprite, x - r, y - r, 2 * r, 2 * r);
+      }
+    }
+    ctx.globalAlpha = 1;
+  };
+
+  /* Rain on the screen: thin, slightly see-through streaks falling at an angle (a few in light rain, dense and fast in
+     a downpour), tiny splash rings, and the picture a little darker and greyer the harder it rains. */
+  Renderer.prototype.drawRain = function (ctx, rain, wet, dt) {
+    const W = this.w, H = this.h, area = (W * H) / (1366 * 768), ph = Math.min(1.2, Math.max(0.6, H / 768));
+    const shade = 0.05 * wet + 0.24 * Math.max(0, rain - 0.25) / 0.75;
+    if (shade > 0.005) { ctx.fillStyle = 'rgba(30,38,50,' + shade.toFixed(3) + ')'; ctx.fillRect(0, 0, W, H); }
+    const want = rain < 0.02 ? 0 : Math.round(area * (rain < 0.5 ? 40 + 300 * rain : 130 + 300 * rain) * (this.lite ? 0.5 : 1));
+    const P = this.rainP, ang = 0.32, dx = Math.sin(ang), dy = Math.cos(ang);
+    const spawn = function (p, top) {
+      p.y = top ? -40 - Math.random() * H * 0.25 : Math.random() * H;
+      p.x = Math.random() * (W + H * dx) - H * dx * (top ? 0.4 : 0);
+      p.v = (1250 + Math.random() * 650) * ph * (0.85 + 0.3 * rain);
+      p.l = (14 + Math.random() * 14 + 18 * rain) * ph;
+      p.a = Math.random() < 0.5 ? 0 : 1;
+      return p;
+    };
+    while (P.length < want) P.push(spawn({}, false));
+    if (P.length > want) P.length = Math.max(want, P.length - Math.ceil(P.length * 0.04 + 1));     // eases off
+    const mv = Math.min(dt, 0.05);
+    const paths = [new Path2D(), new Path2D()];
+    for (let i = 0; i < P.length; i++) {
+      const p = P[i];
+      p.x += dx * p.v * mv; p.y += dy * p.v * mv;
+      if (p.y - p.l > H || p.x - p.l > W) spawn(p, true);
+      const path = paths[p.a];
+      path.moveTo(p.x, p.y); path.lineTo(p.x - dx * p.l, p.y - dy * p.l);
+    }
+    ctx.lineCap = 'butt';
+    ctx.lineWidth = rain > 0.55 ? 1.25 : 1;
+    ctx.strokeStyle = 'rgba(205,220,242,0.26)'; ctx.stroke(paths[0]);
+    ctx.strokeStyle = 'rgba(220,232,250,0.42)'; ctx.stroke(paths[1]);
+    // splashes: little rings where drops land (fading as they grow: three shades, one stroke each)
+    if (!this.lite) {
+      const S = this.splash, now = performance.now() / 1000, life = 0.32;
+      let add = rain * area * 110 * mv;
+      while (add > 0) { if (add >= 1 || Math.random() < add) S.push({ x: Math.random() * W, y: Math.random() * H, t: now }); add -= 1; }
+      const rings = [new Path2D(), new Path2D(), new Path2D()];
+      let k = 0;
+      for (let i = 0; i < S.length; i++) {
+        const sp = S[i], f = (now - sp.t) / life;
+        if (f >= 1) continue;
+        S[k++] = sp;
+        const r = (0.8 + 4.2 * f) * ph, g = rings[f < 0.33 ? 0 : f < 0.66 ? 1 : 2];
+        g.moveTo(sp.x + r, sp.y); g.arc(sp.x, sp.y, r, 0, TAU);
+      }
+      S.length = k;
+      ctx.lineWidth = 0.9;
+      for (let q = 0; q < 3; q++) { ctx.strokeStyle = 'rgba(215,228,245,' + (0.4 - q * 0.13).toFixed(2) + ')'; ctx.stroke(rings[q]); }
     }
   };
 
@@ -821,15 +1018,28 @@
       ctx.fillStyle = '#1b1d22'; quadPath(ctx, st.body); ctx.fill();
       ctx.fillStyle = st.color; quadPath(ctx, st.roof); ctx.fill();
     }
-    // garages: shadow, roof, team fronts, open doors, names, dividers
+    // garages: shadow, floor, team fronts, open doors; the cars in the garages (and rolling in or out of them);
+    // the roof over them, see-through so the parked cars still show; names, dividers
     ctx.save(); ctx.translate(0.7, 0.9); ctx.fillStyle = 'rgba(0,0,0,0.35)'; ctx.fill(pit.building); ctx.restore();
     ctx.fillStyle = '#2a2d33'; ctx.fill(pit.building);
-    ctx.strokeStyle = '#41464f'; ctx.lineWidth = 0.35; ctx.stroke(pit.building);
-    ctx.strokeStyle = 'rgba(255,255,255,0.07)'; ctx.lineWidth = 0.25; ctx.stroke(pit.ribs);
     for (let i = 0; i < pit.garages.length; i++) {
       const g = pit.garages[i];
       ctx.fillStyle = g.color; quadPath(ctx, g.front); ctx.fill();
       ctx.fillStyle = '#0d0e11'; quadPath(ctx, g.door); ctx.fill();
+    }
+    const inG = frame && frame.garage;
+    if (inG && inG.length) {
+      for (let i = 0; i < inG.length; i++) {
+        const c = inG[i];
+        if (c.me) this.drawMeGlow(ctx, c);
+        this.drawCar(ctx, c, c.team, c.delta || 0, false);
+      }
+      ctx.globalAlpha = 0.6; ctx.fillStyle = '#2a2d33'; ctx.fill(pit.roof); ctx.globalAlpha = 1;
+    }
+    ctx.strokeStyle = '#41464f'; ctx.lineWidth = 0.35; ctx.stroke(pit.building);
+    ctx.strokeStyle = 'rgba(255,255,255,0.07)'; ctx.lineWidth = 0.25; ctx.stroke(pit.ribs);
+    for (let i = 0; i < pit.garages.length; i++) {
+      const g = pit.garages[i];
       ctx.font = '900 40px ' + FONT;
       const w40 = ctx.measureText(g.name.t).width / 40;
       g.name.size = Math.min(2.4, g.name.room / Math.max(0.1, w40));
@@ -1123,15 +1333,17 @@
         ctx.fillStyle = r.me ? '#111' : (r.out ? '#777' : '#fff');
         ctx.font = '800 ' + Math.round(rh * 0.62) + 'px ' + FONT;
         ctx.fillText(r.code, x0 + 37, y + rh / 2);
+        if (r.tyre) drawTyreIcon(ctx, x0 + (compact ? 72 : 84), y + rh / 2, Math.max(4, rh * (compact ? 0.28 : 0.32)), r.tyre, r.me);
         if (r.pen) {
-          const pw2 = Math.round(rh * 1.45), px2 = x0 + (compact ? 70 : 92);
+          const pw2 = Math.round(rh * 1.45), px2 = x0 + (compact ? 70 : 92) + (r.tyre ? (compact ? 10 : 8) : 0);
           ctx.fillStyle = '#e10600'; roundRect(ctx, px2, y + 3, pw2, rh - 7, 3); ctx.fill();
           ctx.fillStyle = '#fff'; ctx.font = '800 ' + Math.round(rh * 0.5) + 'px ' + FONT; ctx.textAlign = 'center';
           ctx.fillText('+' + r.pen + 's', px2 + pw2 / 2, y + rh / 2);
         }
         ctx.textAlign = 'right';
         ctx.font = '600 ' + Math.round(rh * 0.56) + 'px ' + FONT;
-        ctx.fillStyle = r.me ? '#111' : (r.purple ? '#c77dff' : (r.out ? '#777' : '#d7dbe0'));
+        ctx.fillStyle = r.me ? '#111' : r.tag === 'pit' ? '#6ea2ff' : r.tag === 'gar' ? '#8f96a0' : (r.purple ? '#c77dff' : (r.out ? '#777' : '#d7dbe0'));
+        if (r.tag) ctx.font = '800 ' + Math.round(rh * 0.5) + 'px ' + FONT;
         ctx.fillText(r.info || '', x0 + tw - 8, y + rh / 2);
         if (r.done) {
           const fx = x0 + 76, fy = y + 4, s = Math.max(2, Math.floor((rh - 8) / 3));
@@ -1146,7 +1358,8 @@
           y += 7;
         }
       }
-    }
+      this.towerBox = [x0, y0, tw, y - y0];          // where the tower ended up (for the layout checks)
+    } else this.towerBox = null;
 
     // ---- minimap (top-right)
     if (frame && frame.track) {
@@ -1204,6 +1417,27 @@
         ctx.fillStyle = c.lvl ? col : '#cfd3d8';
         ctx.fillText(c.text, ux + 25, fy + ch / 2 + 0.5);
         fy += ch + 8;
+      }
+      // the weather: a cloud (with rain falling from it when it rains) and what the track is like
+      if (hud.weather) {
+        const wh = phone ? 20 : 24, wxs = hud.weather;
+        ctx.fillStyle = 'rgba(10,10,14,0.86)';
+        roundRect(ctx, ux, fy, uw, wh, 5); ctx.fill();
+        ctx.fillStyle = '#4fa8e8'; ctx.fillRect(ux, fy, 3, wh);
+        const cx = ux + 15, cy = fy + wh / 2 - 2;
+        ctx.fillStyle = '#c9d3df';
+        ctx.beginPath(); ctx.arc(cx - 4, cy + 1, 3.4, 0, TAU); ctx.arc(cx + 0.5, cy - 1.6, 4.4, 0, TAU); ctx.arc(cx + 5, cy + 1, 3.2, 0, TAU); ctx.fill();
+        ctx.fillRect(cx - 4, cy + 1, 9, 3.4);
+        if (wxs.rain > 0.06) {
+          ctx.strokeStyle = '#6ec1ff'; ctx.lineWidth = 1.4; ctx.lineCap = 'round';
+          ctx.beginPath();
+          for (let d = 0; d < (wxs.rain > 0.55 ? 3 : 2); d++) { const x = cx - 3 + d * 3.6; ctx.moveTo(x, cy + 6.5); ctx.lineTo(x - 1.2, cy + 9.5); }
+          ctx.stroke(); ctx.lineCap = 'butt';
+        }
+        ctx.font = '800 ' + (compact ? 10 : 11) + 'px ' + FONT; ctx.textAlign = 'left'; ctx.fillStyle = '#cfe6ff';
+        const txt = ctx.measureText(wxs.text).width <= uw - 34 ? wxs.text : wxs.short;
+        ctx.fillText(txt, ux + 27, fy + wh / 2 + 0.5);
+        fy += wh + 8;
       }
     }
 
@@ -1318,19 +1552,22 @@
     if (hud.speed !== undefined && dstyle === 'slim') this.drawSlimDash(hud, TL);
     else if (hud.speed !== undefined) {
       const bw = dc ? Math.min(W - 24, 400) : 560, bh = dc ? 84 : 96;
-      const bx = W / 2 - bw / 2, by = H - bh - 14;
+      const dcx = TL ? TL.dashCx : W / 2;          // with the on-screen controls: in the space between the thumbs
+      const bx = dcx - bw / 2, by = H - bh - 14;
       // gap to the ghost, just above the dashboard
       if (hud.delta) {
         ctx.font = '900 26px ' + FONT;
         const dw = ctx.measureText(hud.delta.text).width + 92;
         ctx.fillStyle = 'rgba(10,10,14,0.88)';
-        roundRect(ctx, W / 2 - dw / 2, by - 50, dw, 40, 8); ctx.fill();
-        ctx.fillStyle = hud.delta.color; ctx.fillRect(W / 2 - dw / 2, by - 50, 4, 40);
+        roundRect(ctx, dcx - dw / 2, by - 50, dw, 40, 8); ctx.fill();
+        ctx.fillStyle = hud.delta.color; ctx.fillRect(dcx - dw / 2, by - 50, 4, 40);
         ctx.textAlign = 'left'; ctx.font = '800 11px ' + FONT; ctx.fillStyle = '#9aa1a8';
-        ctx.fillText('GHOST', W / 2 - dw / 2 + 14, by - 30);
+        ctx.fillText('GHOST', dcx - dw / 2 + 14, by - 30);
         ctx.textAlign = 'right'; ctx.font = '900 26px ' + FONT; ctx.fillStyle = hud.delta.color;
-        ctx.fillText(hud.delta.text, W / 2 + dw / 2 - 14, by - 29);
+        ctx.fillText(hud.delta.text, dcx + dw / 2 - 14, by - 29);
       }
+      if (hud.tow) this.drawTow(bx + bw, by - 8, dc ? 1 : 1.12);
+      if (hud.tyre) this.drawTyrePill(bx, by - 8, dc ? 1 : 1.12, hud.tyre, !dc);
       ctx.fillStyle = 'rgba(10,10,14,0.88)';
       roundRect(ctx, bx, by, bw, bh, 10); ctx.fill();
       // gear + speed
@@ -1416,14 +1653,58 @@
     }
   };
 
+  /* Your tyres: a small sign on top of the dashboard's left-hand end (l = left edge, b = bottom): the compound and,
+     with tyre wear on, how much is left (green, then yellow, red when they are nearly gone). */
+  Renderer.prototype.drawTyrePill = function (l, b, k, t, named) {
+    const ctx = this.ctx, h = Math.round(22 * k), f = Math.round(11 * k), ty = F1.TYRES[t.c];
+    if (!ty) return;
+    ctx.font = '800 ' + f + 'px ' + FONT;
+    const name = named ? ty.name.toUpperCase() : '';
+    const left = t.w === null ? null : Math.max(0, Math.round((1 - t.w) * 100));
+    const nameW = name ? ctx.measureText(name).width + 8 * k : 0, barW = left === null ? 0 : 34 * k, pctW = left === null ? 0 : ctx.measureText('100%').width + 6 * k;
+    const w = 26 * k + nameW + (left === null ? 2 * k : barW + 6 * k + pctW), x = l, y = b - h;
+    ctx.fillStyle = 'rgba(10,10,14,0.88)';
+    roundRect(ctx, x, y, w, h, 6 * k); ctx.fill();
+    drawTyreIcon(ctx, x + 12 * k, y + h / 2, 7.2 * k, t.c, false);
+    let cx = x + 23 * k;
+    ctx.textAlign = 'left'; ctx.textBaseline = 'middle';
+    if (name) { ctx.fillStyle = '#e9edf1'; ctx.fillText(name, cx, y + h / 2 + 0.5); cx += nameW; }
+    if (left !== null) {
+      const col = left > 40 ? '#19c94a' : left > 15 ? '#ffd600' : '#ff3b30';
+      ctx.fillStyle = 'rgba(255,255,255,0.12)'; roundRect(ctx, cx, y + h / 2 - 2.5 * k, barW, 5 * k, 2.5 * k); ctx.fill();
+      ctx.fillStyle = col; roundRect(ctx, cx, y + h / 2 - 2.5 * k, Math.max(2, barW * left / 100), 5 * k, 2.5 * k); ctx.fill();
+      ctx.fillStyle = col; ctx.fillText(left + '%', cx + barW + 5 * k, y + h / 2 + 0.5);
+    }
+  };
+
+  /* "SLIPSTREAM": a small sign sitting on top of the dashboard's right-hand end (r = right edge, b = bottom). */
+  Renderer.prototype.drawTow = function (r, b, k) {
+    const ctx = this.ctx, h = Math.round(22 * k), f = Math.round(11 * k);
+    ctx.font = '800 ' + f + 'px ' + FONT;
+    const tw = ctx.measureText('SLIPSTREAM').width, w = tw + 34 * k, x = r - w, y = b - h;
+    ctx.fillStyle = 'rgba(10,10,14,0.88)';
+    roundRect(ctx, x, y, w, h, 6 * k); ctx.fill();
+    ctx.strokeStyle = '#4fc3ff'; ctx.lineWidth = 1.5; ctx.stroke();
+    // three lines of moving air
+    const t = (performance.now() / 300) % 1;
+    ctx.strokeStyle = '#4fc3ff'; ctx.lineWidth = 1.6 * k; ctx.lineCap = 'round';
+    for (let i = 0; i < 3; i++) {
+      const yy = y + h / 2 + (i - 1) * 4.5 * k, o = ((t + i * 0.33) % 1) * 3 * k;
+      ctx.beginPath(); ctx.moveTo(x + 7 * k + o, yy); ctx.lineTo(x + (i === 1 ? 17 : 14) * k + o, yy); ctx.stroke();
+    }
+    ctx.lineCap = 'butt';
+    ctx.fillStyle = '#bfe9ff'; ctx.textAlign = 'left'; ctx.textBaseline = 'middle';
+    ctx.fillText('SLIPSTREAM', x + 25 * k, y + h / 2 + 0.5);
+  };
+
   /* Phones: a slim dashboard that fits between the two thumbs. (DRS is shown on its own button.) */
   Renderer.prototype.drawSlimDash = function (hud, TL) {
     const ctx = this.ctx, W = this.w, H = this.h;
-    const bw = TL.dashW, bh = 56, bx = Math.round(W / 2 - bw / 2), by = H - bh - 8;
+    const bw = TL.dashW, bh = 56, bx = TL.dashX, by = H - bh - 8;
     // gap to the ghost, just above
     if (hud.delta) {
       ctx.font = '900 18px ' + FONT;
-      const dw = ctx.measureText(hud.delta.text).width + 70, dx = W / 2 - dw / 2, dy = by - 32;
+      const dw = ctx.measureText(hud.delta.text).width + 70, dx = TL.dashCx - dw / 2, dy = by - 32;
       ctx.fillStyle = 'rgba(10,10,14,0.88)';
       roundRect(ctx, dx, dy, dw, 27, 6); ctx.fill();
       ctx.fillStyle = hud.delta.color; ctx.fillRect(dx, dy, 4, 27);
@@ -1432,6 +1713,8 @@
       ctx.textAlign = 'right'; ctx.font = '900 18px ' + FONT; ctx.fillStyle = hud.delta.color;
       ctx.fillText(hud.delta.text, dx + dw - 10, dy + 14.5);
     }
+    if (hud.tow) this.drawTow(bx + bw, by - 6, 0.86);
+    if (hud.tyre) this.drawTyrePill(bx, by - 6, 0.86, hud.tyre, false);
     ctx.fillStyle = 'rgba(10,10,14,0.88)';
     roundRect(ctx, bx, by, bw, bh, 10); ctx.fill();
     // the three sectors: thin bars along the top edge
@@ -1476,6 +1759,21 @@
       }
     }
   };
+
+  /* A tyre: a ring in the compound's colour (soft red, medium yellow, hard white, intermediate green, wet blue) with
+     its letter in the middle when there is room. onLight: drawn on a light background (your row in the tower). */
+  function drawTyreIcon(ctx, x, y, r, k, onLight) {
+    const ty = F1.TYRES[k];
+    if (!ty) return;
+    ctx.beginPath(); ctx.arc(x, y, r, 0, Math.PI * 2);
+    ctx.fillStyle = '#16161c'; ctx.fill();
+    ctx.lineWidth = Math.max(1.5, r * 0.32); ctx.strokeStyle = ty.col; ctx.stroke();
+    if (onLight) { ctx.lineWidth = 1; ctx.strokeStyle = 'rgba(0,0,0,0.5)'; ctx.beginPath(); ctx.arc(x, y, r + ctx.lineWidth, 0, Math.PI * 2); ctx.stroke(); }
+    if (r >= 5.5) {
+      ctx.font = '900 ' + Math.round(r * 1.05) + 'px ' + FONT; ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
+      ctx.fillStyle = ty.col; ctx.fillText(k, x, y + 0.5);
+    }
+  }
 
   /* Break a line of text into lines no wider than maxW (the context's current font), of about the same length
      (so the last line is not one lonely word). */

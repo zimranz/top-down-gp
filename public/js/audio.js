@@ -390,6 +390,8 @@
         if (e.fastest) this.fastestLap(e.id === myId);
       } else if (e.k === 'tl' && e.id === myId) { if (e.pen) this.penaltyBuzz(); else this.warnBeep(); }
       else if (e.k === 'jump' && e.id === myId) this.penaltyBuzz();
+      else if (e.k === 'noStop' && e.id === myId) this.penaltyBuzz();
+      else if ((e.k === 'mustStop' || e.k === 'wxTyres' || (e.k === 'tyres' && e.n === 2)) && e.id === myId) this.warnBeep();
       else if (e.k === 'finish' && e.id === myId) this.chequered();
       else if (e.k === 'chequered' && myId === null) this.chequered();
     }

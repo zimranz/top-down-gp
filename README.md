@@ -9,7 +9,13 @@ A top-down F1 racing game you can play in the browser, alone or online with up t
   - **Suzuka** is a figure of eight: the back straight crosses over the road from Degner to the hairpin on a bridge. Cars on the bridge and cars underneath never touch, and the cars underneath disappear under the bridge.
   - **Montreal** has barriers close to the track all the way round, and right at the exit of the last chicane (the Wall of Champions).
   - **Baku** has the longest flat-out run, and the old town by the castle squeezes the track to about 9 metres between stone walls.
-- **Practice mode**: you drive out of your team's pit box (80 km/h limiter) while AI cars are already lapping
+- **Practice mode**: you start in your team's garage and press **Go out** (or Enter, or hold the accelerator) when you're ready (80 km/h limiter in the pit lane)
+- **Realistic practice** (every practice session, offline and online): the AI cars do runs of a few laps and roll back into their own garages, so the track is busy at the start and the end of a session and quieter in the middle (with a full field mostly 5 or 6 cars out, sometimes 4, at the quietest). You can see the parked cars through the garage roofs. Drive into your own garage and stop, and it rolls you in: the garage panel shows your session so far, your tyres for the next run, and **Go back out**. The tower shows **GARAGE** and **IN PIT**.
+- **Tyres and pit stops** (the **Tyre wear** switch, on unless you turn it off): soft (red, fastest, about 6 laps), medium (yellow, about 0.4 s a lap slower, about 10 laps) and hard (white, about 0.8 s slower, about 14 laps); intermediates (green) for a damp track and full wets (blue) for heavy rain. Tyres wear with distance and with how hard you drive them (sliding and locking up wear them faster), fade slowly to 75% worn and then fall off a cliff. Your tyres and how worn they are show above the dashboard; every car's tyres show in the timing tower and the race results.
+  - **Starting tyres**: a race with tyre wear gives you 3 seconds on the grid to pick (keys 1–5, or tap). Otherwise you start on the tyres that suit the race best.
+  - **Pit stops**: drive into the pit lane during a race and your crew takes over: the car drives itself to your box, the tyres you picked (keys 1–5, or tap) go on in about 2.5 seconds, and it drives you out to the end of the pit lane. In a race of 3 laps or more with tyre wear on, **at least one pit stop is compulsory**: you get reminders over the last laps, and finishing without a stop is a 30-second penalty (it doesn't apply if you used rain tyres). The AI cars plan their own strategies (some start on softs, some on mediums or hards, and they stop on different laps), and team-mates don't stop on the same lap.
+- **Weather** (the **Weather** switch, on unless you turn it off; off = always dry): rain showers come and go, more often at tracks where it often rains (Spa, Silverstone, Interlagos) and hardly ever in the desert (Abu Dhabi, Jeddah, Las Vegas). Sometimes it is already raining when a session starts. Light rain makes the track damp (intermediates), heavy rain soaks it (full wets); slicks on a wet track have very little grip. When the rain stops the track dries over a few minutes, the racing line first (you can see the drier line). The game tells you when rain is coming, and when it's time for rain tyres or slicks again. In the rain: streaks of rain, splashes, a darker, shiny track, puddles in heavy rain, floodlights shining off the wet track at night, and spray behind the cars (in heavy rain it hides the car behind). The AI cars change tyres for the weather too.
+- **Drafting** (the **Drafting** switch, on unless you turn it off): right behind another car on a straight you get a tow (up to about 11 km/h more at the end of a long straight); a **SLIPSTREAM** sign shows above the dashboard. For you and the AI, in every mode. The three switches are on the setup screens (and in the online lobby, where the host decides).
 - **Time trial**: just you and your ghost. You start at speed so every lap is timed, your best lap is replayed as a see-through ghost, and the live gap to it shows above the dashboard (green when you are ahead). Your 10 best laps on every track are listed on the time trial screen.
 - **Grand Prix mode** (single player): pick your track, driver, number of opponents and difficulty, then a weekend of optional Practice 1, 2 and 3 (skip, or 1–3 timed laps each), qualifying (none, or 1–5 laps) for the grid, five start lights, and a race of 1–20 laps with F1 points (25-18-15-12-10-8-6-4-2-1, plus 1 point for the fastest lap if that driver finishes in the top 10)
 - **Reverse grid** (a switch next to Qualifying, off unless you turn it on): the whole qualifying order is flipped for the race, so the slowest qualifier starts first and the fastest starts last. Drivers who set no time still start at the back. In Grand Prix, Championship and the online lobby (the host decides).
@@ -40,11 +46,12 @@ A top-down F1 racing game you can play in the browser, alone or online with up t
 - **Pause and resume** (offline): after Resume the game counts down 3, 2, 1 before it carries on, so you can see where you are first (the lap timer and the ghost wait too)
 - **Full screen**: the button next to the sound button, or press F
 - **Personal bests**: your best lap on each track is saved in your browser and shown on the track cards
-- **Career** (home screen): races, wins, podiums, pole positions, fastest laps and championships across every mode, and for each track your best lap, races, wins and best finish. Kept in your browser; counting started with version 9.
+- **Career statistics** (home screen): races, wins, podiums, pole positions, fastest laps and championships across every mode, and for each track your best lap, races, wins and best finish. Kept in your browser; counting started with version 9.
 - **Sound**: your engine is modelled from the V6's exhaust pulses (every cylinder firing, pipe resonances, ignition cut on upshifts, crackles when you lift off). Choose **Onboard** or **TV camera** in Settings and press **Test engine** to hear it. Also: the cars around you (panned, with Doppler as they pass), start lights, contact, DRS, pit limiter, chequered flag, fastest lap and menu clicks. Master / engine / effects volume and mute in Settings, the sound button next to the pause button (and on the home screen), or press M. Mute is remembered when you close the game and stays in step if the game is open in two tabs. (The onboard engine needs https or localhost; on a plain local network address the TV camera sound is used.)
 - **Camera**: rotating or fixed, at three distances (normal, close, far). Press C while driving to switch distance.
-- **Settings** (home screen and pause menu): steering sensitivity 1–12, your own keys for steering, accelerating, braking and DRS, touch sensitivity (phones and tablets), camera, camera distance, speed in km/h or mph, ghost car on / off, driver names, sound
-- **Version number** in the bottom-left corner of the home screen (this is version 9)
+- **Settings** (home screen and pause menu): steering sensitivity 1–12, your own keys for steering, accelerating, braking and DRS, steering on phones (arrows or slider) and touch sensitivity, camera, camera distance, speed in km/h or mph, ghost car on / off, driver names, sound. The X at the top closes it (keeping your changes, like **Save**). Clicking outside a box closes it too.
+- **Lighter graphics**: if the game can't keep up on a computer (frames taking too long), it switches to lighter graphics by itself so it stays smooth, and says so.
+- **Version number** in the bottom-left corner of the home screen (this is version 10)
 
 ## Controls
 
@@ -57,6 +64,8 @@ A top-down F1 racing game you can play in the browser, alone or online with up t
 | R | Reset the car onto the track (if you're stuck) |
 | C | Camera distance: normal, far, close |
 | Esc or P | Pause menu / settings |
+| 1–5 | Pick tyres (soft, medium, hard, intermediate, wet) when a tyre choice is on screen |
+| Enter | Go out of your garage |
 | M | Sound on / off |
 | F | Full screen on / off |
 
@@ -66,13 +75,14 @@ Steering, accelerating, braking and DRS can be moved to other keys in **Settings
 
 Open the same link on a phone or tablet and the game switches to on-screen controls at the first touch (and back to the keyboard as soon as a driving key is pressed):
 
-- **Left thumb: steering.** Put your thumb down anywhere on the left half and slide it left or right. Where it lands is "straight ahead"; the further you slide, the more the car turns. Lift it and the wheel centres.
+- **Left thumb: steering.** Two arrow buttons at the bottom left: hold one to turn (it builds up to full lock), a quick tap is a small correction, and you can slide from one to the other without lifting. If you prefer, **Settings → Steering on phones → Slider** gives the old slider instead (thumb down anywhere on the left half, slide left or right).
 - **Right thumb: pedals.** GO and BRAKE at the bottom right. You can slide from one to the other without lifting, or use two fingers. BRAKE also reverses when you are stopped.
 - **DRS** sits on top of GO: slide your thumb up onto it (you keep accelerating), or tap it. It lights up green when DRS is available.
 - **Pause** and **back on track** (↺) are the two small buttons next to the minimap.
 - **Touch sensitivity** in Settings (1–10): higher means a shorter slide for full steering.
 - Hold the phone sideways. If you turn it upright while driving, the game waits (offline) and counts down 3-2-1 when you turn it back.
-- **Full screen** (home screen and pause menu) hides the browser's bars where the phone allows it. On an iPhone, use Share → Add to Home Screen and open the game from there.
+- **Full screen** (home screen and pause menu) hides the browser's bars where the phone allows it. Before a session the game asks you to go full screen (with **Don't show this again**), because without it the game is squashed and some of the screen may be hidden. On an iPhone, use Share → Add to Home Screen and open the game from there (the notice explains this).
+- **Tyre choices** (on the grid, in the pit lane, in your garage) are buttons you tap.
 - On a phone the screen is laid out to fit: a short timing tower (the leader and the cars around you), a slim dashboard between your thumbs, smaller messages.
 
 ## Run it on your computer
@@ -113,10 +123,10 @@ On the free plan the server goes to sleep after 15 minutes with nobody connected
 server.js            game server: rooms, lobby, online championships, authoritative 60 Hz race simulation
 shared/data.js       teams, drivers, numbers, colours
 shared/tracks.js     circuit outlines, kerbs, gravel, barriers, narrow sections, bridges, pit lane, DRS zones, racing line
-shared/sim.js        car physics, collisions, AI drivers, practice/qualifying/race rules
+shared/sim.js        car physics, tyres, weather, slipstream, collisions, AI drivers and their strategies, pit stops and garages, practice/qualifying/race rules
 public/index.html    menus and screens
 public/css/style.css styling
-public/js/render.js  canvas drawing: track, pit lane, cars, ghost car, HUD, minimap
+public/js/render.js  canvas drawing: track, pit lane and garages, cars, rain and spray, ghost car, HUD, minimap
 public/js/audio.js   synthesised sound (engines and effects, no audio files)
 public/js/engine-worklet.js  the onboard V6 engine sound (runs in the browser's audio thread)
 public/js/util.js    settings, key bindings, keyboard and touch input, personal bests, career
@@ -125,7 +135,8 @@ public/js/touch.js   on-screen controls for phones and tablets
 public/js/ghost.js   ghost car (records your laps, replays your best one) and the time trial best laps
 public/js/game-local.js   practice, time trial, Grand Prix and championship sessions (run in the browser)
 public/js/game-online.js  online client: instant local response + smoothing of other cars
-public/js/main.js    menus, time trial, lobby, results and race stats, championship standings, settings, main loop
+public/js/dropdown.js     drop-down lists styled like the game
+public/js/main.js    menus, time trial, lobby, results and race stats, championship standings, settings, tyre choices, main loop
 ```
 
 The files in `shared/` run on both the server and in the browser, so the physics is the same on both.

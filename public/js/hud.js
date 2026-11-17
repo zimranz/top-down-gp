@@ -3,6 +3,8 @@
   'use strict';
   const F1 = window.F1;
 
+  let towAt = -1e9;      // when your car was last in a slipstream
+
   /* Turn a session event into an on-screen message. codeOf(id) -> 'NOR' etc. */
   function eventMessage(msgs, e, myId, codeOf) {
     if (e.k === 'lightsOut') msgs.add('LIGHTS OUT AND AWAY WE GO!', { big: true, color: '#e10600', key: 'start', dur: 2600 });
@@ -21,6 +23,28 @@
         else if (e.n === 0) msgs.add('TRACK LIMITS', { sub: "Don't cut corners", sign: 'warn', key: 'tl', dur: 3500 });
         else msgs.add('TRACK LIMITS — WARNING ' + e.n + ' OF 3', { sub: e.n < 3 ? 'Stop cutting corners: after 3 warnings each cut is a 5-second penalty' : 'Last warning: the next cut is a 5-second penalty', sign: 'warn', key: 'tl', dur: 5000 });
       } else if (e.pen && !e.lap) msgs.add('PENALTY  ' + codeOf(e.id), { sub: '5 seconds for track limits', color: '#ffd600', key: 'pen', dur: 3000 });
+    }
+    else if (e.k === 'tyres' && e.id === myId) {
+      if (e.n === 1) msgs.add('TYRES WEARING', { sub: '75% worn: they will drop off soon', color: '#ffd600', key: 'tyres', dur: 4000 });
+      else msgs.add('TYRES WORN OUT', { sub: 'You are losing a lot of time: box this lap', sign: 'warn', key: 'tyres', dur: 5000 });
+    }
+    else if (e.k === 'mustStop' && e.id === myId) {
+      msgs.add('PIT STOP REQUIRED', { sub: e.left <= 1 ? 'Last lap: box now or get a 30-second penalty' : 'At least one stop this race: box within ' + e.left + ' laps', sign: 'warn', key: 'must', dur: 5500 });
+    }
+    else if (e.k === 'noStop') {
+      if (e.id === myId) msgs.add('NO PIT STOP — 30 SECOND PENALTY', { sub: 'At least one stop was needed this race', sign: 'pen', key: 'nostop', dur: 6000 });
+      else msgs.add('PENALTY  ' + codeOf(e.id), { sub: '30 seconds: no pit stop', color: '#ffd600', key: 'pen', dur: 3000 });
+    }
+    else if (e.k === 'stopDone' && e.id === myId) {
+      const ty = F1.TYRES[e.tyre];
+      msgs.add('PIT STOP  ' + e.t.toFixed(1) + ' s', { sub: 'New ' + (ty ? ty.name.toLowerCase() : '') + ' tyres', color: '#19c94a', key: 'stop', dur: 3500 });
+    }
+    else if (e.k === 'rainSoon') msgs.add('RAIN EXPECTED', { sub: e.heavy ? 'Heavy rain in about a minute' : 'Light rain in about a minute', color: '#6ec1ff', key: 'wx', dur: 4500 });
+    else if (e.k === 'rain') msgs.add(e.n === 2 ? 'HEAVY RAIN' : 'IT IS RAINING', { sub: e.n === 2 ? 'Standing water soon: full wets' : 'The track is getting wet', color: '#6ec1ff', key: 'wx', dur: 4500 });
+    else if (e.k === 'rainStop') msgs.add('RAIN HAS STOPPED', { sub: 'The racing line will dry first', color: '#6ec1ff', key: 'wx', dur: 4000 });
+    else if (e.k === 'wxTyres' && e.id === myId) {
+      const what = e.need === 'W' ? 'FULL WETS' : e.need === 'I' ? 'INTERMEDIATES' : 'SLICKS';
+      msgs.add('TIME FOR ' + what, { sub: e.need === 'dry' ? 'The racing line is dry: box for slicks' : 'Your tyres are wrong for this: box for ' + what.toLowerCase(), sign: 'warn', key: 'wxt', dur: 5000 });
     }
     else if (e.k === 'jump') {
       if (e.id === myId) msgs.add('JUMP START', { sub: '5-second penalty: wait for the lights to go out', sign: 'pen', big: true, key: 'jump', dur: 6000 });
@@ -86,8 +110,10 @@
     const tower = order.map(function (id, i) {
       const e = o.entries[id], r = rows[id] || {};
       const t = F1.teamOfDriver(e.driverId);
-      let info = '';
+      let info = '', tag = null;
       if (r.out) info = 'OUT';
+      else if (r.gar) { info = 'GARAGE'; tag = 'gar'; }          // in the garage (practice)
+      else if (r.pit) { info = 'IN PIT'; tag = 'pit'; }          // in the pit lane
       else if (isRace) {
         if (i === 0) info = r.fin ? 'WINNER' : 'LEADER';
         else if (leader && leader.dist - r.dist > T.length && !r.fin) {
@@ -99,7 +125,8 @@
         }
       } else info = r.best !== null && r.best !== undefined ? F1.fmtLap(r.best) : 'NO TIME';
       return {
-        pos: i + 1, code: e.driverId, color: F1.teamUiColor(t), info: info, pen: isRace && r.pen ? r.pen : 0,
+        pos: i + 1, code: e.driverId, color: F1.teamUiColor(t), info: info, tag: tag, pen: isRace && r.pen ? r.pen : 0,
+        tyre: o.tyresShow && r.ty && !r.out ? r.ty : null,
         me: Number(id) === o.myId, out: !!r.out, done: isRace ? !!r.fin : !!r.qdone, purple: !isRace && Number(id) === o.fastestId
       };
     });
@@ -117,6 +144,14 @@
     if (o.phase === 0 && isQuali) {
       const left = Math.ceil(3 - o.time);
       if (left > 0) hud.centre = { text: String(left), size: 90 };
+    }
+    // the weather (when it is raining or the track is wet): under the minimap
+    const W = o.weather;
+    if (W && (W.rain > 0.06 || W.wet > 0.04)) {
+      const lw = W.wet * (1 - 0.65 * W.ld);
+      const sky = W.rain > 0.55 ? 'HEAVY RAIN' : W.rain > 0.06 ? 'LIGHT RAIN' : 'DRYING';
+      const trk = lw > 0.6 ? 'VERY WET' : lw > 0.14 ? 'WET' : lw > 0.05 ? 'DAMP' : 'DRY LINE';
+      hud.weather = { rain: W.rain, text: sky + ' · ' + trk, short: (W.rain > 0.06 ? 'RAIN' : 'DRYING') + ' · ' + trk };
     }
     if (limited && o.timeLeft >= 0) {
       const m = Math.floor(o.timeLeft / 60), s = Math.floor(o.timeLeft % 60);
@@ -136,6 +171,11 @@
       const touch = window.Input.touch.active;
       hud.drsHint = touch ? 'DRS — TAP DRS' : 'DRS — PRESS ' + window.KeyBind.label('drs').toUpperCase();
       hud.pit = !!own.inPit;
+      // your tyres: compound, and how worn (when tyre wear is on)
+      if (o.tyresShow && r.ty) hud.tyre = { c: r.ty, w: o.tyres ? r.tw || 0 : null };
+      // slipstream: towed along by the car ahead (held on for a moment, so the sign doesn't flicker)
+      if ((own.tow || 1) < 0.975 && sp > 120 && !own.inPit) towAt = performance.now();
+      hud.tow = performance.now() - towAt < 450;
       hud.posText = 'P' + pos + ' / ' + order.length;
       const has = function (v) { return v !== null && v !== undefined; };
       if (isRace) hud.lapText = r.fin ? 'FINISHED' : 'LAP ' + Math.min(o.laps, (r.laps || 0) + 1) + ' / ' + o.laps;

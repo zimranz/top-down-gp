@@ -238,6 +238,10 @@ table.results .purple { color: #c77dff; }
 
 /* points column (races only) */
 table.results.no-pts .pts-col, table.results.no-pts .race-col { display: none; }
+table.results .ty-col { display: none; white-space: nowrap; }
+table.results.ty:not(.no-pts) .ty-col { display: table-cell; }
+.mini-tyre { display: inline-flex; width: 17px; height: 17px; border-radius: 50%; border: 2.5px solid var(--tc); background: #16161c; color: var(--tc);
+  align-items: center; justify-content: center; font-size: 9px; font-weight: 900; box-sizing: border-box; margin-right: 3px; vertical-align: middle; }
 /* qualifying with a reverse grid: the Grid column shows where everyone starts */
 table.results.no-pts.rev .grid-col { display: table-cell; }
 table.results.rev td.grid-col { font-weight: 800; color: #ffe46b; }
@@ -495,8 +499,10 @@ body.touch #msgpop { bottom: 78px; }
   .form { padding: 12px 16px 16px; gap: 10px; }
   .modal-box { padding: 14px 16px; gap: 9px; max-height: 96vh; }
   .modal-box h2 { font-size: 21px; }
-  #pause .modal-box { display: grid; grid-template-columns: 1fr 1fr; width: min(460px, 94vw); }
-  #pause .modal-box h2, #pause .modal-box p, #pause-resume { grid-column: 1 / -1; }
+  /* two buttons a row; one left on its own (e.g. Quit to menu) sits in the middle */
+  #pause .modal-box { flex-direction: row; flex-wrap: wrap; justify-content: center; column-gap: 10px; width: min(460px, 94vw); }
+  #pause .modal-box > * { flex: 0 0 100%; }
+  #pause .modal-box > .btn:not(#pause-resume):not(#pause-quit) { flex: 0 0 calc(50% - 5px); }
   #pause .modal-box p:empty { display: none; }
   .btn.big { padding: 10px 18px; font-size: 17px; }
   #msgmenu .modal-box { width: min(760px, 96vw); }
@@ -525,3 +531,128 @@ body.touch #msgpop { bottom: 78px; }
   .panel-head { gap: 6px; }
   .career-table th:nth-child(3), .career-table td:nth-child(3) { display: none; }
 }
+
+
+/* ------------------------------------------------------------------ version 10 */
+/* modal title bar with a close (X) button; it stays at the top while the box scrolls */
+.modal-head { display: flex; align-items: center; justify-content: space-between; gap: 10px; position: sticky; top: -22px; z-index: 3;
+  margin: -22px -24px 0; padding: 16px 16px 10px 24px; background: #121217; border-radius: 14px 14px 0 0; }
+.x-btn { flex: none; width: 40px; height: 40px; border-radius: 10px; border: 1px solid rgba(255,255,255,0.18); background: rgba(255,255,255,0.08); color: #fff;
+  display: inline-flex; align-items: center; justify-content: center; cursor: pointer; padding: 0; }
+.x-btn:hover, .x-btn:focus-visible { background: rgba(255,255,255,0.18); border-color: rgba(255,255,255,0.45); outline: none; }
+#settings-close { flex: none; }
+
+/* the home screen fits shorter windows (laptops with large text) and never cuts off the key list */
+#home { max-height: 100%; overflow-y: auto; scrollbar-width: none; }
+#home::-webkit-scrollbar { display: none; }
+@media (max-height: 760px) and (min-height: 521px) {
+  #overlay { padding: 14px 24px; }
+  #home { gap: 18px; }
+  .logo { font-size: min(clamp(44px, 8vw, 92px), 11vh); }
+  .tag { margin-top: 6px; }
+  #home .menu { gap: 10px; padding: 14px 17px; }
+  #home .menu .btn.big { padding: 11px 22px; font-size: 18px; }
+  #home .menu .menu-row .btn { padding: 8px 18px; }
+}
+
+/* phones and tablets, home screen: sound and full screen sit in the top-right corner, clear of the menu */
+body.touch #soundbtn:not(.ingame), body.touch #fsbtn:not(.ingame) { top: 10px; bottom: auto; }
+body.touch #soundbtn:not(.ingame) { right: 10px; }
+body.touch #fsbtn:not(.ingame) { right: 62px; }
+body.touch #soundbtn:not(.ingame) .lbl, body.touch #fsbtn:not(.ingame) .lbl { display: none; }
+body.touch #soundbtn:not(.ingame) button, body.touch #fsbtn:not(.ingame) button { width: 44px; height: 44px; }
+@media (orientation: portrait) { body.touch #home { padding-top: 54px; } }
+
+/* full-screen notice (phones and tablets) */
+.fsn-box { text-align: center; align-items: center; max-width: 420px; }
+.fsn-box p { color: #dfe3e8; font-weight: 600; line-height: 1.45; }
+.fsn-box .btn { width: 100%; }
+#fsn-go.hidden { display: none; }
+.fsn-icon { width: 72px; height: 72px; border-radius: 18px; background: var(--red); display: flex; align-items: center; justify-content: center; }
+.fsn-box .fsn-never { font-size: 14px; color: #cfd3d8; align-self: center; }
+
+/* on-screen arrow buttons (phones and tablets) */
+.t-arrow { border-radius: 18px; border: 2px solid rgba(255,255,255,0.38); background: rgba(10,10,14,0.5); display: flex; align-items: center; justify-content: center; }
+.t-arrow svg { width: 46%; height: 46%; filter: drop-shadow(0 1px 2px rgba(0,0,0,0.7)); }
+.t-arrow.on { background: rgba(255,255,255,0.32); border-color: #fff; }
+#touchui.slide .t-arrow, #touchui:not(.slide) #t-steer { display: none; }
+
+/* dropdowns in the game's style (dropdown.js): the real select stays underneath, invisible, and sets the size */
+.dd { position: relative; display: inline-block; vertical-align: middle; min-width: 0; }
+.dd > select { width: 100%; opacity: 0; pointer-events: none; }
+.dd-btn { position: absolute; inset: 0; display: flex; align-items: center; gap: 8px; padding: 0 30px 0 12px; margin: 0; width: 100%;
+  font-family: var(--font); font-weight: 600; color: #fff; text-align: left; cursor: pointer;
+  background: rgba(255,255,255,0.07); border: 1px solid rgba(255,255,255,0.2); border-radius: 8px; transition: border-color .12s, background .12s; }
+.dd-btn:hover { border-color: rgba(255,255,255,0.45); background: rgba(255,255,255,0.1); }
+.dd-btn:focus-visible { outline: none; border-color: var(--red); box-shadow: 0 0 0 2px rgba(225,6,0,0.35); }
+.dd.open .dd-btn { border-color: var(--red); background: rgba(225,6,0,0.12); }
+.dd-btn:disabled { cursor: default; opacity: 0.6; }
+.dd-btn:disabled:hover { border-color: rgba(255,255,255,0.2); background: rgba(255,255,255,0.07); }
+.dd-text { flex: 1; min-width: 0; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.dd-arrow { position: absolute; right: 12px; top: 50%; width: 8px; height: 8px; margin-top: -6px; border-right: 2.5px solid #cfd3d8; border-bottom: 2.5px solid #cfd3d8;
+  transform: rotate(45deg); transition: transform .15s, margin-top .15s; }
+.dd.open .dd-arrow { transform: rotate(-135deg); margin-top: -2px; border-color: var(--red); }
+.dd-list { position: fixed; z-index: 100; overflow-y: auto; overscroll-behavior: contain; -webkit-overflow-scrolling: touch; padding: 5px;
+  background: #17171d; border: 1px solid rgba(255,255,255,0.16); border-radius: 10px; box-shadow: 0 16px 44px rgba(0,0,0,0.65); font-family: var(--font); }
+.dd-item { padding: 8px 14px 8px 14px; border-radius: 6px; font-size: 15px; font-weight: 600; color: #dfe2e6; cursor: pointer; white-space: nowrap; }
+.dd-item.hi { background: rgba(255,255,255,0.1); color: #fff; }
+.dd-item.sel { background: rgba(225,6,0,0.24); color: #fff; font-weight: 800; box-shadow: inset 3px 0 0 var(--red); }
+.dd-item.sel.hi { background: rgba(225,6,0,0.34); }
+.dd-item.off { color: #646a73; cursor: default; }
+body.touch .dd-item { padding: 11px 16px; font-size: 16px; }
+.settings-grid .dd, .weekend-bar .dd, .engine-row .dd { display: block; }
+
+/* race conditions (setup screens) */
+.cond-box { display: flex; flex-direction: column; gap: 7px; }
+.cond-box .check { font-size: 15px; }
+.cond-box .muted-inline { margin-left: 2px; }
+/* in your garage: what you have done, and the way back out */
+#garage { position: fixed; left: 50%; top: 16%; transform: translateX(-50%); z-index: 6; }
+#garage.hidden { display: none; }
+.gar-box { background: rgba(12,12,16,0.94); border: 1px solid rgba(255,255,255,0.14); border-radius: 14px; padding: 14px 18px; min-width: 280px;
+  display: flex; flex-direction: column; gap: 9px; align-items: stretch; box-shadow: 0 16px 44px rgba(0,0,0,0.55); text-align: center; }
+.gar-head { display: flex; align-items: center; justify-content: center; gap: 8px; font-size: 17px; font-weight: 900; font-style: italic; text-transform: uppercase; letter-spacing: 0.5px; }
+.gar-icon { width: 20px; height: 16px; border: 2.5px solid var(--yellow); border-bottom: 0; border-radius: 3px 3px 0 0; position: relative; }
+.gar-icon::after { content: ''; position: absolute; left: 3px; right: 3px; top: 4px; height: 2px; background: var(--yellow); box-shadow: 0 4px 0 var(--yellow); }
+.gar-stats { color: #dfe3e8; font-weight: 700; font-size: 15px; line-height: 1.5; }
+.gar-stats b { color: #fff; }
+.gar-hint { color: var(--muted); font-size: 12px; font-weight: 700; }
+#gar-go { font-size: 17px; padding: 11px 18px; }
+@media (max-height: 520px) {
+  #garage { top: 8px; }
+  .gar-box { padding: 8px 12px; gap: 5px; min-width: 240px; }
+  .gar-head { font-size: 14px; }
+  .gar-stats { font-size: 12.5px; line-height: 1.35; display: flex; flex-wrap: wrap; justify-content: center; gap: 0 12px; }
+  #gar-go { font-size: 15px; padding: 7px 14px; }
+  .gar-tlabel { font-size: 10.5px; }
+  #garage .tyre-chip { min-width: 46px; padding: 4px 3px 3px; font-size: 10px; }
+  #garage .tyre-ring { width: 20px; height: 20px; border-width: 3px; font-size: 10px; }
+}
+/* tyres: a ring in the compound's colour with its letter (soft red, medium yellow, hard white, inter green, wet blue) */
+.tyre-chips { display: flex; gap: 6px; justify-content: center; flex-wrap: wrap; }
+.tyre-chip { display: flex; flex-direction: column; align-items: center; gap: 3px; min-width: 58px; padding: 7px 6px 6px; border-radius: 10px; cursor: pointer;
+  background: rgba(255,255,255,0.05); border: 2px solid rgba(255,255,255,0.1); color: #cfd3d8; font: inherit; font-size: 11px; font-weight: 800;
+  text-transform: uppercase; letter-spacing: 0.3px; touch-action: manipulation; }
+.tyre-chip:hover { background: rgba(255,255,255,0.1); }
+.tyre-chip.on { border-color: var(--tc); background: rgba(255,255,255,0.12); color: #fff; }
+.tyre-ring { width: 26px; height: 26px; border-radius: 50%; border: 4px solid var(--tc); background: #16161c; color: var(--tc); display: flex;
+  align-items: center; justify-content: center; font-size: 13px; font-weight: 900; box-sizing: border-box; }
+.tyre-chip .tc-key { color: var(--muted); font-size: 10px; font-weight: 700; }
+.gar-tyres { display: flex; flex-direction: column; gap: 6px; }
+.gar-tyres.hidden { display: none; }
+.gar-tlabel { color: var(--muted); font-size: 12px; font-weight: 800; text-transform: uppercase; letter-spacing: 0.5px; }
+#tyrepick { position: fixed; left: 50%; bottom: 154px; transform: translateX(-50%); z-index: 6; background: rgba(12,12,16,0.92);
+  border: 1px solid rgba(255,255,255,0.14); border-radius: 14px; padding: 10px 14px 9px; box-shadow: 0 12px 34px rgba(0,0,0,0.5);
+  display: flex; flex-direction: column; gap: 7px; align-items: center; text-align: center; max-width: calc(100vw - 24px); }
+#tyrepick.hidden { display: none; }
+.tp-title { font-size: 15px; font-weight: 900; font-style: italic; text-transform: uppercase; letter-spacing: 0.5px; color: #fff; }
+.tp-title .tp-time { color: var(--yellow); margin-left: 6px; font-style: normal; text-transform: none; }
+.tp-note { color: #cfd3d8; font-size: 12px; font-weight: 700; }
+.tp-note:empty { display: none; }
+#tyrepick.stop .tyre-chips .tyre-chip { cursor: default; }
+/* phones: between the thumbs, just above the slim dashboard */
+body.touch #tyrepick { bottom: 98px; padding: 7px 10px 6px; gap: 5px; }
+body.touch .tyre-chip { min-width: 50px; padding: 5px 4px 4px; }
+body.touch .tyre-chip .tc-key { display: none; }
+body.touch .tp-title { font-size: 13px; }
+@media (max-height: 430px) { body.touch #tyrepick { bottom: 92px; } body.touch .tyre-ring { width: 22px; height: 22px; border-width: 3.5px; font-size: 11px; } }

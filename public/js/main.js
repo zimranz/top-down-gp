@@ -27,13 +27,22 @@
   let room = null;
   let resultsTimer = null;
   let lastResults = null;
-  const practiceOpts = Object.assign({ track: 'monza', driverId: 'NOR', aiCount: 10, aiLevel: 'medium', collisions: true }, Settings.data.practice || {});
-  const gpOpts = Object.assign({ track: 'monza', driverId: 'NOR', aiCount: 15, aiLevel: 'medium', p1: 0, p2: 0, p3: 0, qualiLaps: 2, raceLaps: 5 }, Settings.data.gp || {});
+  const COND = { drafting: true, tyres: true, weather: true };     // race conditions: drafting, tyre wear, weather
+  const practiceOpts = Object.assign({ track: 'monza', driverId: 'NOR', aiCount: 10, aiLevel: 'medium', collisions: true }, COND, Settings.data.practice || {});
+  const gpOpts = Object.assign({ track: 'monza', driverId: 'NOR', aiCount: 15, aiLevel: 'medium', p1: 0, p2: 0, p3: 0, qualiLaps: 2, raceLaps: 5 }, COND, Settings.data.gp || {});
   if (!F1.TRACK_DEFS[practiceOpts.track]) practiceOpts.track = 'monza';
   if (!F1.TRACK_DEFS[gpOpts.track]) gpOpts.track = 'monza';
   let gp = null;               // current Grand Prix weekend { opts, aiDrivers, grid, stages, idx, champ }
   const champOpts = Object.assign({ driverId: 'NOR', aiCount: 15, aiLevel: 'medium', p1: 0, p2: 0, p3: 0, qualiLaps: 2, raceLaps: 5,
-    calendar: ['silverstone', 'spa', 'monza', 'interlagos', 'abudhabi'] }, Settings.data.champ || {});
+    calendar: ['silverstone', 'spa', 'monza', 'interlagos', 'abudhabi'] }, COND, Settings.data.champ || {});
+  /* The three condition switches on a setup screen (prefix-draft / -tyres / -weather) for an options object. */
+  function condInit(prefix, o) {
+    [['draft', 'drafting'], ['tyres', 'tyres'], ['weather', 'weather']].forEach(function (k) {
+      const box = document.getElementById(prefix + '-' + k[0]);
+      box.checked = o[k[1]] !== false;
+      box.onchange = function () { o[k[1]] = this.checked; };
+    });
+  }
   champOpts.calendar = (champOpts.calendar || []).filter(function (id) { return F1.TRACK_DEFS[id]; });
   const STAGE_NAME = { p1: 'Practice 1', p2: 'Practice 2', p3: 'Practice 3', quali: 'Qualifying', race: 'Race' };
   let resultsCtx = 'online';   // which buttons the results screen shows
@@ -78,6 +87,18 @@
   };
 
   // ------------------------------------------------------------- helpers
+  /* Clicking (or tapping) the dark area around a box closes it, as its back / close button would. Only a click that
+     both starts and ends outside the box counts (dragging a slider and letting go outside it does not close it). */
+  function closeDropdowns() { if (window.Dropdown) window.Dropdown.closeAll(); }
+  function clickOutside(backdrop, isOutside, fn) {
+    let downOut = false;
+    backdrop.addEventListener('pointerdown', function (e) { downOut = isOutside(e.target); });
+    backdrop.addEventListener('click', function (e) {
+      const ok = downOut && isOutside(e.target);
+      downOut = false;
+      if (ok) fn(e);
+    });
+  }
   function show(id) {
     document.querySelectorAll('.screen').forEach(function (s) { s.classList.toggle('active', s.id === id); });
     $('overlay').classList.toggle('hidden', !id);
@@ -113,6 +134,39 @@
       }
     } catch (e) { fail(); }
   }
+  /* Phones and tablets: before a session, ask to play in full screen (the browser's bars squash the game).
+     iPhones cannot go full screen in the browser: there the notice explains Add to Home Screen instead. */
+  let fsNext = null, lobbyNoticeShown = false;
+  function standalone() {
+    return window.navigator.standalone === true || !!(window.matchMedia && window.matchMedia('(display-mode: standalone), (display-mode: fullscreen)').matches);
+  }
+  function fsGate(next) {
+    if (!Input.touch.active || fsElement() || standalone() || Settings.data.fsNotice === false) { next(); return; }
+    fsNext = next;
+    const ios = !fsSupported && /iPhone|iPod|iPad|Macintosh/.test(navigator.userAgent) && navigator.maxTouchPoints > 1;
+    $('fsn-title').textContent = fsSupported ? 'Play in full screen' : ios ? 'Add the game to your Home Screen' : 'Use the whole screen';
+    $('fsn-text').textContent = fsSupported
+      ? 'For the best experience, play in full screen. Without it, the browser\'s bars squash the game and some of the screen may be hidden.'
+      : ios ? 'iPhones don\'t allow full screen in the browser. For the best experience, tap Share, then Add to Home Screen, and open Top-Down GP from there. Without it, the browser\'s bars squash the game and some of the screen may be hidden.'
+        : 'This browser can\'t go full screen. For the best experience, hide the browser\'s bars or add the game to your home screen: without that, some of the screen may be hidden.';
+    $('fsn-go').classList.toggle('hidden', !fsSupported);
+    $('fsn-skip').textContent = fsSupported ? 'Continue anyway' : 'Continue';
+    $('fsn-never').checked = false;
+    $('fsnotice').classList.remove('hidden');
+  }
+  /* go = true: full screen first, then on. null (a click outside the box): back to where you were, nothing starts. */
+  function fsNoticeClose(go) {
+    $('fsnotice').classList.add('hidden');
+    if ($('fsn-never').checked) { Settings.data.fsNotice = false; Settings.save(); }
+    const next = fsNext;
+    fsNext = null;
+    if (go === null) return;
+    if (go && fsSupported && !fsElement()) toggleFullscreen();
+    if (next) next();
+  }
+  $('fsn-go').addEventListener('click', function () { fsNoticeClose(true); });
+  $('fsn-skip').addEventListener('click', function () { fsNoticeClose(false); });
+  clickOutside($('fsnotice'), function (t) { return t === $('fsnotice'); }, function () { fsNoticeClose(null); });
   function syncFsUI() {
     const on = !!fsElement();
     $('fsbtn').classList.toggle('on', on);
@@ -178,6 +232,8 @@
     }
   }
   function goHome() {
+    lobbyNoticeShown = false;
+    $('fsnotice').classList.add('hidden');
     $('busy').classList.add('hidden');
     $('confirm').classList.add('hidden');
     $('hostaway').classList.add('hidden');
@@ -263,6 +319,7 @@
     segInit($('practice-level'), practiceOpts.aiLevel, function (v) { practiceOpts.aiLevel = v; });
     $('practice-coll').checked = practiceOpts.collisions;
     $('practice-coll').onchange = function () { practiceOpts.collisions = this.checked; };
+    condInit('practice', practiceOpts);
     show('practice');
   }
   function startPractice() {
@@ -274,7 +331,7 @@
     GameAudio.newSession();
     show(null);
   }
-  $('practice-start').addEventListener('click', startPractice);
+  $('practice-start').addEventListener('click', function () { fsGate(startPractice); });
 
   // ------------------------------------------------------------- time trial
   const ttOpts = Object.assign({ track: 'monza', driverId: 'NOR' }, Settings.data.tt || {});
@@ -323,7 +380,7 @@
     GameAudio.newSession();
     show(null);
   }
-  $('tt-start').addEventListener('click', startTT);
+  $('tt-start').addEventListener('click', function () { fsGate(startTT); });
 
   // ------------------------------------------------------------- grand prix
   const MAX_RACE_LAPS = 20;
@@ -358,6 +415,7 @@
     lapOptions($('gp-quali'), 1, 5, gpOpts.qualiLaps, 'None (random grid)');
     lapOptions($('gp-race'), 1, MAX_RACE_LAPS, gpOpts.raceLaps);
     reverseInit('gp', gpOpts);
+    condInit('gp', gpOpts);
     $('gp-race').onchange = function () { gpOpts.raceLaps = Number(this.value); };
     show('gp');
   }
@@ -393,6 +451,9 @@
     game = new window.LocalGame({
       type: type, track: o.track, driverId: o.driverId, aiDrivers: gp.aiDrivers,
       grid: type === 'race' ? gp.grid : null, aiLevel: o.aiLevel, collisions: true,
+      // race conditions (a championship started before version 10 has none: it carries on as it was)
+      drafting: gp.champ ? o.drafting === true : o.drafting !== false, tyres: gp.champ ? o.tyres === true : o.tyres !== false,
+      weather: gp.champ ? o.weather === true : o.weather !== false,
       laps: type === 'race' ? o.raceLaps : type === 'quali' ? o.qualiLaps : o[stage],
       title: round ? 'R' + round + ' ' + STAGE_NAME[stage].toUpperCase() : type === 'practice' ? STAGE_NAME[stage].toUpperCase() : null,
       onEnd: function (results, g) {
@@ -411,7 +472,7 @@
     GameAudio.newSession();
     show(null);
   }
-  $('gp-start').addEventListener('click', startGp);
+  $('gp-start').addEventListener('click', function () { fsGate(startGp); });
   $('results-next').addEventListener('click', function () { if (gp && gp.idx + 1 < gp.stages.length) startGpStage(gp.idx + 1); });
   $('results-again').addEventListener('click', function () { if (gp) startGpStage(gp.stages.length - 1); });   // same grid
   $('results-restart').addEventListener('click', function () {
@@ -480,6 +541,7 @@
     lapOptions($('champ-quali'), 1, 5, champOpts.qualiLaps, 'None (random grid)');
     lapOptions($('champ-race'), 1, MAX_RACE_LAPS, champOpts.raceLaps);
     reverseInit('champ', champOpts);
+    condInit('champ', champOpts);
     $('champ-race').onchange = function () { champOpts.raceLaps = Number(this.value); };
     // a season already under way?
     const c = Champ.load();
@@ -507,7 +569,7 @@
     const pool = F1.DRIVERS.map(function (d) { return d.id; }).filter(function (id) { return id !== champOpts.driverId; });
     const o = champOpts;
     const c = { v: 1, opts: { driverId: o.driverId, aiCount: o.aiCount, aiLevel: o.aiLevel, p1: o.p1, p2: o.p2, p3: o.p3, qualiLaps: o.qualiLaps, raceLaps: o.raceLaps,
-      reverseGrid: !!o.reverseGrid && o.qualiLaps > 0 },
+      reverseGrid: !!o.reverseGrid && o.qualiLaps > 0, drafting: o.drafting !== false, tyres: o.tyres !== false, weather: o.weather !== false },
       calendar: o.calendar.slice(), aiDrivers: shuffled(pool).slice(0, o.aiCount), rounds: [], done: false };
     Champ.save(c);
     startRound(c);
@@ -718,8 +780,8 @@
       menu: 'Leave room', car: car, code: room.code
     });
   }
-  $('champ-start').addEventListener('click', startSeason);
-  $('cc-go').addEventListener('click', function () { const c = Champ.load(); if (c && !c.done) startRound(c); });
+  $('champ-start').addEventListener('click', function () { if (champOpts.calendar.length < 2) startSeason(); else fsGate(startSeason); });
+  $('cc-go').addEventListener('click', function () { const c = Champ.load(); if (c && !c.done) fsGate(function () { startRound(c); }); });
   $('cc-standings').addEventListener('click', function () { const c = Champ.load(); if (c) showStandings(c); });
   $('results-standings').addEventListener('click', function () {
     if (resultsCtx === 'online') { showOnlineStandings(); return; }
@@ -750,6 +812,11 @@
     });
   });
   document.querySelectorAll('[data-act="settings"]').forEach(function (b) { b.addEventListener('click', openSettings); });
+  const BACK_HOME = ['practice', 'tt', 'gp', 'champ', 'career', 'online'];
+  clickOutside($('overlay'), function (t) {
+    const a = document.querySelector('.screen.active');
+    return t === $('overlay') && !!a && BACK_HOME.indexOf(a.id) >= 0;
+  }, function () { show('home'); });
 
   // ------------------------------------------------------------- career
   /* Your records across every mode: totals, and for each track your best lap, races, wins and best finish. */
@@ -807,7 +874,17 @@
     segInit($('set-units'), d.units === 'mph' ? 'mph' : 'kmh', function (v) { d.units = v; Settings.save(); });
     $('set-touch').value = d.touchSteer;
     $('set-touch-val').textContent = d.touchSteer;
-    $('set-touch').oninput = function () { d.touchSteer = Number(this.value); $('set-touch-val').textContent = this.value; Settings.save(); };
+    $('set-touch').oninput = function () { d.touchSteer = Number(this.value); $('set-touch-val').textContent = this.value; Settings.save(); window.TouchUI.refresh(); };
+    const touchWords = function () {
+      const arrows = d.touchMode !== 'slide';
+      $('set-touch-lo').textContent = arrows ? 'Gentle' : 'Long slide';
+      $('set-touch-hi').textContent = arrows ? 'Quick' : 'Short slide';
+      $('set-touch-note').textContent = arrows
+        ? 'Left thumb: hold ← or → to steer (the longer you hold, the more the car turns). Right thumb: GO and BRAKE. Slide up from GO onto DRS when it lights up.'
+        : 'Left thumb: slide left and right to steer. Right thumb: GO and BRAKE. Slide up from GO onto DRS when it lights up.';
+    };
+    segInit($('set-touchmode'), d.touchMode === 'slide' ? 'slide' : 'arrows', function (v) { d.touchMode = v; Settings.save(); touchWords(); window.TouchUI.refresh(); });
+    touchWords();
     renderKeys();
     $('set-labels').checked = !!d.labels;
     $('set-labels').onchange = function () { d.labels = this.checked; Settings.save(); };
@@ -887,11 +964,19 @@
     keyNote(null);
     renderKeys();
   }, true);
-  $('settings-close').addEventListener('click', function () {
+  /* Settings are kept the moment you change them: Save, the X and a click outside the box all close it. */
+  function closeSettings(saved) {
     keyListen = null;
+    if ($('settings').classList.contains('hidden')) return;
+    Settings.save();
+    closeDropdowns();
     $('settings').classList.add('hidden');
     Input.active = mode !== 'menu' && $('overlay').classList.contains('hidden') && $('pause').classList.contains('hidden');
-  });
+    if (saved) toast('Settings saved');
+  }
+  $('settings-close').addEventListener('click', function () { closeSettings(true); });
+  $('settings-x').addEventListener('click', function () { closeSettings(false); });
+  clickOutside($('settings'), function (t) { return t === $('settings'); }, function () { closeSettings(false); });
 
   // ------------------------------------------------------------- pause
   function pauseOpen() { return !$('pause').classList.contains('hidden'); }
@@ -989,6 +1074,8 @@
     if (backToPause) $('pause').classList.remove('hidden'); else resume(now);
   }
   $('confirm-no').addEventListener('click', function () { closeConfirm(false); });
+  clickOutside($('confirm'), function (t) { return t === $('confirm'); }, function () { closeConfirm(true); });
+  clickOutside($('pause'), function (t) { return t === $('pause'); }, function () { resume(); });
   $('confirm-yes').addEventListener('click', function () {
     if (confirmAction) { const a = confirmAction; confirmAction = null; $('confirm').classList.add('hidden'); a.onYes(); return; }
     closeConfirm(false, true); endSessionNow();
@@ -1035,7 +1122,8 @@
     const tag = e.target && e.target.tagName;
     if (e.code === 'KeyP' && (tag === 'INPUT' || tag === 'SELECT')) return;
     if (!$('msgmenu').classList.contains('hidden')) { $('msgmenu').classList.add('hidden'); return; }
-    if (!$('settings').classList.contains('hidden')) { $('settings-close').click(); return; }
+    if (!$('fsnotice').classList.contains('hidden')) { fsNoticeClose(null); return; }
+    if (!$('settings').classList.contains('hidden')) { closeSettings(false); return; }
     if (!$('confirm').classList.contains('hidden')) { closeConfirm(true); return; }
     if (pauseOpen()) resume(); else openPause();
   });
@@ -1244,7 +1332,7 @@
     b.addEventListener('click', function () { if (room && net) $('msgmenu').classList.remove('hidden'); });
   });
   $('msg-close').addEventListener('click', function () { $('msgmenu').classList.add('hidden'); });
-  $('msgmenu').addEventListener('click', function (e) { if (e.target === this) this.classList.add('hidden'); });
+  clickOutside($('msgmenu'), function (t) { return t === $('msgmenu'); }, function () { $('msgmenu').classList.add('hidden'); });
   /* A message from someone in the room: a bubble by their name in the lobby, a pop-up on the other screens. */
   function onQuickMsg(m) {
     if (!room || !m) return;
@@ -1335,7 +1423,10 @@
     for (let i = 0; i <= 21; i++) aiOpts.push([i, i > aiMax ? i + ' (max ' + aiMax + ')' : (i === aiMax ? i + ' (full grid)' : String(i))]);
     fillSelect($('set-ai'), aiOpts, s.aiCount);
     $('set-level').value = s.aiLevel;
-    ['set-mode', 'set-track', 'set-p1', 'set-p2', 'set-p3', 'set-quali', 'set-race', 'set-ai', 'set-level'].forEach(function (id) { $(id).disabled = !isHost; });
+    $('set-draft').value = s.drafting === false ? '0' : '1';
+    $('set-tyres').value = s.tyreWear === false ? '0' : '1';
+    $('set-weather').value = s.weather === false ? '0' : '1';
+    ['set-mode', 'set-track', 'set-p1', 'set-p2', 'set-p3', 'set-quali', 'set-race', 'set-ai', 'set-level', 'set-draft', 'set-tyres', 'set-weather'].forEach(function (id) { $(id).disabled = !isHost; });
     $('set-reverse').disabled = !isHost || !(s.qualiLaps > 0);       // a reverse grid needs qualifying
     $('lobby-hostnote').textContent = isHost ? '' : '(host decides)';
     $('lobby-start').style.display = isHost ? '' : 'none';
@@ -1357,12 +1448,12 @@
       });
     }
   }
-  ['set-mode', 'set-track', 'set-p1', 'set-p2', 'set-p3', 'set-quali', 'set-reverse', 'set-race', 'set-ai', 'set-level'].forEach(function (id) {
+  ['set-mode', 'set-track', 'set-p1', 'set-p2', 'set-p3', 'set-quali', 'set-reverse', 'set-race', 'set-ai', 'set-level', 'set-draft', 'set-tyres', 'set-weather'].forEach(function (id) {
     $(id).addEventListener('change', function () {
       const map = { 'set-mode': 'mode', 'set-track': 'track', 'set-p1': 'p1', 'set-p2': 'p2', 'set-p3': 'p3', 'set-quali': 'qualiLaps', 'set-reverse': 'reverseGrid',
-        'set-race': 'raceLaps', 'set-ai': 'aiCount', 'set-level': 'aiLevel' };
-      const v = this.value, msg = {};
-      msg[map[id]] = id === 'set-reverse' ? v === '1' : (id === 'set-mode' || id === 'set-track' || id === 'set-level') ? v : Number(v);
+        'set-race': 'raceLaps', 'set-ai': 'aiCount', 'set-level': 'aiLevel', 'set-draft': 'drafting', 'set-tyres': 'tyreWear', 'set-weather': 'weather' };
+      const v = this.value, msg = {}, onOff = id === 'set-reverse' || id === 'set-draft' || id === 'set-tyres' || id === 'set-weather';
+      msg[map[id]] = onOff ? v === '1' : (id === 'set-mode' || id === 'set-track' || id === 'set-level') ? v : Number(v);
       if (net) net.socket.emit('settings', msg);
     });
   });
@@ -1387,6 +1478,7 @@
         lastResults = null;
         $('pause').classList.add('hidden');
         show('lobby');
+        if (!lobbyNoticeShown) { lobbyNoticeShown = true; fsGate(function () { /* stay in the lobby */ }); }
       }
       renderLobby(r);
     } else if ($('lobby').classList.contains('active')) {
@@ -1470,6 +1562,7 @@
     const body = $('results-body');
     body.innerHTML = '';
     $('results-table').classList.toggle('no-pts', m.type !== 'race');
+    $('results-table').classList.toggle('ty', m.type === 'race' && m.results.some(function (r) { return !!r.tyres; }));
     // qualifying with a reverse grid: m.grid = driver ids in the order they start the race
     const revGrid = m.type === 'quali' && m.grid && m.grid.length ? m.grid : null;
     $('results-table').classList.toggle('rev', !!revGrid);
@@ -1493,6 +1586,15 @@
       tr.appendChild(gapTd);
       tr.appendChild(el('td', 'r' + (r.best !== null && r.best === fastest && m.type === 'race' ? ' purple' : ''), r.best !== null ? F1.fmtLap(r.best) : '—'));
       tr.appendChild(el('td', 'r', String(r.laps)));
+      // the tyres used, in order (a ring for each set)
+      const tyTd = el('td', 'race-col ty-col');
+      (r.tyres || '').split('').forEach(function (k) {
+        const ty = F1.TYRES[k];
+        if (!ty) return;
+        const ring = el('span', 'mini-tyre', k); ring.style.setProperty('--tc', ty.col); ring.title = ty.name;
+        tyTd.appendChild(ring);
+      });
+      tr.appendChild(tyTd);
       // grid slot and places gained / lost
       const gridTd = el('td', 'r race-col grid-col', revGrid ? 'P' + (revGrid.indexOf(r.driverId) + 1) : r.grid ? 'P' + r.grid : '');
       if (r.grid && !r.out && r.gained) gridTd.appendChild(el('span', r.gained > 0 ? 'up' : 'down', (r.gained > 0 ? '▲' : '▼') + Math.abs(r.gained)));
@@ -1590,6 +1692,95 @@
   if (params.get('debug') === '1') window.__tdgp = { onSessionEnd: onSessionEnd, net: function () { return net; }, game: function () { return game; }, R: R };
 
   let last = performance.now(), acc = 0;
+  /* Smoothness watch: while you drive, if many frames take too long (under about 45 frames a second), the game
+     switches to lighter graphics by itself for the rest of the visit. */
+  const perf = { t: 0, slow: 0, since: 0 };
+  function watchFrames(dt, driving) {
+    if (R.lite || !driving || document.hidden) { perf.t = 0; perf.slow = 0; perf.since = 0; return; }
+    perf.since += dt;
+    if (perf.since < 3) return;                      // the first moments of a session (loading) do not count
+    perf.t += dt;
+    if (dt > 0.022) perf.slow += dt;
+    if (perf.t < 4) return;
+    if (perf.slow / perf.t > 0.45) {
+      R.setLite(true);
+      toast('Lighter graphics turned on to keep the game smooth');
+    }
+    perf.t = 0; perf.slow = 0;
+  }
+  /* Parked in your garage: a panel with your session so far and the way back out. */
+  let garShown = null;
+  function updateGarageUI() {
+    const st = game && game.garageState ? game.garageState() : null;
+    const show = !!st && mode !== 'menu' && $('overlay').classList.contains('hidden') && $('pause').classList.contains('hidden');
+    if (!show) { if (garShown !== null) { $('garage').classList.add('hidden'); garShown = null; } return; }
+    const key = [st.best, st.pos, st.laps, Input.touch.active, st.first, st.tyres ? st.tyres.cur : ''].join('|');
+    if (key === garShown) return;
+    garShown = key;
+    $('gar-stats').innerHTML = '';
+    const line = function (label, value) { const d = el('div'); d.append(document.createTextNode(label + ' '), el('b', null, value)); $('gar-stats').appendChild(d); };
+    line('Your best lap', st.best !== null && st.best !== undefined ? F1.fmtLap(st.best) + '  ·  P' + st.pos + ' of ' + st.n : 'no time yet');
+    line('Timed laps', String(st.laps));
+    $('gar-go').textContent = st.first ? 'Go out' : 'Go back out';
+    $('gar-tyres').classList.toggle('hidden', !st.tyres);
+    if (st.tyres) tyreChips($('gar-chips'), st.tyres.opts, st.tyres.cur, !Input.touch.active, function (k) { if (game && game.pickTyre) game.pickTyre(k); });
+    $('gar-hint').textContent = Input.touch.active ? 'or hold GO' : 'or hold ' + KeyBind.label('accel') + '  ·  Enter';
+    $('garage').classList.remove('hidden');
+  }
+  $('gar-go').addEventListener('click', function (e) { e.currentTarget.blur(); if (game) game.goOut = true; });
+
+  // ---- tyres: the choice in the garage (practice), and the picker in a race (on the grid, and for a pit stop)
+  function tyreChips(box, opts, cur, keys, onPick) {
+    const sig = opts.join('') + '|' + cur + '|' + keys;
+    if (box._sig === sig) return;
+    box._sig = sig;
+    box.innerHTML = '';
+    opts.forEach(function (k, i) {
+      const ty = F1.TYRES[k], b = el('button', 'tyre-chip' + (k === cur ? ' on' : ''));
+      b.type = 'button';
+      b.style.setProperty('--tc', ty.col);
+      b.append(el('span', 'tyre-ring', k), el('span', 'tc-name', k === 'I' ? 'Inter' : ty.name));
+      if (keys) b.append(el('span', 'tc-key', String(i + 1)));
+      if (onPick) b.addEventListener('click', function (e) { e.currentTarget.blur(); onPick(k); });
+      box.appendChild(b);
+    });
+  }
+  let tpShown = null;
+  function updateTyreUI() {
+    const st = game && game.tyreState ? game.tyreState() : null;
+    const show = !!st && mode !== 'menu' && $('overlay').classList.contains('hidden') && $('pause').classList.contains('hidden');
+    if (!show) { if (tpShown !== null) { $('tyrepick').classList.add('hidden'); tpShown = null; } return; }
+    const touch = Input.touch.active;
+    const key = [st.mode, st.cur, st.left !== undefined ? Math.ceil(st.left * 10) : '', touch].join('|');
+    if (key === tpShown) return;
+    tpShown = key;
+    const title = $('tp-title');
+    title.textContent = st.mode === 'grid' ? 'Starting tyres' : st.mode === 'pit' ? 'Pit stop — new tyres' : 'Changing tyres';
+    if (st.mode === 'stop') title.appendChild(el('span', 'tp-time', Math.max(0, st.left).toFixed(1) + ' s'));
+    tyreChips($('tp-chips'), st.mode === 'stop' ? [st.cur] : st.opts, st.cur, !touch && st.mode !== 'stop', st.mode === 'stop' ? null : function (k) { if (game && game.pickTyre) game.pickTyre(k); });
+    let note = '';
+    if (st.mode === 'grid' && st.wet > 0.1) note = st.wet > 0.55 ? 'Very wet track: full wets (blue)' : 'Wet track: intermediates (green)';
+    else if (st.mode === 'grid') note = touch ? (st.must ? 'At least one pit stop this race' : '') : (st.must ? 'At least one pit stop this race · ' : '') + (st.wear ? 'Soft lasts about 6 laps, medium 10, hard 14' : '');
+    else if (st.mode === 'pit') note = st.left > 0 ? (st.left === 1 ? 'Last lap' : st.left + ' laps to go') : '';
+    $('tp-note').textContent = note;
+    $('tyrepick').classList.toggle('stop', st.mode === 'stop');
+    $('tyrepick').classList.remove('hidden');
+  }
+  // keys 1-5 pick a tyre while a choice is on screen (unless that key is one of your driving keys)
+  window.addEventListener('keydown', function (e) {
+    const m = /^(?:Digit|Numpad)([1-5])$/.exec(e.code);
+    if (!m || !game || !game.pickTyre || e.repeat) return;
+    const K = Settings.data.keys;
+    if (Object.keys(K).some(function (a) { return K[a].indexOf(e.code) >= 0; })) return;
+    let opts = null;
+    if (tpShown !== null) { const st = game.tyreState(); if (st && st.opts) opts = st.opts; }
+    else if (garShown !== null) { const g = game.garageState(); if (g && g.tyres) opts = g.tyres.opts; }
+    const k = opts && opts[Number(m[1]) - 1];
+    if (k) { game.pickTyre(k); e.preventDefault(); }
+  });
+  window.addEventListener('keydown', function (e) {
+    if (e.code === 'Enter' && garShown !== null && !e.repeat && game) { game.goOut = true; e.preventDefault(); }
+  });
   function frame(now) {
     let dt = (now - last) / 1000;
     last = now;
@@ -1602,6 +1793,9 @@
     // sound: only while a session is on screen (not in menus, pause or results)
     const audioOn = mode !== 'menu' && game.kind !== 'attract' && $('overlay').classList.contains('hidden') && $('pause').classList.contains('hidden') && !(game.resumeT > 0) && !game.frozen;
     GameAudio.setActive(audioOn);
+    watchFrames(dt, audioOn && game.kind !== 'attract');
+    updateGarageUI();
+    updateTyreUI();
     if (audioOn && game.audioState) { try { const st = game.audioState(); if (st) GameAudio.update(st, dt); } catch (err) { console.error(err); } }
     requestAnimationFrame(frame);
   }

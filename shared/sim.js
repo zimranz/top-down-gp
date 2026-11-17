@@ -182,8 +182,9 @@
     const lat = 0.8 * Math.cos(phi);
     const sL = F1.surfaceAt(T, Q.idx, Q.d - lat), sR = F1.surfaceAt(T, Q.idx, Q.d + lat);
     const A = SURFS[sL], B = SURFS[sR];
-    const grip = (A.grip + B.grip) * 0.5;
-    const traction = (A.traction + B.traction) * 0.5;
+    const tg = c.tg || 1;                     // the tyres: compound, wear (and a wet track)
+    const grip = (A.grip + B.grip) * 0.5 * tg;
+    const traction = (A.traction + B.traction) * 0.5 * tg;
     const roll = (A.roll + B.roll) * 0.5, drag2 = (A.drag2 + B.drag2) * 0.5;
     const sl2 = sL === 4 ? 0 : sL, sr2 = sR === 4 ? 0 : sR;
     c.surf = sl2 > sr2 ? sl2 : sr2;       // pit lane counts as asphalt for effects
@@ -229,7 +230,7 @@
     vl = -c.vx * sa2 + c.vy * ca2;
 
     // longitudinal
-    const drag = P.DRAG * (c.drsOpen ? P.DRS_DRAG : 1);
+    const drag = P.DRAG * (c.drsOpen ? P.DRS_DRAG : 1) * (c.tow || 1);     // slipstream: less air to push through
     const aero = (drag * vf * Math.abs(vf)) / CAR.MASS;
     if (c.inPit && vf > PIT_LIMIT - 0.4) thr = 0;   // pit limiter
     if (vf > 0.4) {
@@ -257,6 +258,8 @@
       else vf *= 0.9;
     }
 
+    // how hard the tyres are working (cornering and braking against what they can do): for tyre wear
+    c.load = Math.min(1, Math.abs(vf * c.w) / Math.max(4, latAvail) + 0.35 * brk);
     // lateral tyre grip
     const latCap = latAvail * (c.slide ? 0.8 : 1) * dt;
     if (vl > latCap) vl -= latCap; else if (vl < -latCap) vl += latCap; else vl = 0;
@@ -367,10 +370,15 @@
   const LIMIT = { lat: 1, brake: 1 };   // what the car can really do (used when an AI overdoes it)
   const MK_MIX = [0.3, 0.55, 0.78];     // share of lock-ups / running wide / snaps (the rest: kerb strikes)
 
-  F1.speedProfile = function (T, level) {
+  /* The AI's target speed all round the lap (the racing line). g: grip from the tyres (1 = new softs, dry), rounded
+     to 1% steps (a profile is kept for each). */
+  F1.speedProfile = function (T, level, g) {
     T._prof = T._prof || {};
-    if (T._prof[level]) return T._prof[level];
-    const Lv = level === 'limit' ? LIMIT : AI_LEVELS[level] || AI_LEVELS.medium;
+    const gq = g === undefined || g >= 0.995 ? 1 : Math.max(0.5, Math.round(g * 100) / 100);
+    const key = gq === 1 ? level : level + '@' + gq;
+    if (T._prof[key]) return T._prof[key];
+    const L0 = level === 'limit' ? LIMIT : AI_LEVELS[level] || AI_LEVELS.medium;
+    const Lv = gq === 1 ? L0 : { lat: L0.lat * gq, brake: L0.brake * (0.35 + 0.65 * gq) };
     const N = T.n, K = T.rlK, ds = T.ds, BK = T.bank;
     const v = new Float64Array(N);
     for (let i = 0; i < N; i++) {
@@ -389,7 +397,7 @@
         if (limv < v[i]) v[i] = limv;
       }
     }
-    T._prof[level] = v;
+    T._prof[key] = v;
     return v;
   };
 
@@ -442,7 +450,7 @@
     let f = 1;
     for (let q = 0; q < cars.length; q++) {
       const o = cars[q];
-      if (o === c || o.out) continue;
+      if (o === c || o.out || o.gar) continue;
       const dS = wrapD(o.s - c.s, L);
       if (dS < 4 || dS > 30.4) continue;
       if (o.vx * o.vx + o.vy * o.vy < 9) continue;       // a stopped car leaves no wake
@@ -453,6 +461,183 @@
     }
     return f;
   };
+
+  /* Slipstream (drafting): right behind another car there is less air to push through, so up to 10% less drag:
+     a few km/h more by the end of a straight. Full within 15 m, gone at 50 m; you have to be in line with the car
+     ahead. Only matters at speed (in corners grip decides the speed, not drag). Same for players and AI.
+     Returns the drag factor (1 = no slipstream). */
+  const TOW = 0.10;
+  F1.slipstream = function (c, cars, L) {
+    if (c.vx * c.vx + c.vy * c.vy < 900) return 1;    // only matters above ~110 km/h
+    let f = 1;
+    for (let q = 0; q < cars.length; q++) {
+      const o = cars[q];
+      if (o === c || o.out || o.gar || o.inPit) continue;
+      const dS = wrapD(o.s - c.s, L);
+      if (dS < 5 || dS > 50) continue;
+      if (o.vx * o.vx + o.vy * o.vy < 900) continue;     // a slow car punches no useful hole in the air
+      const dD = Math.abs(o.d - c.d);
+      if (dD > 2.6) continue;
+      const g = 1 - TOW * Math.min(1, (50 - dS) / 35) * (dD < 1 ? 1 : (2.6 - dD) / 1.6);
+      if (g < f) f = g;
+    }
+    return f;
+  };
+
+  // ---------------------------------------------------------------- tyres
+  /* Soft, medium and hard for the dry; intermediate (green) and full wet (blue) for the rain.
+     grip: a new tyre on a dry track (the soft is the car as it always was; 1% of grip is about 0.4 s a lap, so the
+     medium is about 0.4 s a lap slower and the hard about 0.8 s). life: laps on a normal racing lap until the tyre is
+     worn out (wear 1.0), after which it falls off a cliff. */
+  const TYRES = (F1.TYRES = {
+    S: { name: 'Soft', col: '#ff3b30', grip: 1.0, life: 6 },
+    M: { name: 'Medium', col: '#ffd60a', grip: 0.99, life: 10 },
+    H: { name: 'Hard', col: '#f4f4f4', grip: 0.98, life: 14 },
+    I: { name: 'Intermediate', col: '#19c94a', grip: 0.93, life: 9 },
+    W: { name: 'Wet', col: '#2f8bff', grip: 0.9, life: 12 }
+  });
+  const TYRE_KEYS = (F1.TYRE_KEYS = ['S', 'M', 'H', 'I', 'W']);
+  const SLICK = { S: true, M: true, H: true };
+  F1.isSlick = function (k) { return !!SLICK[k]; };
+  /* Grip left as a tyre wears: a slow fade to 75% worn (-2.5%), then the cliff (-7% when worn out, much worse after). */
+  function wearGrip(w) {
+    if (w <= 0.75) return 1 - 0.025 * (w / 0.75);
+    if (w <= 1) { const x = (w - 0.75) / 0.25; return 0.975 - 0.045 * x * x; }
+    return 0.93 - 0.17 * Math.min(1, (w - 1) / 0.35);
+  }
+  /* A wet track (0 dry .. 1 pouring): slicks lose grip fast; intermediates are best when it is damp, full wets when it
+     pours; on a dry track the rain tyres are slow. */
+  function wetGrip(k, wet) {
+    if (SLICK[k]) return wet <= 0 ? 1 : 1 - 0.5 * Math.pow(wet, 0.8);
+    if (k === 'I') return wet < 0.5 ? 1 - 0.06 * wet : 0.97 - 0.24 * (wet - 0.5);
+    return 0.97 + 0.03 * Math.min(1, wet / 0.6) - (wet > 0.6 ? 0.05 * (wet - 0.6) : 0);
+  }
+  /* How fast a tyre wears in these conditions (x normal): rain tyres on a drying track overheat and wear out fast. */
+  function wetWear(k, wet) {
+    if (SLICK[k]) return 1 - 0.5 * Math.min(1, wet);
+    if (k === 'I') return wet < 0.15 ? 1 + 2 * (0.15 - wet) / 0.15 : 1;
+    return wet < 0.4 ? 1 + 3 * (0.4 - wet) / 0.4 : 1;
+  }
+  /* Grip from the tyres (1 = a new soft on a dry track). wear 0 (new) .. 1 (worn out); wet 0 .. 1. */
+  F1.tyreGrip = function (k, wear, wet) {
+    const t = TYRES[k] || TYRES.S;
+    return t.grip * wearGrip(wear > 0 ? wear : 0) * wetGrip(k, wet > 0 ? wet : 0);
+  };
+  /* The best tyre for a track this wet. */
+  F1.wetTyre = function (wet) { return wet < 0.1 ? null : wet < 0.52 ? 'I' : 'W'; };
+  const WEAR_K = 1.35;                         // (calibrated: a normal AI racing lap wears 1 / life)
+  /* Wear for one step: by distance (so a tyre lasts the same number of laps on a long or a short track) and by how
+     hard the car is working it: cornering and braking at the limit, sliding and locking up wear it faster. */
+  function tyreWear(c, L, dt, wet) {
+    const t = TYRES[c.tyre.c] || TYRES.S, sp = Math.hypot(c.vx, c.vy);
+    if (sp < 0.5) return;
+    let k = 0.55 + 0.75 * (c.load || 0);
+    if (c.slide) k *= 2.2;
+    if (c.lockFx) k *= 2.5;
+    c.tyre.w += (sp * dt) / (t.life * L) * WEAR_K * k * wetWear(c.tyre.c, wet);
+  }
+  /* Seconds a lap lost for a grip factor g (from the speed-profile calibration: 1% of grip = 0.43% of the lap). */
+  function lapLoss(T, g) { return 0.43 * (1 - g) * F1.refLapTime(T); }
+  /* Time lost by a pit stop: the pit lane at the speed limit instead of the track, the stop itself, slowing and
+     speeding up again. */
+  F1.pitLoss = function (T) {
+    if (T._pitLoss !== undefined) return T._pitLoss;
+    const pi = F1.pitInfo(T);
+    if (!pi) return (T._pitLoss = 20);
+    const prof = F1.speedProfile(T, 'medium');
+    let tTrack = 0;
+    for (let u = 0; u < pi.total; u += T.ds) tTrack += T.ds / Math.max(10, prof[F1.idxAt(T, T.pit.s0 + u)]);
+    const tLane = pi.total / (PIT_LIMIT - 0.8) + 2.6 + 2.5;
+    return (T._pitLoss = Math.max(8, tLane - tTrack));
+  };
+  /* Race strategy (tyre wear on): which tyres to start on and on which laps to stop. Every plan with no stop (when
+     allowed), one stop, or two in longer races is costed: the tyres' pace, the wear (worse near the end of a tyre's
+     life) and the time lost in the pit lane. rng: picks one of the plans close to the best (or null = the best),
+     so not every car does the same. Returns { start, stops: [{ lap, c }] }: "lap" = come in at the end of that lap. */
+  F1.planStrategy = function (T, laps, mustStop, rng) {
+    const loss = F1.pitLoss(T), dry = ['S', 'M', 'H'];
+    const stint = {};                       // stint[k][n]: seconds lost over n laps on a new set of k (vs a new soft)
+    for (let a = 0; a < 3; a++) {
+      const k = dry[a], t = TYRES[k], arr = [0];
+      let sum = 0;
+      for (let n = 1; n <= laps; n++) {
+        const w = (n - 0.5) / t.life;
+        sum += lapLoss(T, F1.tyreGrip(k, w, 0));
+        arr.push(n / t.life > 1.08 ? Infinity : sum);   // (not past the cliff)
+      }
+      stint[k] = arr;
+    }
+    const plans = [];
+    const add = function (cost, start, stops) { if (isFinite(cost)) plans.push({ cost: cost, start: start, stops: stops }); };
+    for (let a = 0; a < 3; a++) {
+      const A = dry[a];
+      if (!mustStop) add(stint[A][laps], A, []);
+      for (let b = 0; b < 3; b++) {
+        const B = dry[b];
+        for (let k1 = 1; k1 < laps; k1++) {
+          add(stint[A][k1] + stint[B][laps - k1] + loss, A, [{ lap: k1, c: B }]);
+          if (laps >= 8) {
+            for (let c2 = 0; c2 < 3; c2++) {
+              const C = dry[c2];
+              for (let k2 = k1 + 1; k2 < laps; k2++) add(stint[A][k1] + stint[B][k2 - k1] + stint[C][laps - k2] + 2 * loss, A, [{ lap: k1, c: B }, { lap: k2, c: C }]);
+            }
+          }
+        }
+      }
+    }
+    if (!plans.length) return { start: 'H', stops: mustStop && laps > 1 ? [{ lap: Math.floor(laps / 2), c: 'H' }] : [] };
+    plans.sort(function (p, q) { return p.cost - q.cost; });
+    if (!rng) return plans[0];
+    const best = plans[0].cost, near = plans.filter(function (p) { return p.cost <= best + 1.5; }).slice(0, 14);
+    return near[Math.floor(rng() * near.length)];
+  };
+  /* For a stop now: the softest dry tyre that lasts the laps that are left. */
+  F1.tyreForLaps = function (left) {
+    for (let a = 0; a < 3; a++) { const k = ['S', 'M', 'H'][a]; if (left <= TYRES[k].life * 0.95) return k; }
+    return 'H';
+  };
+
+  // ---------------------------------------------------------------- weather
+  /* The chance of rain in a session at each track (from how often it rains there on a race weekend). */
+  const RAIN = { spa: 0.38, silverstone: 0.33, interlagos: 0.33, zandvoort: 0.27, suzuka: 0.25, montreal: 0.25, redbullring: 0.25,
+    singapore: 0.22, monaco: 0.16, monza: 0.14, baku: 0.06, jeddah: 0.03, lasvegas: 0.03, abudhabi: 0.02 };
+  F1.rainChance = function (T) { return RAIN[T.id] !== undefined ? RAIN[T.id] : 0.2; };
+  /* A session's weather, from its seed: the rain showers over the session (start, end, how hard at their peak).
+     Sometimes it is already raining when the session starts; a long session can have a second shower. */
+  F1.weatherPlan = function (T, seed, horizon) {
+    const r = mulberry32((seed ^ 0x6d2b79f5) >>> 0), p = F1.rainChance(T), spells = [];
+    const peak = function () { return r() < 0.6 ? 0.22 + r() * 0.23 : 0.6 + r() * 0.35; };   // light or heavy
+    let t = null;
+    if (r() < p * 0.35) { const len = 150 + r() * 330; spells.push({ t0: -90 - r() * 120, t1: len, peak: peak() }); t = len; }
+    while (spells.length < 4) {
+      if (r() >= (spells.length ? p * 0.6 : p)) break;
+      const start = (t === null ? 30 : t + 240) + r() * Math.max(60, horizon * 0.7);
+      if (start > horizon) break;
+      const len = 150 + r() * 330;
+      spells.push({ t0: start, t1: start + len, peak: peak() });
+      t = start + len;
+    }
+    return spells;
+  };
+  /* How hard it is raining at time t (0 none .. 1 a downpour): showers build up and ease off over 40 s. */
+  F1.rainAt = function (plan, t) {
+    let v = 0;
+    for (let i = 0; i < plan.length; i++) {
+      const sp = plan[i];
+      if (t <= sp.t0 || t >= sp.t1) continue;
+      const k = Math.min(1, (t - sp.t0) / 40, (sp.t1 - t) / 40), x = t - sp.t0;
+      v = Math.max(v, sp.peak * k * (1 + 0.16 * Math.sin(x / 23) * Math.sin(x / 7.3)));
+    }
+    return clamp(v, 0, 1);
+  };
+  /* The tyres a car on these tyres should be on now, from how wet the racing line is (with a margin, so nobody swaps
+     back and forth): null = keep them, 'I' / 'W' = rain tyres, 'dry' = back on slicks. */
+  function weatherNeed(cur, lw) {
+    if (SLICK[cur]) return lw > 0.6 ? 'W' : lw > 0.14 ? 'I' : null;
+    if (cur === 'I') return lw > 0.68 ? 'W' : lw < 0.07 ? 'dry' : null;
+    return lw < 0.07 ? 'dry' : lw < 0.46 ? 'I' : null;
+  }
+  F1.weatherNeed = weatherNeed;
 
   /* How far a car reaches sideways across the track (more when it is at an angle to the track). */
   function halfWidthOnTrack(c, T) {
@@ -499,7 +684,7 @@
     if (S.phase === 'countdown' || c.locked) { inp.throttle = 0; inp.brake = 1; inp.steer = 0; return inp; }
     const lvl = AI_LEVELS[S.aiLevel] || AI_LEVELS.medium;
     const sp = Math.hypot(c.vx, c.vy);
-    const prof = F1.speedProfile(T, S.aiLevel);
+    const prof = F1.speedProfile(T, S.aiLevel, c.tg);       // (slower on worn or harder tyres)
     const look = 8 + sp * 0.3;
     const i = F1.idxAt(T, c.s + look);
     const hwE = Math.min(T.hwE[i], T.hwE[c.seg]);          // usable half width (less in narrow sections)
@@ -508,7 +693,8 @@
     const zones = F1.brakeZones(T, S.aiLevel);
     const race = S.type === 'race';
     const iv = F1.idxAt(T, c.s + sp * 0.12);
-    const vFree = prof[iv] * ai.pace;
+    // practice: out laps and in laps are driven a little gently
+    const vFree = prof[iv] * ai.pace * (c.run && (c.run.n === 0 || c.run.n >= c.run.goal) ? 0.93 : 1);
 
     // next corner: which side is the inside?
     let inside = 0, toCorner = Infinity;
@@ -619,6 +805,23 @@
       }
     }
 
+    // heading for the pits: over to the pit side of the track before the entry, slowing for the speed limit
+    let pitV = Infinity;
+    const pl = c.pitPlan;
+    if (pl && pl.stage === 'in' && !pl.entered && T.pit) {
+      const Pt = T.pit, du = F1.wrapS(Pt.s0 - c.s, L);
+      if (du < 450) {
+        const k = clamp((450 - du) / 280, 0, 1);
+        // going round a stopped car comes first (we may miss the entry and come in next lap instead)
+        const po = ai.pass && ai.pass.urgent ? S.byId[ai.pass.id] : null;
+        if (!(po && po.vx * po.vx + po.vy * po.vy < 16)) {
+          want = want * (1 - k) + Pt.side * (T.hw - 2.4) * k;
+          if (k > 0.25) { ai.pass = null; passing = false; urgent = false; }
+        }
+        pitV = Math.sqrt((PIT_LIMIT - 0.8) * (PIT_LIMIT - 0.8) + 2 * 13 * Math.max(0, du + F1.pitInfo(T).limit0 - 6));
+      }
+    }
+
     // ---- mistakes (armed at a braking zone, see below)
     let mkType = null, mkRel = 0, edge = room + 0.3;
     const mk = ai.mk;
@@ -686,6 +889,7 @@
       if (vArc < vt) vt = vArc;
     }
     if (offTrack) { vt = Math.min(vt, 30); if (rejoinBlocked) vt = Math.min(vt, 12); }
+    if (pitV < vt) vt = pitV;
     if (F1.DEBUG_AI) { ai.dbg = { lo: lo, hi: hi, want: want, latT: latT, vt: vt, vFree: vFree, lead: lead ? lead.id : -1, leadGap: leadGap, leadV: leadV, pass: ai.pass ? ai.pass.id + (ai.pass.side > 0 ? 'R' : 'L') : '', mk: mkType || '', chased: chased }; }
     if (sp > vt + 1.0) { inp.throttle = 0; inp.brake = Math.min(1, (sp - vt) / 5 + 0.3); }
     else if (sp > vt - 0.5) { inp.throttle = 0.35; inp.brake = 0; }
@@ -732,6 +936,8 @@
         if (race && c.lapsDone === 0) p *= 0.6;                 // a bit more careful in the opening-lap pack
         else if (chased) p *= 1.5;                              // pressure from the car behind
         if (c.dirty < 0.99) p *= 1.4;                           // fighting dirty air
+        if (c.tyre && c.tyre.w > 0.9) p *= 1.5;                 // tyres past their best
+        if (S.wet > 0) p *= 1 + 1.2 * S.wetAt(c);               // a wet track
         if (F1.FORCE_MK || S.rng() < p) {
           const x = S.rng();
           const apexRel = F1.wrapS(Z.apex - Z.s, L);
@@ -803,6 +1009,164 @@
     return rel > 0 && rel <= d;
   }
 
+  // ---------------------------------------------------------------- pit lane, pit boxes and garages
+  /* Along the pit lane, positions are u = metres from the start of the entry road (s0); the lane ends at u = total. */
+  F1.pitInfo = function (T) {
+    if (T._pi !== undefined) return T._pi;
+    const P = T.pit;
+    if (!P) { T._pi = null; return null; }
+    const L = T.length, u = function (sv) { return F1.wrapS(sv - P.s0, L); };
+    T._pi = { total: u(P.s3), limit0: u(P.s1), limit1: u(P.s2), u: u };
+    return T._pi;
+  };
+  function teamIdx(driverId) {
+    const d = F1.driver(driverId);
+    return d ? F1.TEAMS.findIndex(function (t) { return t.id === d.team; }) : 0;
+  }
+  /* A car's garage (its team's), where it stops in front of it, and where it parks inside it.
+     The team's two cars park side by side, facing out; each stops a little ahead of its own spot, so it can
+     roll back in. In a race both cars use the painted box (one at a time). */
+  F1.garageSpots = function (T, c) {
+    const P = T.pit, n = P.garages.length, g = P.garages[n - 1 - (((c.team % n) + n) % n)];
+    const sSpot = g.mid + (c.gSlot ? 3.4 : -3.0), sStop = c.gSlot ? g.mid + 6.8 : g.mid + 0.4;
+    const spot = F1.trackPoint(T, sSpot, P.side * (P.garFront + 3.4));
+    const i = F1.idxAt(T, sSpot);
+    spot.h = Math.atan2(-P.side * T.ny[i], -P.side * T.nx[i]);          // nose out, towards the pit lane
+    const stop = F1.trackPoint(T, sStop, P.side * P.boxOff);
+    const box = F1.trackPoint(T, g.mid + 0.4, P.side * P.boxOff);
+    return { g: g, spot: spot, sSpot: sSpot, stop: stop, sStop: sStop, box: box, sBox: g.mid + 0.4 };
+  };
+  function smooth01(t) { t = t < 0 ? 0 : t > 1 ? 1 : t; return t * t * (3 - 2 * t); }
+
+  /* Rolling into or out of the garage (no driving: the car just moves, as if pushed). k: 'in' | 'out'. */
+  function garageMove(S, c, k) {
+    const T = S.track, G = F1.garageSpots(T, c), P = T.pit;
+    const from = k === 'in' ? { x: c.x, y: c.y, a: c.a } : { x: G.spot.x, y: G.spot.y, a: G.spot.h };
+    const to = k === 'in' ? { x: G.spot.x, y: G.spot.y, a: G.spot.h } : { x: G.stop.x, y: G.stop.y, a: G.stop.h };
+    // the curve goes through the point in front of the spot, on the line the car stops on
+    F1.queryTrack(T, k === 'in' ? c.x : G.stop.x, k === 'in' ? c.y : G.stop.y, -1, Q2);
+    const mid = F1.trackPoint(T, G.sSpot, k === 'in' ? Q2.d : P.side * P.boxOff);
+    c.gar = { k: k, t0: S.time, dur: k === 'in' ? 3.2 : 2.6, from: from, to: to, cx: mid.x, cy: mid.y, at: S.time };
+    c.vx = 0; c.vy = 0; c.w = 0; c.drsOpen = false; c.slide = false; c.delta = 0;
+    c.lapStart = null; c.lapPen = 0; c.tlOff = false;
+  }
+  function garageStep(S, c) {
+    const G = c.gar;
+    if (G.k === 'park') return;
+    const t = Math.min(1, (S.time - G.t0) / G.dur), e = smooth01(t), u = 1 - e;
+    const A = G.from, B = G.to, ox = c.x, oy = c.y;
+    c.x = u * u * A.x + 2 * u * e * G.cx + e * e * B.x;
+    c.y = u * u * A.y + 2 * u * e * G.cy + e * e * B.y;
+    c.vx = t < 1 ? (c.x - ox) / F1.DT : 0; c.vy = t < 1 ? (c.y - oy) / F1.DT : 0;
+    c.a = A.a + F1.wrapAngle(B.a - A.a) * smooth01(t * 1.15 - 0.1);
+    if (t < 1) return;
+    if (G.k === 'in') { c.gar = { k: 'park', at: S.time }; S.events.push({ k: 'garage', id: c.id, on: true }); return; }
+    // out of the garage: in front of it, ready to drive down the pit lane
+    c.gar = null;
+    c.gExitT = S.time;
+    const k = c.isAI ? c.runTyre || 'M' : c.tyreNext || S.defaultTyre(c);
+    c.tyre = { c: k, w: 0, laps: 0 }; c.tyreMsg = 0; c.tg = F1.tyreGrip(k, 0, S.wet);
+    if (!SLICK[k]) c.usedWet = true;
+    F1.queryTrack(S.track, c.x, c.y, -1, Q2);
+    c.seg = Q2.idx; c.s = Q2.s; c.d = Q2.d; c.dist = Q2.dist; c.prevS = c.s;
+    c.px = c.x; c.py = c.y; c.pa = c.a;
+    if (c.isAI) c.pitPlan = { stage: 'out', why: 'garage', entered: true, stopU: F1.pitInfo(S.track).u(c.s) };
+    S.events.push({ k: 'garage', id: c.id, on: false });
+  }
+
+  /* An AI car driving in the pit lane: in to its box (and stop), or out of it to the end of the lane. */
+  function aiPitDrive(c, S) {
+    const T = S.track, P = T.pit, PH = F1.PHYS, pi = F1.pitInfo(T), pl = c.pitPlan, L = T.length;
+    const inp = c.ai ? c.ai.inp : c.pitInp || (c.pitInp = { throttle: 0, brake: 0, steer: 0, drs: false, reset: false, lock: false });
+    inp.reset = false; inp.drs = false; inp.lock = false;
+    const u = pi.u(c.s), sp = Math.hypot(c.vx, c.vy);
+    // a race stop with the team-mate in (or heading for) the box: queue behind it in the working lane, not in the fast lane
+    if (pl.why === 'stop' && pl.stage === 'in' && !pl.early) {
+      for (let q = 0; q < S.cars.length; q++) {
+        const o = S.cars[q];
+        if (o !== c && o.team === c.team && !o.out && (o.pitStop || (o.pitPlan && o.pitPlan.entered && o.pitPlan.stage === 'in' && pi.u(o.s) > u))) { pl.early = true; break; }
+      }
+    }
+    const dAt = function (uu) {
+      uu = clamp(uu, 0, pi.total);
+      let d = T.pitOff[F1.idxAt(T, P.s0 + uu)];
+      if (d !== d) d = P.off;
+      // into the working lane only just before the box (not past the other teams' boxes), and out of it soon after
+      if (pl.stage !== 'out') {
+        const a = pl.stopU - (pl.early ? 36 : 19), b = pl.stopU - (pl.early ? 18 : 3);
+        if (uu > a) d += (P.boxOff - P.off) * smooth01((uu - a) / (b - a));
+      } else {
+        const a = pl.stopU + 1, b = pl.stopU + 20;
+        if (uu < b) d = P.boxOff + (d - P.boxOff) * smooth01((uu - a) / (b - a));
+      }
+      return P.side * d;
+    };
+    // steering: towards a point a little way down the lane
+    const look = 4.5 + sp * 0.35, tp = F1.trackPoint(T, P.s0 + Math.min(u + look, pi.total + 30), dAt(u + look));
+    const ca = Math.cos(c.a), sa = Math.sin(c.a), dx = tp.x - c.x, dy = tp.y - c.y;
+    const lx = dx * ca + dy * sa, ly = -dx * sa + dy * ca;
+    const curv = (2 * ly) / Math.max(1, lx * lx + ly * ly);
+    const vfa = Math.abs(c.vx * ca + c.vy * sa);
+    const latRef = Math.min(PH.LAT_MAX, PH.LAT0 + PH.LAT_K * sp * sp);
+    const maxDelta = Math.min(PH.STEER_MAX, Math.atan(CAR.WB * latRef / Math.max(vfa * vfa, 1)) * 1.05);
+    inp.steer = clamp(lx < 0 ? (ly > 0 ? 1 : -1) : Math.atan(CAR.WB * curv) / maxDelta, -1, 1);
+    // speed: down to the limit before the line, stop in the box, wait for a gap before pulling out
+    let v = PIT_LIMIT - 0.8;
+    if (u < pi.limit0) v = Math.sqrt(v * v + 2 * 12 * Math.max(0, pi.limit0 - 6 - u));
+    if (pl.stage === 'in') { const dist = pl.stopU - u; v = Math.min(v, dist > 0.3 ? Math.sqrt(2 * 4.2 * dist) : 0); }
+    if (pl.stage === 'out' && u > pi.limit1 + 2) v = 45;
+    let blocked = false;
+    for (let q = 0; q < S.cars.length; q++) {
+      const o = S.cars[q];
+      if (o === c || o.out || o.gar) continue;
+      const dS = wrapD(o.s - c.s, L);
+      const ov = o.vx * T.tx[o.seg] + o.vy * T.ty[o.seg];
+      // a car ahead on the way we are going (where we will be across the lane when we get to it)
+      if (dS > 0 && dS < 32 && Math.abs(o.d - dAt(u + dS)) < 2.6) {
+        const cap = Math.max(0, ov + (dS - 8) * 0.7);
+        if (cap < v) { v = cap; if (cap < 0.5) blocked = true; }
+      }
+      // leaving the box: let the cars in the fast lane go by first
+      if (pl.stage === 'out' && u < pl.stopU + 14 && dS < 4 && dS > -38 && ov > 4 && Math.abs(o.d - P.side * P.off) < 2.4 && Math.abs(c.d - P.side * P.off) > 1.6) v = 0;
+    }
+    // waiting behind a car that is not moving (a player sitting in a box): how long for (see pitLogic)
+    pl.waitT = blocked && sp < 0.6 ? (pl.waitT || 0) + F1.DT : 0;
+    // knocked sideways (or round) in the narrow pit lane and not getting anywhere: put straight on the lane again
+    const hdErr = Math.abs(F1.wrapAngle(c.a - T.hd[c.seg]));
+    pl.stuckT = !c.pitStop && sp < 1 && !blocked && (v > 1 || hdErr > 1.6) ? (pl.stuckT || 0) + F1.DT : 0;
+    if (pl.stuckT > 2.5) {
+      const p = F1.trackPoint(T, P.s0 + u, dAt(u));
+      c.x = p.x; c.y = p.y; c.a = p.h; c.vx = 0; c.vy = 0; c.w = 0; c.slide = false;
+      pl.stuckT = 0;
+    }
+    // gentle at walking pace (stopping in the box), full throttle only when well below the speed wanted.
+    // (Holding the brake at a standstill is reverse gear: to wait, just let the car stand.)
+    const vf = c.vx * ca + c.vy * sa;                // forward speed (below 0 = rolling backwards)
+    if (v < 0.3) { inp.throttle = vf < -0.3 ? 0.3 : 0; inp.brake = vf > 0.5 ? 1 : 0; }
+    else if (vf > v + 0.6) { inp.throttle = 0; inp.brake = Math.min(1, (vf - v) / 4 + 0.2); }
+    else if (vf > v - 0.3) { inp.throttle = 0.12; inp.brake = 0; }
+    else { inp.throttle = clamp((v - vf) * 0.35 + 0.2, 0, 1); inp.brake = 0; }
+    return inp;
+  }
+
+  /* Practice: how many of the AI cars should be out on track at this point of the session. Busy at the start,
+     quieter in the middle, busiest at the end (in an open practice the pattern repeats); never fewer than 4
+     (mostly 5 or 6), and a small field stays out more. */
+  function runShare(f) {
+    if (f < 0.15) return 0.7;
+    if (f < 0.3) return 0.7 - (f - 0.15) / 0.15 * 0.3;
+    if (f < 0.6) return 0.4;
+    if (f < 0.8) return 0.4 + (f - 0.6) / 0.2 * 0.48;
+    return 0.88;
+  }
+  function newRun(S, c) {
+    const x = S.rng();
+    c.run = { n: 0, goal: 1 + (x < 0.35 ? 1 : x < 0.75 ? 2 : 3) };     // out lap, 1-3 fast laps, in lap
+    const y = S.rng();
+    const lw = S.lineWet();
+    c.runTyre = (lw > 0.12 ? F1.wetTyre(lw) : null) || (y < 0.45 ? 'S' : y < 0.85 ? 'M' : 'H');   // a new set for each run
+  }
+
   /* opts: {type:'practice'|'quali'|'race', track, entries:[{id, driverId, isAI, name}], laps, aiLevel, collisions, seed} */
   function Session(opts) {
     const T = opts.track;
@@ -811,7 +1175,30 @@
     this.laps = opts.laps || 0;
     this.aiLevel = AI_LEVELS[opts.aiLevel] ? opts.aiLevel : 'medium';
     this.collisions = opts.type === 'quali' ? false : opts.collisions !== false;
+    this.drafting = opts.drafting !== false;                       // slipstream on straights (a switch before the session)
+    // practice: AI cars do runs of a few laps and go back to their garages in between
+    this.runs = opts.type === 'practice' && opts.runs === true && !!T.pit;
+    this.runMin = 5; this.runMinAt = -99; this.runRelease = -99;
     this.rng = mulberry32(opts.seed || 1234567);
+    // tyres: with wear on they wear out, and a race of 3 laps or more needs at least one pit stop
+    this.tyres = opts.tyres === true;
+    this.mustStop = this.tyres && opts.type === 'race' && this.laps >= 3;
+    this.weatherOn = opts.weather === true;                        // the weather switch (off = always dry)
+    const ref = F1.refLapTime(T);
+    this.refLap = ref;
+    // the weather: rain showers over the session (from the seed), how hard it rains, how wet the track is
+    // (0 dry .. 1 standing water) and how much drier the racing line is than the rest (0 .. 1: cars dry it)
+    this.rain = 0; this.wet = 0; this.lineDry = 0; this.wplan = [];
+    this.wx = { soon: -1, rain: 0, stop: true };                   // (for the rain messages)
+    if (this.weatherOn) {
+      const horizon = opts.type === 'race' ? 20 + this.laps * ref * 1.1 : this.laps > 0 ? (this.laps + 2.5) * ref * 1.3 : 3600;
+      this.wplan = F1.weatherPlan(T, (opts.seed || 1234567) + 17, horizon);
+      // already raining (or it has just rained): how wet the track is when the session starts
+      for (let t = -300; t < 0; t += 1) this.weatherStep(1, t);
+      this.wx.rain = this.rain > 0.08 ? (this.rain > 0.55 ? 2 : 1) : 0; this.wx.stop = this.rain <= 0.08;
+    }
+    // a race with tyre wear (or on a wet track): a few seconds on the grid to pick the starting tyres before the lights
+    this.gridT = opts.type === 'race' && (this.tyres || (this.weatherOn && this.lineWet() > 0.1)) ? 3 : 0;
     this.tick = 0;
     this.time = 0;
     this.cars = [];
@@ -821,7 +1208,7 @@
     this.phase = opts.type === 'practice' ? 'running' : 'countdown';
     this.lights = 0;
     this.startTime = opts.type === 'practice' ? 0 : null;
-    this.lightsOutAt = opts.type === 'race' ? 5.5 + 0.4 + this.rng() * 2.0 : null;
+    this.lightsOutAt = opts.type === 'race' ? this.gridT + 5.5 + 0.4 + this.rng() * 2.0 : null;
     this.leaderFinishTime = null;
     this.lastHumanFinish = null;
     this.humansDoneAt = null;
@@ -835,8 +1222,6 @@
     // first braking zone after the start line (AI hold their grid lanes until then on lap 1)
     const bz = F1.brakeZones(T, this.aiLevel).filter(function (z) { return z.s > 30; });
     this.firstBrake = bz.length ? bz[0].s : null;
-    const ref = F1.refLapTime(T);
-    this.refLap = ref;
     // practice with a lap limit (Grand Prix P1-P3) works like qualifying: N timed laps after an out lap
     this.timeLimit = opts.type === 'quali' || (opts.type === 'practice' && this.laps > 0) ? 3 + ref * 1.3 + this.laps * ref * 1.6 + 60
       : opts.type === 'race' ? 8 + this.laps * ref * 2.2 + 120 : Infinity;
@@ -856,10 +1241,46 @@
       c.drsElig = T.drs.map(function () { return opts.type !== 'race'; });
       c.input = F1.NEUTRAL;
       c.prevS = c.s;
+      c.tow = 1;                                       // slipstream: drag factor (1 = none)
+      c.team = teamIdx(e.driverId);
+      c.gSlot = self.cars.some(function (o) { return o.team === c.team; }) ? 1 : 0;   // the team's first or second car (garage spot)
+      c.pitPlan = null;                                // AI: heading into (or out of) the pits
+      c.gar = null;                                    // in the garage, or rolling in / out of it
+      c.gStill = 0; c.gExitT = 0; c.gMoved = false; c.gHome = null; c.goHold = 0;
+      c.run = null;                                    // AI in practice: { n: laps across the line this run, goal }
+      c.tyre = { c: 'S', w: 0, laps: 0 };              // compound (F1.TYRES), wear (0 new .. 1 worn out), laps on the set
+      c.tyreNext = null;                               // a player's pick for the next set (pit stop or garage)
+      c.tg = 1; c.load = 0;                            // grip from the tyres now; how hard they are working
+      c.stops = 0; c.tyreHist = ['S']; c.pitStop = null; c.pitDone = false; c.usedWet = false; c.strat = null; c.tyreMsg = 0;
       if (c.isAI) c.ai = F1.newAI(c, lvl, self.rng);
       self.cars.push(c);
       self.byId[c.id] = c;
     });
+    // the tyres everyone starts on: rain tyres on a wet track; in a race with tyre wear each AI car picks a plan (tyres
+    // to start on, laps to stop on) and a player starts on the best plan's tyres (unless they pick on the grid)
+    const wetStart = F1.wetTyre(this.lineWet() > 0.1 ? Math.max(0.12, this.lineWet()) : 0);
+    this.startTyre = wetStart || 'S';
+    if (this.type === 'race' && this.tyres) {
+      const rs = mulberry32((opts.seed || 1234567) ^ 0x2545f491);
+      this.bestPlan = F1.planStrategy(T, this.laps, this.mustStop, null);
+      this.cars.forEach(function (c) {
+        if (c.isAI) {
+          const p = F1.planStrategy(T, self.laps, self.mustStop, rs);
+          c.strat = { start: p.start, stops: p.stops.map(function (x) { return { lap: x.lap, c: x.c }; }) };
+          // team-mates don't plan to stop on the same lap (they share the box)
+          const mate = self.cars.find(function (o) { return o !== c && o.isAI && o.team === c.team && o.strat; });
+          if (mate && mate.strat.stops.length && c.strat.stops.length && mate.strat.stops[0].lap === c.strat.stops[0].lap) {
+            const st = c.strat.stops[0], up = st.lap + 1 < self.laps && (c.strat.stops.length < 2 || st.lap + 1 < c.strat.stops[1].lap);
+            st.lap += up ? 1 : st.lap > 1 ? -1 : 0;
+          }
+          c.tyre.c = c.strat.start;
+        } else c.tyre.c = self.bestPlan.start;
+        c.tyreHist = [c.tyre.c];
+      });
+      if (!wetStart) this.startTyre = this.bestPlan.start;
+    }
+    if (wetStart) this.cars.forEach(function (c) { c.tyre.c = wetStart; c.tyreHist = [wetStart]; c.usedWet = true; });
+    this.cars.forEach(function (c) { c.tg = F1.tyreGrip(c.tyre.c, 0, self.wetAt(c)); });
     if (opts.startMode === 'pit' && T.pit) this.placeForPitStart();
     else if (opts.startMode === 'flying') this.placeFlying();
     this.updateOrder();
@@ -875,11 +1296,29 @@
       return F1.TEAMS.findIndex(function (t) { return t.id === d.team; });
     };
     const inBox = {};
+    // realistic practice: about 70% of the AI cars start out on track, the others in their garages
+    const self = this, nOut = this.runs ? this.runTarget() : ais.length;
+    const outSet = new Set(ais.slice().sort(function () { return self.rng() - 0.5; }).slice(0, nOut));
+    let kOut = 0;
     for (let i = 0; i < this.cars.length; i++) {
       const c = this.cars[i];
+      // (realistic practice: a player starts in their garage too, and goes out when ready)
+      if (this.runs && (!c.isAI || !outSet.has(c))) {
+        const G = F1.garageSpots(T, c);
+        c.x = G.spot.x; c.y = G.spot.y; c.a = G.spot.h; c.vx = 0; c.vy = 0;
+        c.gar = { k: 'park', at: -10 - this.rng() * 25 };
+        c.px = c.x; c.py = c.y; c.pa = c.a;
+        F1.queryTrack(T, c.x, c.y, -1, Q);
+        c.seg = Q.idx; c.s = Q.s; c.d = Q.d; c.dist = Q.dist; c.prevS = c.s;
+        continue;
+      }
       if (c.isAI) {
-        const k = ais.indexOf(c);
-        const s = F1.wrapS(L * (k + 1) / (ais.length + 1) + 260, L);
+        const k = this.runs ? kOut++ : ais.indexOf(c), nk = this.runs ? nOut : ais.length;
+        if (this.runs) {
+          newRun(this, c); c.run.n = Math.floor(this.rng() * c.run.goal);
+          c.tyre = { c: c.runTyre, w: this.tyres ? c.run.n / TYRES[c.runTyre].life : 0, laps: c.run.n }; c.tyreHist = [c.runTyre];
+        }
+        const s = F1.wrapS(L * (k + 1) / (nk + 1) + 260, L);
         const idx = F1.idxAt(T, s);
         const v = prof[idx] * 0.8;
         c.x = T.rlX[idx]; c.y = T.rlY[idx]; c.a = T.hd[idx];
@@ -917,14 +1356,23 @@
     this.tick++;
     this.time += dt;
     this.updatePhase();
+    if (this.weatherOn) { this.weatherStep(dt); if (this.tick % 30 === 0) this.weatherNews(); }
     const cars = this.cars, L = T.length;
     for (let i = 0; i < cars.length; i++) {
       const c = cars[i];
       c.px = c.x; c.py = c.y; c.pa = c.a; c.prevS = c.s;
       if (c.out) continue;
+      if (c.gar) {                                     // in the garage (or rolling in / out): no driving
+        c.tow = 1; c.dirty = 1; c.drsAllowed = false;
+        if (!c.isAI && inputs && inputs[c.id]) this.garageInput(c, inputs[c.id]);
+        garageStep(this, c);
+        continue;
+      }
       c.dirty = this.collisions ? F1.dirtyAir(c, cars, L) : 1;
-      c.locked = this.phase === 'countdown';
-      if (c.isAI) c.input = F1.aiDrive(c, this);
+      c.tow = this.drafting ? F1.slipstream(c, cars, L) : 1;
+      c.locked = this.phase === 'countdown' || !!c.pitStop;      // (held still while the tyres are changed)
+      if (c.isAI) c.input = c.pitPlan && c.pitPlan.entered ? aiPitDrive(c, this) : F1.aiDrive(c, this);
+      else if (c.pitPlan && c.pitPlan.entered) c.input = aiPitDrive(c, this);   // a player's pit stop: the car drives itself
       else if (inputs && inputs[c.id]) c.input = inputs[c.id];
       if (c.locked && this.type === 'race' && !c.isAI) this.checkJumpStart(c);
       const z = T.drsZone[F1.idxAt(T, c.s)];
@@ -933,17 +1381,245 @@
     const sub = dt / F1.SUBSTEPS;
     const contactOn = this.collisions && this.phase !== 'countdown';
     for (let k = 0; k < F1.SUBSTEPS; k++) {
-      for (let i = 0; i < cars.length; i++) if (!cars[i].out) F1.stepCar(cars[i], cars[i].input, T, sub);
+      for (let i = 0; i < cars.length; i++) if (!cars[i].out && !cars[i].gar) F1.stepCar(cars[i], cars[i].input, T, sub);
       if (contactOn) this.resolveContacts();
     }
     for (let i = 0; i < cars.length; i++) {
       const c = cars[i];
       if (c.wallHit > 2500) this.fx.push([Math.round(c.x * 10) / 10, Math.round(c.y * 10) / 10, Math.round(c.wallHit)]);
       c.wallHit = 0;
-      if (!c.out) this.updateProgress(c, dt);
+      if (!c.out && !c.gar) {
+        this.updateProgress(c, dt); this.pitLogic(c, dt);
+        const wet = this.wetAt(c);
+        if (c.pitStop) this.pitStopStep(c);
+        else if (this.tyres && this.phase !== 'countdown') tyreWear(c, L, dt, wet);
+        c.tg = F1.tyreGrip(c.tyre.c, c.tyre.w, wet);
+        if (!c.isAI && this.tyres) {                  // warnings for a player: wearing out (75%), worn out
+          const n = c.tyre.w >= 1 ? 2 : c.tyre.w >= 0.75 ? 1 : 0;
+          if (n > c.tyreMsg) { c.tyreMsg = n; this.events.push({ k: 'tyres', id: c.id, n: n }); }
+        }
+      }
     }
+    if (this.runs && this.tick % 30 === 0) this.practiceTraffic();
     this.updateOrder();
     this.checkEnd();
+  };
+
+  /* Pit lane bookkeeping after each step: an AI car taking the pit entry (or missing it), stopping in front of its
+     garage, leaving the pit lane; a player stopping in front of their own garage (practice and qualifying). */
+  Session.prototype.pitLogic = function (c, dt) {
+    const T = this.track, Pt = T.pit;
+    if (!Pt) return;
+    const pi = F1.pitInfo(T), L = T.length, pl = c.pitPlan;
+    if (pl) {
+      if (pl.stage === 'in' && !pl.entered) {
+        if (passed(c.prevS, c.s, Pt.s0, L)) {
+          if (Math.abs(c.d - Pt.side * (T.hw - 2.5)) < 3.4 || c.inPit) {
+            pl.entered = true;
+            const G = F1.garageSpots(T, c);
+            pl.stopU = pi.u(pl.why === 'garage' ? G.sStop : G.sBox);
+          } else pl.missed = (pl.missed || 0) + 1;      // could not get across in time: next lap
+        }
+      } else if (pl.entered) {
+        const u = pi.u(c.s), sp = Math.hypot(c.vx, c.vy);
+        // stopped at the box (or close to it behind a car that is not moving)
+        const atBox = sp < 0.6 && ((u - pl.stopU > -3 && u - pl.stopU < 9) || (pl.waitT > 2 && Math.abs(u - pl.stopU) < 14));
+        if (pl.stage === 'in' && atBox) {
+          if (pl.why === 'garage') { c.pitPlan = null; garageMove(this, c, 'in'); }
+          else { pl.stage = 'box'; this.startPitStop(c, (!c.isAI && c.tyreNext) || pl.tyre || this.defaultTyre(c)); }
+        } else if (pl.stage === 'in' && pl.why === 'stop' && pl.waitT > 6) {
+          // held up behind a car in the box for a long time: the tyres are changed where it stands
+          pl.stage = 'box'; this.startPitStop(c, (!c.isAI && c.tyreNext) || pl.tyre || this.defaultTyre(c));
+        } else if (pl.stage === 'in' && pl.waitT > 12 && pl.why === 'garage') {
+          // held up for a long time further back: the car is wheeled into its garage
+          const G = F1.garageSpots(T, c);
+          c.pitPlan = null; c.x = G.spot.x; c.y = G.spot.y; c.a = G.spot.h; c.vx = 0; c.vy = 0; c.w = 0;
+          c.gar = { k: 'park', at: this.time };
+          this.events.push({ k: 'garage', id: c.id, on: true });
+        } else if (pl.stage === 'out' && u > pi.total - 2 && u < pi.total + 300) c.pitPlan = null;
+        else if (u > pi.total + 300 && u < L - 600) c.pitPlan = null;        // (lost: drive on)
+      }
+    }
+    // a player in a race: into the pit lane = a pit stop. The car drives itself to your box, the tyres are changed
+    // (the set you picked, or the best one for the laps left) and it drives itself out to the end of the pit lane.
+    if (!c.isAI && this.type === 'race' && this.phase !== 'countdown' && !c.finished) {
+      if (!c.inPit && !c.pitPlan) c.pitDone = false;
+      else if (!c.pitPlan && !c.pitDone && c.inPit && pi.u(c.s) < pi.limit0 + 10) {
+        c.pitDone = true;
+        c.pitPlan = { stage: 'in', why: 'stop', entered: true, stopU: pi.u(F1.garageSpots(T, c).sBox), auto: true };
+        this.events.push({ k: 'pitIn', id: c.id });
+      }
+    }
+    // a player: stop in front of your own garage (practice or qualifying) and the car is rolled in
+    if (!c.isAI && (this.type === 'practice' || this.type === 'quali') && this.phase === 'running' && !c.qualiDone && !c.finished) {
+      if (!c.gHome) c.gHome = { x: c.x, y: c.y };
+      if (!c.gMoved && Math.hypot(c.x - c.gHome.x, c.y - c.gHome.y) > 25) c.gMoved = true;
+      const G = F1.garageSpots(T, c);
+      const near = c.inPit && Math.abs(wrapD(c.s - G.g.mid, L)) < 10 && Math.abs(c.d - Pt.side * Pt.boxOff) < 3.2;
+      const sp = Math.hypot(c.vx, c.vy);
+      c.gStill = near && sp < 0.6 ? c.gStill + dt : 0;
+      if (c.gStill > 0.8 && c.gMoved && this.time - c.gExitT > 4) { c.gStill = 0; garageMove(this, c, 'in'); }
+    }
+  };
+
+  /* A player in the garage: the "Go back out" button (or holding the accelerator) rolls the car out. */
+  Session.prototype.garageInput = function (c, inp) {
+    if (c.gar.k !== 'park') { c.goHold = 0; return; }
+    if (inp.garageOut) { garageMove(this, c, 'out'); c.goHold = 0; return; }
+    c.goHold = inp.throttle > 0.5 ? c.goHold + F1.DT : 0;
+    if (c.goHold > 0.6) { garageMove(this, c, 'out'); c.goHold = 0; }
+  };
+
+  /* Tyres. A player picks: on the grid before the start = the tyres you start on; otherwise the set you get at your
+     next pit stop (or when you leave your garage). k: 'S' | 'M' | 'H' | 'I' | 'W', or null = no pick. */
+  Session.prototype.setTyreChoice = function (id, k) {
+    const c = this.byId[id];
+    if (!c || (k !== null && !TYRES[k])) return;
+    if (k && this.type === 'race' && this.phase === 'countdown') {
+      c.tyre = { c: k, w: 0, laps: 0 }; c.tyreHist = [k]; c.tg = F1.tyreGrip(k, 0, this.wetAt(c));
+      c.usedWet = !SLICK[k] || F1.wetTyre(this.lineWet()) !== null;
+    }
+    else c.tyreNext = k;
+  };
+  /* The tyres a car gets when nobody has picked: rain tyres on a wet track; in a race the softest that lasts to the end. */
+  Session.prototype.defaultTyre = function (c) {
+    const lw = this.lineWet(), w = lw > 0.1 ? F1.wetTyre(Math.max(0.12, lw)) : null;
+    if (w) return w;
+    if (this.type !== 'race') return 'S';
+    return F1.tyreForLaps(Math.max(1, this.laps - c.lapsDone - 1));
+  };
+  /* The weather over dt seconds (t: the time it is for; the session's own time if left out). Rain makes the track wet
+     within a minute or two (a light shower: damp, intermediates; heavy rain: standing water, full wets); when it stops
+     the track dries over several minutes, the racing line first (the cars running on it dry it). */
+  Session.prototype.weatherStep = function (dt, t) {
+    const r = F1.rainAt(this.wplan, t === undefined ? this.time : t);
+    this.rain = r;
+    const target = r > 0.02 ? Math.min(1, 0.12 + 1.05 * r) : 0;
+    if (target > this.wet) this.wet += (target - this.wet) * Math.min(1, dt / 50);
+    else this.wet = Math.max(target, this.wet - dt * 0.0016);
+    if (r > 0.05) this.lineDry = Math.max(0, this.lineDry - dt * r / 25);
+    else this.lineDry = Math.min(1, this.lineDry + dt / 110);
+    if (target === 0 && this.wet < 0.003) { this.wet = 0; this.lineDry = 0; }      // dry again
+  };
+  /* How wet the racing line is (it dries before the rest of the track). */
+  Session.prototype.lineWet = function () { return this.wet * (1 - 0.65 * this.lineDry); };
+  /* How wet the track is under a car: drier on the racing line (within a metre or so of it) once it has started to dry. */
+  Session.prototype.wetAt = function (c) {
+    if (this.wet <= 0) return 0;
+    const off = Math.abs(c.d - this.track.rlOff[c.seg]);
+    return this.wet * (1 - 0.65 * this.lineDry * clamp(1 - (off - 1) / 3, 0, 1));
+  };
+  /* Weather messages: rain on the way (a minute before), rain (light / heavy), rain stopped; and for a player, when it
+     is time for rain tyres or for slicks again. */
+  Session.prototype.weatherNews = function () {
+    const r = this.rain, wx = this.wx;
+    if (r < 0.02 && this.wet < 0.1) {
+      for (let i = 0; i < this.wplan.length; i++) {
+        const sp = this.wplan[i];
+        if (sp.t0 > this.time + 45 && sp.t0 < this.time + 75 && wx.soon !== i) { wx.soon = i; this.events.push({ k: 'rainSoon', heavy: sp.peak > 0.55 }); }
+      }
+    }
+    const lvl = r > 0.55 ? 2 : r > 0.08 ? 1 : 0;
+    if (lvl > wx.rain && (wx.stop || lvl === 2)) { this.events.push({ k: 'rain', n: lvl }); wx.rain = lvl; wx.stop = false; }
+    if (r < 0.04 && !wx.stop) { this.events.push({ k: 'rainStop' }); wx.stop = true; wx.rain = 0; }
+    const lw = this.lineWet();
+    for (let i = 0; i < this.cars.length; i++) {
+      const c = this.cars[i];
+      if (c.isAI || c.out || c.finished || c.qualiDone || c.gar) continue;
+      const need = weatherNeed(c.tyre.c, lw), key = need || '';
+      if (key !== (c.wxTip || '')) {
+        c.wxTip = key;
+        if (need) this.events.push({ k: 'wxTyres', id: c.id, need: need });
+      }
+    }
+  };
+
+  /* A pit stop in a race: the car stands in its box while the tyres are changed (about 2.5 s; now and then a slow one). */
+  Session.prototype.startPitStop = function (c, k) {
+    let dur = 2.2 + this.rng() * 0.6;
+    if (c.isAI && this.rng() < 0.05) dur += 1.5 + this.rng() * 2.5;
+    c.pitStop = { t0: this.time, dur: dur, k: k };
+    c.vx = 0; c.vy = 0; c.w = 0; c.slide = false;
+    c.pitDone = true;
+    this.events.push({ k: 'stop', id: c.id, tyre: k });
+  };
+  Session.prototype.pitStopStep = function (c) {
+    const ps = c.pitStop;
+    c.vx = 0; c.vy = 0; c.w = 0;
+    if (this.time < ps.t0 + ps.dur) return;
+    c.pitStop = null; c.stops++;
+    c.tyre = { c: ps.k, w: 0, laps: 0 }; c.tyreHist.push(ps.k); c.tyreMsg = 0;
+    if (!SLICK[ps.k]) c.usedWet = true;
+    if (!c.isAI) c.tyreNext = null;
+    if (c.pitPlan) c.pitPlan.stage = 'out';
+    this.events.push({ k: 'stopDone', id: c.id, t: Math.round(ps.dur * 10) / 10, tyre: ps.k });
+  };
+  /* An AI car in a race (at the line, and at the start): time to come in at the end of this lap? As planned; earlier if
+     the tyres are worn out; before the end if the compulsory stop is still to do; (the weather: see part 4). */
+  Session.prototype.aiPitCall = function (c) {
+    if (!c.isAI || c.finished || c.out || c.pitPlan || !this.track.pit || this.type !== 'race') return;
+    const left = this.laps - c.lapsDone;              // laps to go, counting this one
+    if (left < 1) return;
+    let k = null, urgent = false;
+    const next = c.strat && c.strat.stops.length > c.stops ? c.strat.stops[c.stops] : null;
+    const lw = this.lineWet(), need = this.weatherOn ? weatherNeed(c.tyre.c, lw) : null;
+    if (need) {
+      // the weather has changed: rain tyres (or slicks again); on the last lap only for rain on slicks
+      if (left >= 2 || (need !== 'dry' && lw > 0.35)) { k = need === 'dry' ? F1.tyreForLaps(Math.max(1, left - 1)) : need; urgent = true; }
+    } else if (!SLICK[c.tyre.c]) {
+      // on rain tyres in the rain: the dry plan waits; a worn-out set is changed for a new one
+      if (this.tyres && c.tyre.w > 0.9 && left >= 3) { k = c.tyre.c; urgent = true; }
+    }
+    else if (next && c.lapsDone + 1 >= next.lap && left >= 2) k = next.c;
+    else if (this.tyres && c.tyre.w > 0.86 && left >= 2) { k = F1.tyreForLaps(left - 1); urgent = true; }
+    else if (this.mustStop && c.stops === 0 && !c.usedWet && left <= 2) { k = F1.tyreForLaps(left - 1); urgent = true; }
+    if (k === null) return;
+    // the team-mate is in the pits right now: wait a lap if there is time (they share the box)
+    const mate = this.cars.find(function (o) { return o !== c && o.team === c.team && !o.out && o.pitPlan && o.pitPlan.why === 'stop'; });
+    if (mate && !urgent && left > 2) return;
+    c.pitPlan = { stage: 'in', why: 'stop', entered: false, tyre: k };
+  };
+
+  /* How many AI cars should be out on track now (see runShare). */
+  Session.prototype.runTarget = function () {
+    const ais = this.cars.filter(function (c) { return c.isAI && !c.out; }), n = ais.length;
+    if (n <= 4) return n;
+    let f;
+    if (this.laps > 0) f = Math.min(1, this.time / ((this.laps + 1.6) * this.refLap * 1.02));
+    else { const per = clamp(6 * this.refLap, 420, 720); f = (this.time % per) / per; }
+    if (this.time - this.runMinAt > 45) {             // the quietest it gets: mostly 5 or 6 cars, sometimes 4
+      const x = this.rng();
+      this.runMin = x < 0.2 ? 4 : x < 0.6 ? 5 : 6;
+      this.runMinAt = this.time;
+    }
+    let t = Math.max(Math.round(n * runShare(f)), Math.min(n, this.runMin));
+    if (n <= 6) t = Math.max(t, n - 1);               // a small field stays out more
+    return Math.min(n, t);
+  };
+
+  /* Practice traffic (twice a second): let cars out of their garages when too few are on track, bring a car in
+     early when too many are. Runs end by themselves after their laps. */
+  Session.prototype.practiceTraffic = function () {
+    const self = this, target = this.runTarget();
+    const ais = this.cars.filter(function (c) { return c.isAI && !c.out; });
+    const isOut = function (c) { return !c.gar ? !(c.pitPlan && c.pitPlan.why === 'garage' && c.pitPlan.stage === 'in') : c.gar.k === 'out'; };
+    const out = ais.filter(isOut);
+    const short = this.laps > 0;
+    if (out.length < target && this.time - this.runRelease > (short ? 2.5 : 4)) {
+      let best = null;
+      ais.forEach(function (c) {
+        if (!c.gar || c.gar.k !== 'park') return;
+        if (c.gDwell === undefined) c.gDwell = short ? 18 + self.rng() * 30 : 35 + self.rng() * 70;
+        if (self.time - c.gar.at < c.gDwell) return;
+        if (!best || c.gar.at < best.gar.at) best = c;
+      });
+      if (best) { best.gDwell = undefined; newRun(this, best); garageMove(this, best, 'out'); this.runRelease = this.time; }
+    } else if (out.length > target + 1) {
+      // too many out: the car that has done the most laps on this run comes in at the end of this lap
+      let pick = null;
+      out.forEach(function (c) { if (!c.gar && !c.pitPlan && c.run && c.run.n >= 1 && (!pick || c.run.n > pick.run.n)) pick = c; });
+      if (pick) { pick.run.goal = pick.run.n; pick.pitPlan = { stage: 'in', why: 'garage', entered: false }; }
+    }
   };
 
   /* Throttle while the red lights are on = jump start: the car creeps forward, the brakes hold it again,
@@ -961,10 +1637,10 @@
     const cars = this.cars, T = this.track;
     for (let i = 0; i < cars.length; i++) {
       const A = cars[i];
-      if (A.out) continue;
+      if (A.out || A.gar) continue;
       for (let j = i + 1; j < cars.length; j++) {
         const B = cars[j];
-        if (B.out) continue;
+        if (B.out || B.gar) continue;
         const dx = B.x - A.x, dy = B.y - A.y;
         if (dx * dx + dy * dy > 33) continue;
         if (T.bridge && F1.levelAt(T, A.s) * F1.levelAt(T, B.s) < 0) continue;   // one on the bridge, one underneath
@@ -978,12 +1654,13 @@
     if (this.phase !== 'countdown') return;
     const t = this.time;
     if (this.type === 'race') {
-      this.lights = t >= 5.5 ? 5 : t >= 4.5 ? 4 : t >= 3.5 ? 3 : t >= 2.5 ? 2 : t >= 1.5 ? 1 : 0;
+      const tl = t - this.gridT;                    // (with tyre wear: a few seconds to pick tyres before the lights)
+      this.lights = tl >= 5.5 ? 5 : tl >= 4.5 ? 4 : tl >= 3.5 ? 3 : tl >= 2.5 ? 2 : tl >= 1.5 ? 1 : 0;
       if (t >= this.lightsOutAt) {
         this.phase = 'running';
         this.lights = 0;
         this.startTime = this.lightsOutAt;
-        for (let i = 0; i < this.cars.length; i++) this.cars[i].lapStart = this.startTime;
+        for (let i = 0; i < this.cars.length; i++) { this.cars[i].lapStart = this.startTime; this.aiPitCall(this.cars[i]); }
         this.events.push({ k: 'lightsOut' });
       }
     } else if (this.type === 'quali' && t >= 3) {
@@ -1078,6 +1755,12 @@
   };
 
   Session.prototype.onLine = function (c, t) {
+    c.tyre.laps++;
+    if (c.run && !c.inPit) {
+      c.run.n++;
+      if (this.weatherOn && weatherNeed(c.tyre.c, this.lineWet())) c.run.goal = c.run.n;    // wrong tyres now: come in
+      if (c.run.n >= c.run.goal && !c.pitPlan) c.pitPlan = { stage: 'in', why: 'garage', entered: false };
+    }
     if (this.type === 'race') {
       if (this.phase === 'countdown' || c.maxLine < 2) return;
       this.recordLap(c, t - c.lapStart);
@@ -1087,6 +1770,12 @@
       else if (!this.finalLapAnnounced && this.leaderFinishTime === null && c.lapsDone === this.laps - 1 && this.laps > 1) {
         this.finalLapAnnounced = true;
         this.events.push({ k: 'finalLap' });
+      }
+      if (!c.finished) {
+        this.aiPitCall(c);
+        // a player who still has to make the compulsory stop: reminders over the last laps
+        const left = this.laps - c.lapsDone;
+        if (!c.isAI && this.mustStop && c.stops === 0 && !c.usedWet && !c.pitStop && left <= 3 && left >= 1) this.events.push({ k: 'mustStop', id: c.id, left: left });
       }
       return;
     }
@@ -1141,6 +1830,10 @@
   Session.prototype.finishCar = function (c, t) {
     c.finished = true;
     c.finishTime = t;
+    if (this.mustStop && c.stops === 0 && !c.usedWet) {    // the compulsory pit stop was not made
+      c.penalty += 30;
+      this.events.push({ k: 'noStop', id: c.id });
+    }
     c.finishPos = ++this.finishCount;
     if (this.leaderFinishTime === null) {
       this.leaderFinishTime = t;
@@ -1243,10 +1936,22 @@
     const self = this;
     let order = this.order.map(function (id) { return self.byId[id]; });
     if (this.type === 'race') {
-      // time penalties: cars that finished on the same lap are ordered by their time plus penalties
-      const fin = order.filter(function (c) { return c.finished && !c.out; });
-      fin.sort(function (a, b) { return (b.lapsDone - a.lapsDone) || ((a.finishTime + a.penalty) - (b.finishTime + b.penalty)); });
-      order = fin.concat(order.filter(function (c) { return !(c.finished && !c.out); }));
+      // time penalties: cars that end on the same lap are ordered by their time plus penalties (a car still on its
+      // last lap: the leader's time plus its gap), so a big penalty (no pit stop: 30 s) can drop a car behind one
+      // that has not crossed the line yet
+      const lf = this.leaderFinishTime;
+      const idx = new Map(order.map(function (c, i) { return [c, i]; }));
+      const live = order.filter(function (c) { return !c.out; });
+      const done = function (c) { return c.finished ? c.lapsDone : c.lapsDone + 1; };
+      const est = function (c) { return c.finished ? c.finishTime + c.penalty : lf === null ? Infinity : lf + c.gap + c.penalty; };
+      live.sort(function (a, b) {
+        const d = done(b) - done(a);
+        if (d) return d;
+        const lead = done(a) >= self.laps;
+        if (lead || (a.finished && b.finished)) return (est(a) - est(b)) || (idx.get(a) - idx.get(b));
+        return idx.get(a) - idx.get(b);
+      });
+      order = live.concat(order.filter(function (c) { return c.out; }));
       this.order = order.map(function (c) { return c.id; });
       order.forEach(function (c, i) { c.pos = i + 1; });
       const w = order[0];
@@ -1254,8 +1959,8 @@
       const rows = order.map(function (c, i) {
         let gap;
         if (c.out) gap = c.left ? 'LEFT' : 'DNF';
-        else if (i === 0) gap = w.finished ? F1.fmtLap(w.finishTime - self.startTime + w.penalty) : 'LEADER';
-        else if (c.finished && c.lapsDone >= w.lapsDone) gap = '+' + ((c.finishTime + c.penalty) - (w.finishTime + w.penalty)).toFixed(3) + 's';
+        else if (i === 0) gap = isFinite(est(w)) ? F1.fmtLap(est(w) - self.startTime) : 'LEADER';
+        else if (done(c) >= done(w) && isFinite(est(c)) && isFinite(est(w))) gap = '+' + (est(c) - est(w)).toFixed(3) + 's';
         else {
           // not yet across the line: still on the lead lap -> time gap from the timing loops
           const behind = (w.lapsDone || self.laps) - c.lapsDone - (c.finished ? 0 : 1);
@@ -1267,7 +1972,8 @@
         const isFl = c === fl, flPt = isFl && i < 10;
         const pts = (POINTS[i] || 0) + (flPt ? 1 : 0);
         return { pos: i + 1, id: c.id, driverId: c.driverId, isAI: c.isAI, name: c.name, laps: c.lapsDone, best: c.bestLap, gap: gap, out: c.out, left: !!c.left, pts: pts,
-          grid: c.grid, gained: c.out ? 0 : c.grid - (i + 1), ovt: c.overtakes, pen: c.penalty, fl: isFl, flPt: flPt };
+          grid: c.grid, gained: c.out ? 0 : c.grid - (i + 1), ovt: c.overtakes, pen: c.penalty, fl: isFl, flPt: flPt,
+          tyres: self.tyres || self.weatherOn ? c.tyreHist.join('') : '' };
       });
       this.stats = this.raceStats(rows);
       return rows;
