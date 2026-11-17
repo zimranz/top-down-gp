@@ -190,13 +190,13 @@
     toast(muted && !Input.touch.active ? 'Sound off (M to turn it back on)' : muted ? 'Sound off' : 'Sound on');
   }
   let toastT = null;
-  function toast(msg) {
+  function toast(msg, ms) {
     const t = $('toast');
     t.textContent = msg;
     t.classList.toggle('high', mode !== 'menu' && !!game && game.kind !== 'attract');   // above the dashboard while driving
     t.classList.add('show');
     clearTimeout(toastT);
-    toastT = setTimeout(function () { t.classList.remove('show'); }, 2600);
+    toastT = setTimeout(function () { t.classList.remove('show'); }, ms || 2600);
   }
   function el(tag, cls, text) {
     const e = document.createElement(tag);
@@ -615,7 +615,8 @@
      o = { title, banner: { text, small } | null, calendar, drivers: [{ me, name, sub, color, cells: [{ text, cls, title }], pts }],
            teams: [{ me, name, color, pts }], note, next, newb, menu, car: { options, value } | null } */
   const CODES = { suzuka: 'JPN', jeddah: 'KSA', montreal: 'CAN', monaco: 'MON', redbullring: 'AUT', silverstone: 'GBR', spa: 'BEL', zandvoort: 'NED', monza: 'ITA',
-    baku: 'AZE', singapore: 'SGP', interlagos: 'BRA', lasvegas: 'LVG', abudhabi: 'UAE' };
+    baku: 'AZE', singapore: 'SGP', interlagos: 'BRA', lasvegas: 'LVG', abudhabi: 'UAE',
+    australia: 'AUS', china: 'CHN', bahrain: 'BHR', miami: 'MIA', barcelona: 'ESP' };
   function renderStandings(o) {
     $('st-title').textContent = o.title;
     const banner = $('st-banner');
@@ -872,6 +873,13 @@
     segInit($('set-camera'), d.camera, function (v) { d.camera = v; Settings.save(); });
     segInit($('set-zoom'), d.zoom || 'normal', function (v) { d.zoom = v; Settings.save(); });
     segInit($('set-units'), d.units === 'mph' ? 'mph' : 'kmh', function (v) { d.units = v; Settings.save(); });
+    const gfxWords = function () {
+      $('set-graphics-note').textContent = d.graphics === 'sharp' ? 'Always the full picture, even if the game can\'t keep up.'
+        : d.graphics === 'light' ? 'Always lighter graphics: smoother on a slow phone or computer (fewer effects, a slightly softer picture).'
+          : 'Full graphics, switching to lighter ones by itself if the game can\'t keep up.';
+    };
+    segInit($('set-graphics'), d.graphics, function (v) { d.graphics = v; Settings.save(); gfxWords(); applyGraphics(); });
+    gfxWords();
     $('set-touch').value = d.touchSteer;
     $('set-touch-val').textContent = d.touchSteer;
     $('set-touch').oninput = function () { d.touchSteer = Number(this.value); $('set-touch-val').textContent = this.value; Settings.save(); window.TouchUI.refresh(); };
@@ -1694,17 +1702,25 @@
   let last = performance.now(), acc = 0;
   /* Smoothness watch: while you drive, if many frames take too long (under about 45 frames a second), the game
      switches to lighter graphics by itself for the rest of the visit. */
-  const perf = { t: 0, slow: 0, since: 0 };
+  const perf = { t: 0, slow: 0, since: 0, autoLite: false };
+  applyGraphics();
+  /* The Graphics setting: Light = lighter graphics always; Sharp = never; Auto = full, lighter by itself when needed. */
+  function applyGraphics() {
+    const g = Settings.data.graphics;
+    if (g === 'light') R.setLite(true);
+    else if (g === 'sharp') R.setLite(false);
+    else if (!perf.autoLite) R.setLite(false);
+  }
   function watchFrames(dt, driving) {
-    if (R.lite || !driving || document.hidden) { perf.t = 0; perf.slow = 0; perf.since = 0; return; }
+    if (R.lite || Settings.data.graphics !== 'auto' || !driving || document.hidden) { perf.t = 0; perf.slow = 0; perf.since = 0; return; }
     perf.since += dt;
     if (perf.since < 3) return;                      // the first moments of a session (loading) do not count
     perf.t += dt;
     if (dt > 0.022) perf.slow += dt;
     if (perf.t < 4) return;
     if (perf.slow / perf.t > 0.45) {
-      R.setLite(true);
-      toast('Lighter graphics turned on to keep the game smooth');
+      R.setLite(true); perf.autoLite = true;
+      toast('Lighter graphics turned on to keep the game smooth (Settings → Graphics)', 6000);
     }
     perf.t = 0; perf.slow = 0;
   }
@@ -1781,6 +1797,7 @@
   window.addEventListener('keydown', function (e) {
     if (e.code === 'Enter' && garShown !== null && !e.repeat && game) { game.goOut = true; e.preventDefault(); }
   });
+  let menuOdd = false;
   function frame(now) {
     let dt = (now - last) / 1000;
     last = now;
@@ -1789,7 +1806,15 @@
     let steps = 0;
     while (acc >= F1.DT && steps < 6) { game.step(); acc -= F1.DT; steps++; }
     if (steps >= 6) acc = 0;
-    try { game.render(R, acc / F1.DT, dt); } catch (err) { console.error(err); }
+    // phones and tablets: the race behind the menus is drawn less, so the menus stay quick to scroll: every other frame
+    // behind the home screen, and not at all behind the other menus (they cover it)
+    let draw = true;
+    if (game.kind === 'attract' && Input.touch.active) {
+      const scr = document.querySelector('#overlay .screen.active');
+      if (scr && scr.id !== 'home') draw = false;
+      else { menuOdd = !menuOdd; draw = menuOdd; }
+    }
+    if (draw) { try { game.render(R, acc / F1.DT, dt); } catch (err) { console.error(err); } }
     // sound: only while a session is on screen (not in menus, pause or results)
     const audioOn = mode !== 'menu' && game.kind !== 'attract' && $('overlay').classList.contains('hidden') && $('pause').classList.contains('hidden') && !(game.resumeT > 0) && !game.frozen;
     GameAudio.setActive(audioOn);

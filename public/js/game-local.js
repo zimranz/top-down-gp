@@ -230,7 +230,8 @@
     return {
       listener: { x: f.x, y: f.y, a: f.a, vx: f.vx, vy: f.vy }, own: own, cars: cars,
       lights: S.phase === 'countdown' ? S.lights : 0,
-      countdown: S.type === 'quali' && S.phase === 'countdown' ? Math.max(0, Math.ceil(3 - S.time)) : 0
+      countdown: S.type === 'quali' && S.phase === 'countdown' ? Math.max(0, Math.ceil(3 - S.time)) : 0,
+      wx: S.weatherOn ? { rain: S.rain, wet: S.wet * (1 - 0.5 * S.lineDry) } : null      // (a dry line throws up less spray)
     };
   };
 

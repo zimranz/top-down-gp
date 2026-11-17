@@ -47,18 +47,6 @@
     wetLampSprite = c;
     return c;
   }
-  let spraySprite = null;
-  /* A soft grey-white puff (the spray thrown up behind a car on a wet track). */
-  function getSpraySprite() {
-    if (spraySprite) return spraySprite;
-    const c = document.createElement('canvas');
-    c.width = 64; c.height = 64;
-    const g = c.getContext('2d'), gr = g.createRadialGradient(32, 32, 0, 32, 32, 32);
-    gr.addColorStop(0, 'rgba(226,232,240,0.9)'); gr.addColorStop(0.45, 'rgba(214,222,232,0.45)'); gr.addColorStop(1, 'rgba(205,214,226,0)');
-    g.fillStyle = gr; g.fillRect(0, 0, 64, 64);
-    spraySprite = c;
-    return c;
-  }
   /* '#rrggbb' colours mixed: a + (b - a) * t. */
   function mixHex(a, b, t) {
     const pa = parseInt(a.slice(1), 16), pb = parseInt(b.slice(1), 16);
@@ -82,12 +70,21 @@
     this.lastFrame = performance.now();
     this.resize();
     const self = this;
-    window.addEventListener('resize', function () { self.resize(); });
+    // turning a phone sends a burst of size changes: stretch the picture at once, make the new canvas once it settles
+    let rt = null;
+    const later = function () {
+      self.cv.style.width = window.innerWidth + 'px'; self.cv.style.height = window.innerHeight + 'px';
+      clearTimeout(rt); rt = setTimeout(function () { self.resize(); }, 150);
+    };
+    window.addEventListener('resize', later);
+    window.addEventListener('orientationchange', later);
   }
 
   Renderer.prototype.resize = function () {
-    // lighter graphics (switched on by itself when frames take too long): one canvas pixel per screen pixel
-    this.dpr = Math.min(this.lite ? 1 : 2, window.devicePixelRatio || 1);
+    // lighter graphics: fewer canvas pixels. On a computer one per screen pixel; on a phone (whose screen packs in two or
+    // three times as many) one and a half, so the picture stays sharp, not blurry
+    const phone = !!(window.matchMedia && window.matchMedia('(pointer: coarse)').matches);
+    this.dpr = Math.min(this.lite ? (phone ? 1.5 : 1) : 2, window.devicePixelRatio || 1);
     this.w = window.innerWidth;
     this.h = window.innerHeight;
     this.cv.width = Math.round(this.w * this.dpr);
@@ -268,6 +265,22 @@
     G.pal = PAL;
     const CH = 40;
     function off(i, d) { return [X[i] + NX[i] * d, Y[i] + NY[i] * d]; }
+    // how far the run-off reaches from the centre line at each sample: the run-off is a line as wide as the barrier
+    // distance (rounded to a metre) with round ends, so next to a wider part it reaches a bit further
+    const edgeAt = new Float32Array(N);
+    {
+      const RW = new Float32Array(N);
+      for (let i = 0; i < N; i++) RW[i] = Math.round(T.wall[i]);
+      for (let i = 0; i < N; i++) {
+        let e = RW[i];
+        const J = Math.ceil(T.maxWall / T.ds) + 1;
+        for (let j = -J; j <= J; j++) {
+          const w = RW[(i + j + N) % N], d = Math.abs(j) * T.ds;
+          if (w > e && d < w) e = Math.max(e, Math.sqrt(w * w - d * d));
+        }
+        edgeAt[i] = e;
+      }
+    }
     for (let c0 = 0; c0 < N; c0 += CH) {
       const c1 = Math.min(N, c0 + CH);
       const ch = { center: new Path2D(), runoff: [], edges: new Path2D(), kerbR: new Path2D(), kerbW: new Path2D(), kerbAll: new Path2D(), gravel: new Path2D(),
@@ -291,6 +304,28 @@
           ch.lamps.push([X[i] + NX[i] * d, Y[i] + NY[i] * d]);
         }
       }
+      // the barrier along the edge of the run-off: a grey (armco) line outside a coloured one, both sides
+      // (at the edge of the run-off as drawn: where its width changes, the wider part's round edge reaches a little
+      // further along, see edgeAt)
+      ch.armcoLine = new Path2D(); ch.barrierLine = new Path2D();
+      for (const side of [-1, 1]) {
+        for (let k = c0; k <= c1; k++) {
+          const i = k % N, w = edgeAt[i], a = off(i, side * (w + 0.9)), b = off(i, side * (w + 0.3));
+          if (k === c0) { ch.armcoLine.moveTo(a[0], a[1]); ch.barrierLine.moveTo(b[0], b[1]); }
+          else { ch.armcoLine.lineTo(a[0], a[1]); ch.barrierLine.lineTo(b[0], b[1]); }
+        }
+      }
+      // the run-off (grass) as one outline: out to the edge on one side, back along the other. On the inside of a bend
+      // tighter than the run-off is wide, the edge is kept short of the bend's centre (the outline would fold over
+      // itself there); the parts of the track either side of the bend cover that ground anyway.
+      ch.grass = new Path2D();
+      const edgeOff = function (i, side) {
+        const k = T.curv[i], inner = k !== 0 && Math.sign(k) === -side;
+        return inner ? Math.min(edgeAt[i], 0.9 / Math.abs(k)) : edgeAt[i];
+      };
+      for (let k = c0; k <= c1; k++) { const i = k % N, a = off(i, edgeOff(i, 1)); if (k === c0) ch.grass.moveTo(a[0], a[1]); else ch.grass.lineTo(a[0], a[1]); }
+      for (let k = c1; k >= c0; k--) { const i = k % N, a = off(i, -edgeOff(i, -1)); ch.grass.lineTo(a[0], a[1]); }
+      ch.grass.closePath();
       // run-off groups by (rounded) barrier distance
       let gStart = c0, gW = Math.round(T.wall[c0 % N]);
       for (let k = c0 + 1; k <= c1 + 1; k++) {
@@ -520,6 +555,31 @@
     mc.lineJoin = 'round';
     const tracePath = function () { mc.beginPath(); for (let i = 0; i <= N; i += 3) { const k = i % N; const px = X[k] * sc + ox, py = Y[k] * sc + oy; if (i === 0) mc.moveTo(px, py); else mc.lineTo(px, py); } mc.closePath(); };
     tracePath(); mc.strokeStyle = 'rgba(0,0,0,0.65)'; mc.lineWidth = 7; mc.stroke();
+    // the pit lane: a thinner grey road beside the track line. At this size the real gap (about 20 m) would
+    // be lost under the track line, so the lane is pushed out a little (and the cars in it with it, see miniXY)
+    let miniPit = null;
+    if (T.pit) {
+      const P = T.pit, pi = F1.pitInfo(T), edge = T.hw - 2.5;
+      const extra = Math.max(0, 7.5 / sc - P.off);       // at least 7.5 px from the centre of the track line
+      const mapOff = function (idx, a) {                 // real distance from the centre line (pit side) -> on the map
+        const po = T.pitOff[idx];
+        if (po !== po || extra === 0) return a;
+        const aa = Math.min(a, po);                      // cars in the garages sit on the lane
+        return aa + extra * Math.max(0, Math.min(1, (aa - edge) / (P.off - edge)));
+      };
+      const pitPath = function () {
+        mc.beginPath();
+        const n = Math.max(2, Math.ceil(pi.total / 6));
+        for (let j = 0; j <= n; j++) {
+          const s = P.s0 + pi.total * j / n, idx = F1.idxAt(T, s), po = T.pitOff[idx];
+          const p = F1.trackPoint(T, s, P.side * mapOff(idx, po === po ? po : edge));
+          if (j) mc.lineTo(p.x * sc + ox, p.y * sc + oy); else mc.moveTo(p.x * sc + ox, p.y * sc + oy);
+        }
+      };
+      pitPath(); mc.strokeStyle = 'rgba(0,0,0,0.65)'; mc.lineWidth = 5; mc.stroke();
+      pitPath(); mc.strokeStyle = '#a7b0ba'; mc.lineWidth = 2.2; mc.stroke();
+      miniPit = { side: P.side, mapOff: mapOff };
+    }
     tracePath(); mc.strokeStyle = '#e9edf1'; mc.lineWidth = 3; mc.stroke();
     // a bridge (Suzuka): the upper road drawn again on top, with dark edges, so it reads as an overpass
     if (T.bridge) {
@@ -542,7 +602,7 @@
       mc.fillRect(-2 + a * 2, -6 + b * 2, 2, 2);
     }
     mc.restore();
-    G.mini = { canvas: mm, size: MS, sc: sc, ox: ox, oy: oy };
+    G.mini = { canvas: mm, size: MS, sc: sc, ox: ox, oy: oy, pit: miniPit, hints: {} };
 
     // grass stripes pattern (in world metres)
     const pc = document.createElement('canvas');
@@ -732,20 +792,46 @@
     ctx.lineJoin = 'round'; ctx.lineCap = 'round';
     // the visible track sections are merged into one shape per layer and drawn in one go:
     // drawing them section by section leaves hairline seams where the sections meet
-    const merge = function (key) { const p = new Path2D(); for (const ch of vis) p.addPath(ch[key]); return p; };
+    // (kept from frame to frame until the set of visible sections changes: less work and less garbage each frame)
+    let visKey = '';
+    for (const ch of vis) { if (ch.k === undefined) ch.k = G.chunks.indexOf(ch); visKey += ch.k + ','; }
+    if (G.mergeKey !== visKey) { G.mergeKey = visKey; G.merged = {}; }
+    const merged = G.merged;
+    const merge = function (key) {
+      let p = merged[key];
+      if (!p) { p = new Path2D(); for (const ch of vis) p.addPath(ch[key]); merged[key] = p; }
+      return p;
+    };
     // night: the floodlights light up a corridor around the track, fading into the dark
     if (night && G.light && !this.lite) {
       const Lm = G.light;
       ctx.imageSmoothingEnabled = true;
       ctx.drawImage(Lm.glow, Lm.x0, Lm.y0, Lm.w, Lm.h);
     }
-    // barriers + run-off
-    for (const ch of vis) for (const g of ch.runoff) { ctx.strokeStyle = COL.armco; ctx.lineWidth = 2 * g.w + 2.4; ctx.stroke(g.path); }
-    for (const ch of vis) for (const g of ch.runoff) { ctx.strokeStyle = COL.barrier; ctx.lineWidth = 2 * g.w + 1.2; ctx.stroke(g.path); }
-    ctx.strokeStyle = T.street ? COL.runoffSt : G.grassPattern || COL.grassA;
-    for (const ch of vis) for (const g of ch.runoff) { ctx.lineWidth = 2 * g.w; ctx.stroke(g.path); }
+    // barriers + run-off. (Drawn cheaply: where the track winds back on itself, as in the Interlagos infield, the
+    // run-off of many parts of the track covers the same ground. The barriers used to be two more very wide bands under
+    // the grass, and the grass was painted with its stripe pattern band over band: frames of 50-100 ms on a computer
+    // without graphics acceleration. Now the barriers are thin lines, the grass is plain colour, and the stripes are
+    // painted once through the shape of the stripes.)
+    ctx.lineCap = 'butt';
+    ctx.strokeStyle = COL.armco; ctx.lineWidth = 0.66; ctx.stroke(merge('armcoLine'));
+    ctx.strokeStyle = COL.barrier; ctx.lineWidth = 0.66; ctx.stroke(merge('barrierLine'));
+    ctx.lineCap = 'round';
+    const grass = merge('grass');
+    ctx.fillStyle = T.street ? COL.runoffSt : COL.grassA;
+    ctx.fill(grass);
+    if (!T.street && !this.lite && !night) {
+      // mown stripes, 12 m wide, fixed to the ground (not at night: in the dark the two greens look the same)
+      const st = new Path2D(), x0 = Math.floor((vc[0] - vr) / 24) * 24;
+      for (let x = x0; x < vc[0] + vr; x += 24) st.rect(x, vc[1] - vr, 12, 2 * vr);
+      ctx.save(); ctx.clip(st);
+      ctx.fillStyle = COL.grassB; ctx.fill(grass);
+      ctx.restore();
+    }
     ctx.fillStyle = G.gravelPattern || COL.gravel;
+    ctx.imageSmoothingEnabled = false;                 // (the gravel's grains: quicker without smoothing, looks the same)
     ctx.fill(merge('gravel'));
+    ctx.imageSmoothingEnabled = true;
     // rain: everything off the track gets darker (deeper green grass, wet run-off and buildings)
     const wx = frame.weather, wet = wx ? wx.wet : 0, rain = wx ? wx.rain : 0, ld = wx ? wx.ld : 0;
     if (wet > 0.02) {
@@ -854,6 +940,7 @@
 
     // spray behind the cars on a wet track (over the cars behind: in heavy rain it hides them)
     if (wet > 0.08) this.drawSpray(ctx, cars, wet * (1 - 0.5 * ld), vc, vr);
+    else if (this.trails) this.trails = null;
     // particles
     this.updateParticles(ctx, dt);
     // start-light gantry over the cars
@@ -862,14 +949,22 @@
     // labels in screen space
     ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
     if (night && !this.lite) {
-      // darker towards the edges of the screen: the light is where the cars are
-      const key = this.w + 'x' + this.h;
+      // darker towards the edges of the screen: the light is where the cars are (painted once into a picture the
+      // size of the screen: copying it is about three times quicker than working out the gradient every frame)
+      const key = this.w + 'x' + this.h + 'x' + dpr;
       if (!this.vig || this.vigKey !== key) {
-        const d = Math.hypot(this.w, this.h) / 2, gr = ctx.createRadialGradient(this.w / 2, this.h / 2, d * 0.35, this.w / 2, this.h / 2, d);
+        const vc2 = document.createElement('canvas');
+        vc2.width = Math.round(this.w * dpr); vc2.height = Math.round(this.h * dpr);
+        const vx = vc2.getContext('2d');
+        vx.scale(dpr, dpr);
+        const d = Math.hypot(this.w, this.h) / 2, gr = vx.createRadialGradient(this.w / 2, this.h / 2, d * 0.35, this.w / 2, this.h / 2, d);
         gr.addColorStop(0, 'rgba(2,3,12,0)'); gr.addColorStop(1, 'rgba(2,3,12,0.5)');
-        this.vig = gr; this.vigKey = key;
+        vx.fillStyle = gr; vx.fillRect(0, 0, this.w, this.h);
+        this.vig = vc2; this.vigKey = key;
       }
-      ctx.fillStyle = this.vig; ctx.fillRect(0, 0, this.w, this.h);
+      ctx.setTransform(1, 0, 0, 1, 0, 0);
+      ctx.drawImage(this.vig, 0, 0);
+      ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
     }
     // rain falling (and a greyer, darker picture when it pours)
     if (rain > 0.01 || this.rainP.length) this.drawRain(ctx, rain, wet, dt);
@@ -895,25 +990,66 @@
     return g;
   };
 
-  /* Spray: soft grey puffs trailing behind each car, bigger and thicker the faster it goes and the wetter it is. */
+  /* Spray: the mist a car throws up hangs in the air where the car has been and fades within a second, so it is drawn
+     along the car's path over the last 0.8 s: two thin streaks off the rear wheels that merge into one long, soft
+     plume (layers of different widths, each fading towards the far end). Longer and thicker at speed and in heavy
+     rain; a line of cars leaves a haze. Drawn over the cars: in heavy rain it hides the car behind. */
   Renderer.prototype.drawSpray = function (ctx, cars, wet, vc, vr) {
-    const sprite = getSpraySprite(), t = performance.now() / 1000, n = this.lite ? 2 : 4;
+    const now = performance.now() / 1000, LIFE = 0.8, TR = this.trails || (this.trails = {}), seen = {};
+    const lite = this.lite;
     for (let i = 0; i < cars.length; i++) {
       const c = cars[i];
       if (c.ghost || c.replay || c.garage) continue;
-      if (Math.abs(c.x - vc[0]) > vr + 30 || Math.abs(c.y - vc[1]) > vr + 30) continue;
+      seen[c.id] = 1;
+      let tr = TR[c.id];
+      if (!tr) tr = TR[c.id] = [];
+      const last = tr[tr.length - 1];
+      if (last && Math.hypot(c.x - last.x, c.y - last.y) > 25) tr.length = 0;          // (put back on the track)
+      if (!tr.length || Math.hypot(c.x - tr[tr.length - 1].x, c.y - tr[tr.length - 1].y) > 1.2) tr.push({ x: c.x, y: c.y, t: now });
+      while (tr.length && now - tr[0].t > LIFE) tr.shift();
+      if (Math.abs(c.x - vc[0]) > vr + 60 || Math.abs(c.y - vc[1]) > vr + 60) continue;
       const sp = Math.hypot(c.vx || 0, c.vy || 0), k = Math.min(1, Math.max(0, (sp - 12) / 50)) * wet;
       if (k < 0.04) continue;
-      const ux = c.vx / sp, uy = c.vy / sp, px = -uy, py = ux;
-      for (let j = 0; j < n; j++) {
-        const dist = 2.7 + j * (1.0 + sp * 0.036), r = (1.9 + j * 1.0) * (0.75 + 0.6 * k);
-        const wob = Math.sin(t * 9 + c.id * 1.7 + j * 2.1) * 0.35 * (1 + j * 0.3);
-        const x = c.x - ux * dist + px * wob, y = c.y - uy * dist + py * wob;
-        ctx.globalAlpha = Math.min(0.8, k * (0.78 - j * 0.1));
-        ctx.drawImage(sprite, x - r, y - r, 2 * r, 2 * r);
+      const ca = Math.cos(c.a), sa = Math.sin(c.a), rx = c.x - ca * 2.3, ry = c.y - sa * 2.3;
+      const pts = [[rx, ry]];
+      for (let q = tr.length - 1; q >= 0; q--) {
+        const p = tr[q];
+        if ((p.x - c.x) * ca + (p.y - c.y) * sa > -2.8) continue;         // only what is behind the car
+        pts.push([p.x, p.y]);
+      }
+      if (pts.length < 2) continue;
+      const end = pts[pts.length - 1], path = new Path2D();
+      path.moveTo(pts[0][0], pts[0][1]);
+      for (let q = 1; q < pts.length; q++) path.lineTo(pts[q][0], pts[q][1]);
+      // each layer: [width m, strength, [where along the plume (0 = the car .. 1 = the end), how strong there] ...]:
+      // the narrow core is thickest right behind the car, the wide ones build up further back: the plume spreads out
+      const fade = function (a, stops) {
+        const g = ctx.createLinearGradient(rx, ry, end[0], end[1]);
+        for (let q = 0; q < stops.length; q++) g.addColorStop(stops[q][0], 'rgba(220,228,237,' + (a * stops[q][1]).toFixed(3) + ')');
+        return g;
+      };
+      ctx.lineCap = 'round'; ctx.lineJoin = 'round';
+      const core = [2.2, 0.26, [[0, 1], [0.35, 0.6], [1, 0]]], mid = [4.2, 0.14, [[0, 0.25], [0.2, 1], [0.6, 0.5], [1, 0]]];
+      const wide = [6.6, 0.085, [[0, 0], [0.3, 1], [0.7, 0.6], [1, 0]]], haze = [9.2, 0.05, [[0, 0], [0.45, 1], [1, 0]]];
+      const layers = lite ? [mid, core] : [haze, wide, mid, core];
+      for (let q = 0; q < layers.length; q++) {
+        ctx.strokeStyle = fade(layers[q][1] * k * (0.8 + 0.4 * wet), layers[q][2]);
+        ctx.lineWidth = layers[q][0] * (0.75 + 0.35 * k);
+        ctx.stroke(path);
+      }
+      // two thin streaks straight off the rear wheels, merging into the plume
+      if (!lite) {
+        const px = -sa, py = ca, n = Math.min(pts.length, 4), wh = new Path2D();
+        for (const side of [-0.8, 0.8]) {
+          for (let q = 0; q < n; q++) {
+            const f = 1 - q / Math.max(1, n - 1), x = pts[q][0] + px * side * f, y = pts[q][1] + py * side * f;
+            if (q === 0) wh.moveTo(x, y); else wh.lineTo(x, y);
+          }
+        }
+        ctx.strokeStyle = fade(0.32 * k, [[0, 1], [0.3, 0.5], [1, 0]]); ctx.lineWidth = 0.55; ctx.stroke(wh);
       }
     }
-    ctx.globalAlpha = 1;
+    for (const id in TR) if (!seen[id]) delete TR[id];
   };
 
   /* Rain on the screen: thin, slightly see-through streaks falling at an angle (a few in light rain, dense and fast in
@@ -1369,22 +1505,52 @@
       ctx.fillStyle = 'rgba(10,10,14,0.55)';
       roundRect(ctx, mx, my, ms, ms, 8); ctx.fill();
       ctx.drawImage(mm.canvas, mx, my, ms, ms);
-      const k = ms / mm.size;
-      const cars = frame.cars;
-      // everyone else: small team-coloured dots
+      const k = ms / mm.size, T = frame.track;
+      // where a car goes on the map: cars in the pit lane (and in the garages) are drawn on the pit lane line
+      const q = this.miniQ || (this.miniQ = {}), pt = this.miniPt || (this.miniPt = [0, 0]);
+      const miniXY = function (c) {
+        let x = c.x, y = c.y;
+        if (mm.pit) {
+          const h = mm.hints[c.id] || (mm.hints[c.id] = { idx: -1, x: 0, y: 0 });
+          const near = h.idx >= 0 && Math.abs(h.x - x) + Math.abs(h.y - y) < 40;   // (else it jumped: search the whole track)
+          const r = F1.queryTrack(T, x, y, near ? h.idx : null, q);
+          h.idx = r.idx; h.x = x; h.y = y;
+          if (r.d * mm.pit.side > 0) {
+            const a = Math.abs(r.d), m = mm.pit.mapOff(r.idx, a);
+            if (m !== a) { const p = F1.trackPoint(T, r.s, mm.pit.side * m); x = p.x; y = p.y; }
+          }
+        }
+        pt[0] = mx + (x * mm.sc + mm.ox) * k; pt[1] = my + (y * mm.sc + mm.oy) * k;
+        return pt;
+      };
+      const dotR = phone ? 2.2 : compact ? 2.5 : 3;
       let meCar = null;
+      // cars in the garages: fainter, smaller dots on the pit lane
+      const gar = frame.garage || [];
+      ctx.globalAlpha = 0.55;
+      for (let i = 0; i < gar.length; i++) {
+        const c = gar[i];
+        if (c.me) { meCar = c; continue; }
+        const p = miniXY(c);
+        ctx.beginPath(); ctx.arc(p[0], p[1], dotR * 0.8, 0, TAU);
+        ctx.fillStyle = F1.teamUiColor(c.team); ctx.fill();
+        ctx.lineWidth = 1; ctx.strokeStyle = 'rgba(0,0,0,0.7)'; ctx.stroke();
+      }
+      ctx.globalAlpha = 1;
+      // everyone else: small team-coloured dots
+      const cars = frame.cars;
       for (let i = 0; i < cars.length; i++) {
         const c = cars[i];
         if (c.replay) continue;
         if (c.me) { meCar = c; continue; }
-        const px = mx + (c.x * mm.sc + mm.ox) * k, py = my + (c.y * mm.sc + mm.oy) * k;
-        ctx.beginPath(); ctx.arc(px, py, phone ? 2.2 : compact ? 2.5 : 3, 0, TAU);
+        const p = miniXY(c);
+        ctx.beginPath(); ctx.arc(p[0], p[1], dotR, 0, TAU);
         ctx.fillStyle = F1.teamUiColor(c.team); ctx.fill();
         ctx.lineWidth = 1; ctx.strokeStyle = 'rgba(0,0,0,0.7)'; ctx.stroke();
       }
       // you: an arrow pointing the way you are driving, on top of everything
       if (meCar) {
-        const px = mx + (meCar.x * mm.sc + mm.ox) * k, py = my + (meCar.y * mm.sc + mm.oy) * k, as = phone ? 0.75 : compact ? 0.85 : 1;
+        const mp = miniXY(meCar), px = mp[0], py = mp[1], as = phone ? 0.75 : compact ? 0.85 : 1;
         ctx.save();
         ctx.translate(px, py); ctx.rotate(meCar.a); ctx.scale(as, as);
         ctx.beginPath(); ctx.moveTo(9, 0); ctx.lineTo(-6, -6.5); ctx.lineTo(-2.5, 0); ctx.lineTo(-6, 6.5); ctx.closePath();

@@ -17,6 +17,7 @@
       if (this.data.units !== 'mph') this.data.units = 'kmh';
       this.data.touchSteer = F1.clamp(Math.round(Number(this.data.touchSteer) || 5), 1, 10);
       if (this.data.touchMode !== 'slide') this.data.touchMode = 'arrows';      // phones: arrow buttons unless the slider was chosen
+      if (['auto', 'sharp', 'light'].indexOf(this.data.graphics) < 0) this.data.graphics = 'auto';   // lighter graphics: by itself / never / always
       this.data.keys = cleanKeys(this.data.keys);
     },
     save: function () {

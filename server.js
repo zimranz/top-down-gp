@@ -36,7 +36,7 @@ const io = new Server(server, { pingInterval: 10000, pingTimeout: 20000 });
 // Build tracks (racing lines, AI speed profiles) once at start-up.
 Object.keys(F1.TRACK_DEFS).forEach(function (id) {
   const T = F1.getTrack(id);
-  ['easy', 'medium', 'hard'].forEach(function (lv) { F1.speedProfile(T, lv); });
+  Object.keys(F1.AI_LEVELS).forEach(function (lv) { F1.speedProfile(T, lv); });
   F1.refLapTime(T);
 });
 
@@ -301,7 +301,7 @@ function cleanSeason(s, key) {
   if (cal.length < 2) return null;
   const o = s.opts || {};
   const opts = { p1: intIn(o.p1, 0, 3, 0), p2: intIn(o.p2, 0, 3, 0), p3: intIn(o.p3, 0, 3, 0), qualiLaps: intIn(o.qualiLaps, 0, 5, 2),
-    raceLaps: intIn(o.raceLaps, 1, MAX_RACE_LAPS, 5), aiLevel: F1.AI_LEVELS[o.aiLevel] ? o.aiLevel : 'medium', aiCount: 0 };
+    raceLaps: intIn(o.raceLaps, 1, MAX_RACE_LAPS, 5), aiLevel: F1.isAILevel(o.aiLevel) ? o.aiLevel : 'medium', aiCount: 0 };
   opts.reverseGrid = !!o.reverseGrid && opts.qualiLaps > 0;
   // race conditions (a season saved before version 10 has none of them: it carries on as it was)
   opts.drafting = o.drafting === true; opts.tyreWear = o.tyreWear === true; opts.weather = o.weather === true;
@@ -794,7 +794,7 @@ io.on('connection', function (socket) {
     if (s.reverseGrid !== undefined) st.reverseGrid = s.reverseGrid === true;
     if (s.raceLaps !== undefined) st.raceLaps = intIn(s.raceLaps, 1, MAX_RACE_LAPS, st.raceLaps);
     if (s.aiCount !== undefined) st.aiCount = intIn(s.aiCount, 0, GRID_SIZE - 1, st.aiCount);
-    if (s.aiLevel && F1.AI_LEVELS[s.aiLevel]) st.aiLevel = s.aiLevel;
+    if (F1.isAILevel(s.aiLevel)) st.aiLevel = s.aiLevel;
     if (s.drafting !== undefined) st.drafting = s.drafting !== false;
     if (s.tyreWear !== undefined) st.tyreWear = s.tyreWear !== false;
     if (s.weather !== undefined) st.weather = s.weather !== false;

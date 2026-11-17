@@ -497,7 +497,8 @@
     return {
       listener: { x: f.x, y: f.y, a: f.a, vx: f.vx, vy: f.vy }, own: own, cars: cars,
       lights: this.phase === 0 ? this.lights : 0,
-      countdown: this.type === 'quali' && this.phase === 0 ? Math.max(0, Math.ceil(3 - this.serverTime)) : 0
+      countdown: this.type === 'quali' && this.phase === 0 ? Math.max(0, Math.ceil(3 - this.serverTime)) : 0,
+      wx: this.weatherOn ? { rain: this.wxV.rain, wet: this.wxV.wet * (1 - 0.5 * this.wxV.ld) } : null
     };
   };
 

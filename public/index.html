@@ -58,8 +58,8 @@
           <h3>AI cars on track</h3>
           <div class="row"><input type="range" id="practice-ai" min="0" max="21" value="10"><span class="val" id="practice-ai-val">10</span></div>
           <h3>AI difficulty</h3>
-          <div class="seg" id="practice-level">
-            <button data-v="easy">Easy</button><button data-v="medium" class="on">Medium</button><button data-v="hard">Hard</button>
+          <div class="seg levels" id="practice-level">
+            <button data-v="easy">Easy</button><button data-v="medium" class="on">Medium</button><button data-v="hard">Hard</button><button data-v="extrahard">Extra hard</button><button data-v="expert">Expert</button>
           </div>
           <h3>Collisions</h3>
           <label class="check"><input type="checkbox" id="practice-coll" checked> Cars can hit each other</label>
@@ -144,8 +144,8 @@
           <div class="row"><input type="range" id="gp-ai" min="1" max="21" value="15"><span class="val" id="gp-ai-val">15</span></div>
           <p class="note">Opponents are picked at random from the 2026 grid.</p>
           <h3>AI difficulty</h3>
-          <div class="seg" id="gp-level">
-            <button data-v="easy">Easy</button><button data-v="medium" class="on">Medium</button><button data-v="hard">Hard</button>
+          <div class="seg levels" id="gp-level">
+            <button data-v="easy">Easy</button><button data-v="medium" class="on">Medium</button><button data-v="hard">Hard</button><button data-v="extrahard">Extra hard</button><button data-v="expert">Expert</button>
           </div>
           <h3>Conditions</h3>
           <div class="cond-box">
@@ -192,8 +192,8 @@
           <div class="row"><input type="range" id="champ-ai" min="1" max="21" value="15"><span class="val" id="champ-ai-val">15</span></div>
           <p class="note">The same rivals race you all season.</p>
           <h3>AI difficulty</h3>
-          <div class="seg" id="champ-level">
-            <button data-v="easy">Easy</button><button data-v="medium" class="on">Medium</button><button data-v="hard">Hard</button>
+          <div class="seg levels" id="champ-level">
+            <button data-v="easy">Easy</button><button data-v="medium" class="on">Medium</button><button data-v="hard">Hard</button><button data-v="extrahard">Extra hard</button><button data-v="expert">Expert</button>
           </div>
           <h3>Conditions</h3>
           <div class="cond-box">
@@ -298,7 +298,7 @@
             <label title="The race starts in the opposite order to qualifying: the fastest starts last">Reverse grid<select id="set-reverse"><option value="0">Off</option><option value="1">On</option></select></label>
             <label>Race laps<select id="set-race"></select></label>
             <label>AI cars<select id="set-ai"></select></label>
-            <label>AI difficulty<select id="set-level"><option value="easy">Easy</option><option value="medium">Medium</option><option value="hard">Hard</option></select></label>
+            <label>AI difficulty<select id="set-level"><option value="easy">Easy</option><option value="medium">Medium</option><option value="hard">Hard</option><option value="extrahard">Extra hard</option><option value="expert">Expert</option></select></label>
             <label title="Slipstream: right behind another car on a straight you go faster">Drafting<select id="set-draft"><option value="1">On</option><option value="0">Off</option></select></label>
             <label title="Tyres wear out; in a race at least one pit stop is compulsory">Tyre wear<select id="set-tyres"><option value="1">On</option><option value="0">Off</option></select></label>
             <label class="span2" title="Rain can come and go during a session">Weather<select id="set-weather"><option value="1">Changes (realistic)</option><option value="0">Off (always dry)</option></select></label>
@@ -413,6 +413,12 @@
           <button data-v="close">Close</button><button data-v="normal">Normal</button><button data-v="far">Far</button>
         </div>
       </label>
+      <label>Graphics
+        <div class="seg" id="set-graphics">
+          <button data-v="auto">Auto</button><button data-v="sharp">Sharp</button><button data-v="light">Light</button>
+        </div>
+      </label>
+      <p class="note" id="set-graphics-note"></p>
       <label>Speed shown in
         <div class="seg" id="set-units">
           <button data-v="kmh">km/h</button><button data-v="mph">mph</button>

@@ -3,6 +3,7 @@
    - Your engine (TV camera): the same kind of voice as the other cars, as heard by a camera following you.
    - Other cars: the 4 nearest get their own engine voice, panned left/right with distance and Doppler.
    - Effects: start lights, contact, DRS, pit limiter, chequered flag, fastest lap, personal best, menu clicks.
+   - Rain: a soft bed of rain (louder in heavy rain) and the hiss of spray off your tyres and the cars around you.
    Browsers only allow sound after the first click or key press, so everything starts then. */
 (function () {
   'use strict';
@@ -104,6 +105,8 @@
       // some browsers drop volume changes made while the sound is paused: set them again whenever it starts
       ac.onstatechange = function () { if (ac.state === 'running') Audio.applyVolumes(true); };
       this.engGate = ac.createGain(); this.engGate.gain.value = 0; this.engGate.connect(this.engBus);   // fades engines in/out
+      this.wxGate = ac.createGain(); this.wxGate.gain.value = 0; this.wxGate.connect(this.fxBus);      // rain / spray, same fades
+      this.wx = null;
       // 2 s of white noise for the noisy effects
       const len = ac.sampleRate * 2, buf = ac.createBuffer(1, len, ac.sampleRate), ch = buf.getChannelData(0);
       for (let i = 0; i < len; i++) ch[i] = Math.random() * 2 - 1;
@@ -161,12 +164,13 @@
       if (!this.ready || on === this.active) return;
       this.active = on;
       if (!this.demoing) this.engGate.gain.setTargetAtTime(on ? 1 : 0, this.ac.currentTime, on ? 0.12 : 0.06);
+      this.wxGate.gain.setTargetAtTime(on ? 1 : 0, this.ac.currentTime, on ? 0.25 : 0.06);
     },
     suspend: function (hidden) {
       if (!this.ready) return;
       if (hidden) this.ac.suspend(); else this.ac.resume();
     },
-    newSession: function () { this.st = { lights: 0, drsOpen: false, drsAllowed: false, limT: 0, gear: 0, cd: 0 }; },
+    newSession: function () { this.st = { lights: 0, drsOpen: false, drsAllowed: false, limT: 0, gear: 0, cd: 0 }; if (this.wx) this.wxStop(); },
 
     /* Your engine: rpm, throttle, gear (gear changes trigger the shift / downshift effects). */
     driveOwn: function (rpm, thr, gear) {
@@ -192,7 +196,7 @@
 
     // ---------------------------------------------------------- per-frame update
     /* s = { listener:{x,y,a,vx,vy}, own:{speed, vf, throttle, inPit, drsOpen, drsAllowed} | null,
-             cars:[{id, x, y, vx, vy, throttle}], lights, countdown } */
+             cars:[{id, x, y, vx, vy, throttle}], lights, countdown, wx:{rain, wet} | null } */
     update: function (s, dt) {
       if (!this.ready || !this.active || this.demoing) return;
       if (!this.st) this.newSession();
@@ -257,6 +261,111 @@
         vo.used = true;
       }
       for (let v = 0; v < voices.length; v++) { if (!voices[v].used) { voices[v].v.silence(); voices[v].id = null; } voices[v].used = false; }
+      this.weatherSound(s, dt, own, keep);
+    },
+
+    // ---------------------------------------------------------- rain and spray
+    /* Made the first time it rains in a session: a stereo loop of rain (a soft wash with droplets in it), and
+       spray hiss for your car and for the 4 nearest cars (each panned and pitched like their engines). */
+    wxBuild: function () {
+      const ac = this.ac, sr = ac.sampleRate, len = Math.floor(sr * 4.6);
+      const buf = ac.createBuffer(2, len, sr);
+      for (let chn = 0; chn < 2; chn++) {
+        const d = buf.getChannelData(chn);
+        let b0 = 0, b1 = 0, b2 = 0, sum = 0;
+        for (let i = 0; i < len; i++) {              // the wash: soft (pink) noise
+          const w = Math.random() * 2 - 1;
+          b0 = 0.99765 * b0 + w * 0.099046; b1 = 0.963 * b1 + w * 0.2965164; b2 = 0.57 * b2 + w * 1.0526913;
+          d[i] = (b0 + b1 + b2 + w * 0.1848) * 0.5;
+        }
+        const drops = Math.floor(len / sr * 320);    // droplets: short ticks, mostly small, now and then a bigger one
+        for (let k = 0; k < drops; k++) {
+          const at = Math.floor(Math.random() * len), a = 0.6 + 3.2 * Math.pow(Math.random(), 3), dec = sr * (0.0015 + Math.random() * 0.005);
+          for (let j = 0; j < dec * 5 && at + j < len; j++) d[at + j] += a * (Math.random() * 2 - 1) * Math.exp(-j / dec);
+        }
+        for (let i = 0; i < len; i++) sum += d[i] * d[i];
+        const g = 0.25 / Math.sqrt(sum / len);       // same loudness every time
+        for (let i = 0; i < len; i++) d[i] *= g;
+        const fade = Math.floor(sr * 0.02);          // no click where the loop joins
+        for (let i = 0; i < fade; i++) { const t = i / fade; d[len - fade + i] = d[len - fade + i] * (1 - t) + d[i] * t; }
+      }
+      const W = { dry: 0 };
+      W.rainSrc = ac.createBufferSource(); W.rainSrc.buffer = buf; W.rainSrc.loop = true;
+      W.rainHP = ac.createBiquadFilter(); W.rainHP.type = 'highpass'; W.rainHP.frequency.value = 380; W.rainHP.Q.value = 0.5;
+      W.rainLP = ac.createBiquadFilter(); W.rainLP.type = 'lowpass'; W.rainLP.frequency.value = 6000; W.rainLP.Q.value = 0.5;
+      W.rainG = ac.createGain(); W.rainG.gain.value = 0;
+      W.rainSrc.connect(W.rainHP); W.rainHP.connect(W.rainLP); W.rainLP.connect(W.rainG); W.rainG.connect(this.wxGate);
+      W.rainSrc.start();
+      const self = this;
+      const hiss = function (panned) {
+        const h = { id: null };
+        h.src = ac.createBufferSource(); h.src.buffer = self.noise; h.src.loop = true;
+        h.f = ac.createBiquadFilter(); h.f.type = 'bandpass'; h.f.frequency.value = 2000; h.f.Q.value = 0.55;
+        h.g = ac.createGain(); h.g.gain.value = 0;
+        h.src.connect(h.f); h.f.connect(h.g);
+        h.pan = panned && ac.createStereoPanner ? ac.createStereoPanner() : null;
+        if (h.pan) { h.g.connect(h.pan); h.pan.connect(self.wxGate); } else h.g.connect(self.wxGate);
+        h.src.start(0, Math.random() * 1.9);
+        return h;
+      };
+      W.own = hiss(false);
+      W.cars = [];
+      for (let i = 0; i < 4; i++) W.cars.push(hiss(true));
+      this.wx = W;
+    },
+    wxStop: function () {
+      const W = this.wx;
+      if (!W) return;
+      const all = [W.rainSrc, W.own.src].concat(W.cars.map(function (h) { return h.src; }));
+      for (let i = 0; i < all.length; i++) { try { all[i].stop(); all[i].disconnect(); } catch (e) { /* already stopped */ } }
+      W.rainG.disconnect(); W.own.g.disconnect();
+      for (let i = 0; i < W.cars.length; i++) { W.cars[i].g.disconnect(); if (W.cars[i].pan) W.cars[i].pan.disconnect(); }
+      this.wx = null;
+    },
+    /* rain 0..1 (how hard it is raining), wet 0..1 (water on the track: makes the spray) */
+    weatherSound: function (s, dt, own, near) {
+      const w = s.wx, rain = w ? clamp(w.rain || 0, 0, 1) : 0, wet = w ? clamp(w.wet || 0, 0, 1) : 0;
+      if (rain < 0.01 && wet < 0.02) {
+        // dry: fade out, and after a few seconds stop the sounds altogether
+        if (this.wx) {
+          const W = this.wx, t = this.ac.currentTime;
+          W.rainG.gain.setTargetAtTime(0, t, 0.3); W.own.g.gain.setTargetAtTime(0, t, 0.2);
+          for (let i = 0; i < W.cars.length; i++) W.cars[i].g.gain.setTargetAtTime(0, t, 0.2);
+          W.dry += dt;
+          if (W.dry > 4) this.wxStop();
+        }
+        return;
+      }
+      if (!this.wx) this.wxBuild();
+      const W = this.wx, t = this.ac.currentTime, L = s.listener;
+      W.dry = 0;
+      // the rain itself: soft in a shower, a fuller roar in heavy rain
+      W.rainG.gain.setTargetAtTime(rain > 0.01 ? 0.05 + 0.32 * Math.pow(rain, 0.9) : 0, t, 0.6);
+      W.rainLP.frequency.setTargetAtTime(4200 + 4800 * rain, t, 0.6);
+      // your tyres throwing up water
+      const ownK = own ? wet * clamp((own.speed - 6) / 60, 0, 1) : 0;
+      W.own.g.gain.setTargetAtTime(0.16 * ownK, t, 0.08);
+      W.own.f.frequency.setTargetAtTime(1300 + 1500 * ownK, t, 0.1);
+      // the cars around you: a rush of spray as they go past
+      for (let i = 0; i < W.cars.length; i++) W.cars[i].used = false;
+      for (let k = 0; k < near.length; k++) {
+        const c = near[k].c;
+        let h = null;
+        for (let i = 0; i < W.cars.length; i++) if (W.cars[i].id === c.id) h = W.cars[i];
+        if (!h) for (let i = 0; i < W.cars.length; i++) if (W.cars[i].id === null) { h = W.cars[i]; h.id = c.id; break; }
+        if (!h) continue;
+        h.used = true;
+        const dx = c.x - L.x, dy = c.y - L.y, dist = Math.sqrt(near[k].d2), sp = Math.hypot(c.vx, c.vy);
+        const side = -dx * Math.sin(L.a) + dy * Math.cos(L.a);
+        let vr = 0;
+        if (dist > 0.5) vr = -((c.vx - (L.vx || 0)) * dx + (c.vy - (L.vy || 0)) * dy) / dist;
+        const dop = clamp(SOUND_C / (SOUND_C - clamp(vr, -120, 120)), 0.7, 1.5);
+        const k2 = wet * clamp((sp - 12) / 50, 0, 1) * Math.min(1, 16 / Math.max(16, dist));
+        h.g.gain.setTargetAtTime(0.42 * k2, t, 0.06);
+        h.f.frequency.setTargetAtTime((1100 + 1700 * Math.min(1, 16 / Math.max(16, dist))) * dop, t, 0.06);
+        if (h.pan) h.pan.pan.setTargetAtTime(clamp(side / 40, -0.9, 0.9), t, 0.06);
+      }
+      for (let i = 0; i < W.cars.length; i++) if (!W.cars[i].used) { W.cars[i].id = null; W.cars[i].g.gain.setTargetAtTime(0, t, 0.1); }
     },
 
     /* "Test engine" in Settings: launch, up through the gears, lift off, back down. */

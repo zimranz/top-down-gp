@@ -188,7 +188,9 @@
     const roll = (A.roll + B.roll) * 0.5, drag2 = (A.drag2 + B.drag2) * 0.5;
     const sl2 = sL === 4 ? 0 : sL, sr2 = sR === 4 ? 0 : sR;
     c.surf = sl2 > sr2 ? sl2 : sr2;       // pit lane counts as asphalt for effects
-    c.inPit = sL === 4 || sR === 4;
+    // in the pit lane: a wheel on the pit road and the car's middle past the edge of the track (just clipping
+    // the start of the pit entry or the end of the exit, on the racing line, is not going into the pits)
+    c.inPit = (sL === 4 || sR === 4) && Q.d * T.pit.side > T.hw;
 
     let thr = clamp(inp.throttle || 0, 0, 1);
     const brk = clamp(inp.brake || 0, 0, 1);
@@ -362,11 +364,18 @@
   //            the exit or hitting a kerb too hard (more likely with a car right behind, or in dirty air)
   // divebomb = chance that an overtake into a corner is braked for too late
   // gap      = following distance in seconds when stuck behind someone
+  // spread   = how much the drivers' pace differs (up to this much slower); slowStart = chance of a slow getaway
+  // attack   = 0..1: goes for a pass from further back / with less of a speed advantage
+  // defend   = 0..1: with a car close behind on the way into a braking zone, makes one early move to cover the inside
   const AI_LEVELS = (F1.AI_LEVELS = {
     easy: { lat: 0.8, brake: 0.72, pace: 0.965, mistake: 0.34, divebomb: 0.05, gap: 0.2, react: [0.2, 0.55] },
     medium: { lat: 0.88, brake: 0.84, pace: 0.985, mistake: 0.18, divebomb: 0.025, gap: 0.16, react: [0.15, 0.4] },
-    hard: { lat: 0.95, brake: 0.93, pace: 1.0, mistake: 0.1, divebomb: 0.015, gap: 0.13, react: [0.1, 0.28] }
+    hard: { lat: 0.95, brake: 0.93, pace: 1.0, mistake: 0.1, divebomb: 0.015, gap: 0.13, react: [0.1, 0.28] },
+    extrahard: { lat: 0.975, brake: 0.965, pace: 1.0, spread: 0.008, mistake: 0.05, divebomb: 0.008, gap: 0.12, react: [0.07, 0.2], slowStart: 0.05, attack: 0.5, defend: 0.5 },
+    expert: { lat: 1.0, brake: 1.0, pace: 1.0, spread: 0.004, mistake: 0.015, divebomb: 0.004, gap: 0.11, react: [0.05, 0.15], slowStart: 0.03, attack: 1, defend: 1 }
   });
+  F1.AI_LEVEL_IDS = ['easy', 'medium', 'hard', 'extrahard', 'expert'];
+  F1.isAILevel = function (v) { return typeof v === 'string' && F1.AI_LEVEL_IDS.indexOf(v) >= 0; };
   const LIMIT = { lat: 1, brake: 1 };   // what the car can really do (used when an AI overdoes it)
   const MK_MIX = [0.3, 0.55, 0.78];     // share of lock-ups / running wide / snaps (the rest: kerb strikes)
 
@@ -600,7 +609,8 @@
   // ---------------------------------------------------------------- weather
   /* The chance of rain in a session at each track (from how often it rains there on a race weekend). */
   const RAIN = { spa: 0.38, silverstone: 0.33, interlagos: 0.33, zandvoort: 0.27, suzuka: 0.25, montreal: 0.25, redbullring: 0.25,
-    singapore: 0.22, monaco: 0.16, monza: 0.14, baku: 0.06, jeddah: 0.03, lasvegas: 0.03, abudhabi: 0.02 };
+    singapore: 0.22, monaco: 0.16, monza: 0.14, baku: 0.06, jeddah: 0.03, lasvegas: 0.03, abudhabi: 0.02,
+    australia: 0.22, china: 0.25, miami: 0.2, barcelona: 0.1, bahrain: 0.02 };
   F1.rainChance = function (T) { return RAIN[T.id] !== undefined ? RAIN[T.id] : 0.2; };
   /* A session's weather, from its seed: the rain showers over the session (start, end, how hard at their peak).
      Sometimes it is already raining when the session starts; a long session can have a second shower. */
@@ -666,15 +676,23 @@
     return true;
   }
 
+  /* Is the track from s0 to s1 a straight (or nearly)? Defensive moves are only made on a straight. */
+  function straightTo(T, s0, s1) {
+    const n = Math.ceil(F1.wrapS(s1 - s0, T.length) / T.ds);
+    for (let k = 0; k < n; k += 2) if (Math.abs(T.curv[F1.idxAt(T, s0 + k * T.ds)]) > 0.004) return false;
+    return true;
+  }
+
   /* Fresh AI driver state for car c. */
   F1.newAI = function (c, lvl, rng) {
     return {
       inp: { throttle: 0, brake: 0, steer: 0, drs: false, reset: false, lock: false },
       bias: 0, stuck: 0, backward: 0, wait: 0,
       latT: c.d, gridLane: c.d, along: {}, pass: null, mk: null, lastMk: -99, dispT: -99,
-      pace: lvl.pace * (1 - rng() * 0.012),
+      pace: lvl.pace * (1 - rng() * (lvl.spread === undefined ? 0.012 : lvl.spread)),
       // reaction to lights out: quicker on harder levels, and now and then a slow getaway
-      react: lvl.react[0] + rng() * (lvl.react[1] - lvl.react[0]) + (rng() < 0.08 ? 0.2 + rng() * 0.35 : 0)
+      react: lvl.react[0] + rng() * (lvl.react[1] - lvl.react[0]) + (rng() < (lvl.slowStart === undefined ? 0.08 : lvl.slowStart) ? 0.2 + rng() * 0.35 : 0),
+      cover: null, coveredS: -1
     };
   };
 
@@ -707,6 +725,7 @@
     let lo = -99, hi = 99;                          // limits set by cars alongside (leave a car's width)
     let lead = null, leadGap = Infinity, leadV = 0, yieldV = Infinity;
     let chased = false, rejoinBlocked = false, carComing = false;
+    let atk = null, atkDS = -Infinity, atkV = 0;           // the nearest car close behind (for defending)
     const offTrack = c.dist > T.hw + 0.8;
     const myExt = halfWidthOnTrack(c, T);
     if (S.collisions) {
@@ -722,6 +741,7 @@
         const ov = o.vx * T.tx[o.seg] + o.vy * T.ty[o.seg];
         if (dS < 0) {
           if (dS > -30 && dD < 4 && dD > -4) chased = true;
+          if (dS <= -5.2 && dS > -45 && dD < 5 && dD > -5 && dS > atkDS) { atk = o; atkDS = dS; atkV = ov; }
           if (dS > -130 && ov > 20) carComing = true;
           if (offTrack && dS > -80 && ov - cv > 3) {
             const edge = (c.d > 0 ? 1 : -1) * (T.hw - 1.6);
@@ -785,9 +805,9 @@
       }
     }
     if (!ai.pass && lead) {
-      const closing = cv - leadV;
+      const closing = cv - leadV, ak = lvl.attack || 0;
       const slow = leadV < Math.max(8, cv * 0.6);
-      if (leadGap < (slow ? 90 : 38) && (slow || closing > 1 || (leadGap < 14 && vFree > leadV + 2))) {
+      if (leadGap < (slow ? 90 : 38 + 12 * ak) && (slow || closing > 1 - 0.6 * ak || (leadGap < 14 + 6 * ak && vFree > leadV + 2 - ak))) {
         let best = 0, bestScore = -Infinity;
         for (let side = -1; side <= 1; side += 2) {
           const lane = lead.d + side * 2.9;
@@ -805,9 +825,46 @@
       }
     }
 
+    // defending (extra hard, expert): a car close behind on the way into a proper braking zone - one early move
+    // to cover the inside, held through the braking zone to the apex (the slower, tighter line). Never a move
+    // towards a car that has already pulled out to the inside (we stop where we are), and never into a car
+    // alongside (see lo / hi).
+    const pl = c.pitPlan;
+    let covering = false;
+    if (ai.cover) {
+      const cv2 = ai.cover, o = S.byId[cv2.id];
+      const toApex = F1.wrapS(cv2.apex - c.s, L), braking = F1.wrapS(cv2.s - c.s, L) > toApex;
+      if (!o || o.out || toApex > 600 || passing || ai.mk) ai.cover = null;
+      else {
+        const dS = wrapD(o.s - c.s, L);
+        if (dS < -60 || dS > 4) ai.cover = null;           // dropped back, or it is past
+        else {
+          const lane = Math.max(0, room - 2.4);         // just enough that there is no room for a car up the inside
+          let tgt = cv2.side * (braking ? Math.max(lane, cv2.side * T.rlOff[i]) : lane);
+          if (!braking && (o.d - c.d) * cv2.side > 1.0) tgt = cv2.hold === undefined ? (cv2.hold = c.d) : cv2.hold;   // it went inside first
+          want = tgt; covering = true;
+        }
+      }
+    } else if (lvl.defend && race && atk && !passing && !ai.mk && !(pl && pl.stage === 'in') && S.firstBrake !== null && c.raceDist > S.firstBrake + 30) {
+      // the next braking zone ahead
+      let Zn = null, toB = Infinity;
+      for (let z = 0; z < zones.length; z++) {
+        const d = F1.wrapS(zones[z].s - c.s, L);
+        if (d < toB) { toB = d; Zn = zones[z]; }
+      }
+      const reach = 10 + 15 * lvl.defend;                 // how close the car behind must be
+      if (Zn && Zn.drop >= 25 && toB > 40 && toB < 300 && Zn.s !== ai.coveredS && -atkDS < reach && atkV - cv > -2 &&
+          Math.abs(atk.d - c.d) < 1.4 && c.d * Zn.turn < room - 2.4 && straightTo(T, c.s, Zn.s)) {
+        ai.coveredS = Zn.s;                               // one decision per braking zone (expert: always covers)
+        if (S.rng() < 0.5 + 0.5 * lvl.defend) {
+          ai.cover = { id: atk.id, s: Zn.s, apex: Zn.apex, side: Zn.turn };
+          want = Zn.turn * Math.max(0, room - 2.4); covering = true;
+        }
+      }
+    }
+
     // heading for the pits: over to the pit side of the track before the entry, slowing for the speed limit
     let pitV = Infinity;
-    const pl = c.pitPlan;
     if (pl && pl.stage === 'in' && !pl.entered && T.pit) {
       const Pt = T.pit, du = F1.wrapS(Pt.s0 - c.s, L);
       if (du < 450) {
@@ -838,7 +895,7 @@
     }
 
     // ---- steering: pure pursuit towards the chosen line
-    const r = (urgent ? 6 : passing ? 3.4 : 2.6) * F1.DT;
+    const r = (urgent ? 6 : passing || covering ? 3.4 : 2.6) * F1.DT;
     const db = want - T.rlOff[i] - ai.bias;
     ai.bias += db > r ? r : db < -r ? -r : db;
     let latT = T.rlOff[i] + ai.bias;
@@ -1173,7 +1230,7 @@
     this.type = opts.type;
     this.track = T;
     this.laps = opts.laps || 0;
-    this.aiLevel = AI_LEVELS[opts.aiLevel] ? opts.aiLevel : 'medium';
+    this.aiLevel = F1.isAILevel(opts.aiLevel) ? opts.aiLevel : 'medium';
     this.collisions = opts.type === 'quali' ? false : opts.collisions !== false;
     this.drafting = opts.drafting !== false;                       // slipstream on straights (a switch before the session)
     // practice: AI cars do runs of a few laps and go back to their garages in between
@@ -1444,7 +1501,7 @@
     // (the set you picked, or the best one for the laps left) and it drives itself out to the end of the pit lane.
     if (!c.isAI && this.type === 'race' && this.phase !== 'countdown' && !c.finished) {
       if (!c.inPit && !c.pitPlan) c.pitDone = false;
-      else if (!c.pitPlan && !c.pitDone && c.inPit && pi.u(c.s) < pi.limit0 + 10) {
+      else if (!c.pitPlan && !c.pitDone && c.inPit && c.d * Pt.side > T.hw + 1 && pi.u(c.s) < pi.limit0 + 10) {
         c.pitDone = true;
         c.pitPlan = { stage: 'in', why: 'stop', entered: true, stopU: pi.u(F1.garageSpots(T, c).sBox), auto: true };
         this.events.push({ k: 'pitIn', id: c.id });

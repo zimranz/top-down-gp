@@ -24,6 +24,8 @@ canvas#game { position: fixed; inset: 0; display: block; }
 .logo span { color: var(--red); }
 .tag { margin-top: 10px; color: #d5d9de; font-weight: 600; letter-spacing: 1px; text-transform: uppercase; font-size: 14px; }
 .menu { display: flex; flex-direction: column; gap: 12px; width: min(360px, 90vw); }
+/* phones and tablets: no frosted glass (blurring the moving race behind it every frame is heavy for a phone) */
+body.touch #home .menu { -webkit-backdrop-filter: none; backdrop-filter: none; background: rgba(10, 10, 14, 0.8); }
 /* home menu: a darker, frosted panel so the race behind does not fight with the buttons (still see-through) */
 #home .menu { width: min(394px, 92vw); padding: 17px; border-radius: 16px; background: rgba(10, 10, 14, 0.62);
   -webkit-backdrop-filter: blur(7px) saturate(0.8); backdrop-filter: blur(7px) saturate(0.8);
@@ -83,6 +85,8 @@ input[type=range] { flex: 1; accent-color: var(--red); }
 .seg { display: flex; background: rgba(255,255,255,0.06); border-radius: 8px; padding: 3px; gap: 3px; }
 .seg button { flex: 1; font-family: var(--font); font-weight: 700; font-size: 14px; color: #cfd3d8; background: transparent; border: 0; border-radius: 6px; padding: 8px 6px; cursor: pointer; }
 .seg button.on { background: var(--red); color: #fff; }
+/* AI difficulty: five choices on one line */
+.seg.levels button { flex: 1 1 auto; font-size: 13px; padding: 8px 3px; white-space: nowrap; }
 .check { display: flex; align-items: center; gap: 8px; font-weight: 600; cursor: pointer; }
 .check input { width: 18px; height: 18px; accent-color: var(--red); }
 
@@ -454,6 +458,7 @@ body.touch select { font-size: 16px; }
 body.touch .btn, body.touch .driver-btn, body.touch .track-card, body.touch .cal-chip, body.touch .msg-btn { -webkit-user-select: none; user-select: none; -webkit-touch-callout: none; }
 body.touch .driver-btn { padding: 9px 10px; }
 body.touch .seg button { padding: 10px 6px; }
+body.touch .seg.levels button { padding: 10px 3px; }
 body.touch .msg-btn { padding: 9px 14px; }
 body.touch .cal-chip { padding: 7px 10px; }
 body.touch .check input { width: 22px; height: 22px; }
