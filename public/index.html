@@ -186,7 +186,7 @@
       <div class="cols">
         <div class="col narrow">
           <h3>Calendar</h3>
-          <p class="note cal-note">Click the tracks in the order you want to race them (2 to 14 races).</p>
+          <p class="note cal-note">Click the tracks in the order you want to race them (2 to 19 races).</p>
           <div class="tracks" id="champ-tracks"></div>
           <h3>Opponents</h3>
           <div class="row"><input type="range" id="champ-ai" min="1" max="21" value="15"><span class="val" id="champ-ai-val">15</span></div>
@@ -301,7 +301,7 @@
             <label>AI difficulty<select id="set-level"><option value="easy">Easy</option><option value="medium">Medium</option><option value="hard">Hard</option><option value="extrahard">Extra hard</option><option value="expert">Expert</option></select></label>
             <label title="Slipstream: right behind another car on a straight you go faster">Drafting<select id="set-draft"><option value="1">On</option><option value="0">Off</option></select></label>
             <label title="Tyres wear out; in a race at least one pit stop is compulsory">Tyre wear<select id="set-tyres"><option value="1">On</option><option value="0">Off</option></select></label>
-            <label class="span2" title="Rain can come and go during a session">Weather<select id="set-weather"><option value="1">Changes (realistic)</option><option value="0">Off (always dry)</option></select></label>
+            <label class="span2" title="Rain can come and go during a session">Weather<select id="set-weather"><option value="1">On (changing weather)</option><option value="0">Off (always dry)</option></select></label>
           </div>
           <button class="btn red big" id="lobby-start">Start qualifying</button>
           <div class="waiting" id="lobby-waiting">Waiting for the host to start…</div>
@@ -338,6 +338,20 @@
           <button class="btn red" id="results-next">Start the race</button>
           <button class="btn red" id="results-lobby">Back to lobby</button>
         </div>
+      </div>
+    </section>
+
+    <!-- PODIUM: after a race, before the results -->
+    <section id="podium" class="screen">
+      <canvas id="podium-confetti"></canvas>
+      <div class="podium-wrap">
+        <div class="podium-head">
+          <div class="podium-kicker" id="podium-kicker">Race</div>
+          <h2 id="podium-title">Podium</h2>
+        </div>
+        <div class="podium" id="podium-steps"></div>
+        <p class="podium-note" id="podium-note"></p>
+        <button class="btn red" id="podium-next">Results →</button>
       </div>
     </section>
   </div>
@@ -401,7 +415,7 @@
         <svg viewBox="0 0 24 24" width="20" height="20" aria-hidden="true"><path d="M6 6l12 12M18 6L6 18" fill="none" stroke="currentColor" stroke-width="2.6" stroke-linecap="round"/></svg></button></div>
       <label class="slider key-only"><span class="slider-title">Steering sensitivity <b id="set-steer-val">5</b></span>
         <input type="range" id="set-steer" min="1" max="12" step="1">
-        <span class="hint-row"><span>Smooth</span><span>Sharp</span></span>
+        <span class="hint-row"><span>Gentle</span><span>Quick</span></span>
       </label>
       <label>Camera
         <div class="seg" id="set-camera">
@@ -415,7 +429,7 @@
       </label>
       <label>Graphics
         <div class="seg" id="set-graphics">
-          <button data-v="auto">Auto</button><button data-v="sharp">Sharp</button><button data-v="light">Light</button>
+          <button data-v="auto">Auto</button><button data-v="sharp">High</button><button data-v="light">Low</button>
         </div>
       </label>
       <p class="note" id="set-graphics-note"></p>
@@ -427,6 +441,11 @@
       <label class="touch-only">Steering on the screen
         <div class="seg" id="set-touchmode">
           <button data-v="arrows">Arrow buttons</button><button data-v="slide">Slider</button>
+        </div>
+      </label>
+      <label class="touch-only" id="set-vibrate-row">Vibration
+        <div class="seg" id="set-vibrate">
+          <button data-v="on">On</button><button data-v="off">Off</button>
         </div>
       </label>
       <label class="slider touch-only"><span class="slider-title">Touch steering sensitivity <b id="set-touch-val">5</b></span>

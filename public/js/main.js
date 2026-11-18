@@ -9,6 +9,7 @@
   const GameAudio = window.GameAudio;
   $('version').textContent = 'Version ' + F1.VERSION;
   document.querySelector('#home .tag').textContent = '2026 grid · 11 teams · 22 drivers · ' + Object.keys(F1.TRACK_DEFS).length + ' circuits';
+  document.querySelectorAll('.cal-note').forEach(function (n) { n.textContent = 'Click the tracks in the order you want to race them (2 to ' + Object.keys(F1.TRACK_DEFS).length + ' races).'; });
   GameAudio.load();
   syncSoundUI();
   // menu clicks: a rising sound for the big red buttons, a falling one for going back, a tap for the rest
@@ -475,6 +476,7 @@
   $('gp-start').addEventListener('click', function () { fsGate(startGp); });
   $('results-next').addEventListener('click', function () { if (gp && gp.idx + 1 < gp.stages.length) startGpStage(gp.idx + 1); });
   $('results-again').addEventListener('click', function () { if (gp) startGpStage(gp.stages.length - 1); });   // same grid
+  $('podium-next').addEventListener('click', function () { if (window.GameAudio) window.GameAudio.click('tap'); leavePodium(); });
   $('results-restart').addEventListener('click', function () {
     if (!gp) return;
     if (gp.opts.qualiLaps > 0) gp.grid = null;
@@ -874,9 +876,9 @@
     segInit($('set-zoom'), d.zoom || 'normal', function (v) { d.zoom = v; Settings.save(); });
     segInit($('set-units'), d.units === 'mph' ? 'mph' : 'kmh', function (v) { d.units = v; Settings.save(); });
     const gfxWords = function () {
-      $('set-graphics-note').textContent = d.graphics === 'sharp' ? 'Always the full picture, even if the game can\'t keep up.'
-        : d.graphics === 'light' ? 'Always lighter graphics: smoother on a slow phone or computer (fewer effects, a slightly softer picture).'
-          : 'Full graphics, switching to lighter ones by itself if the game can\'t keep up.';
+      $('set-graphics-note').textContent = d.graphics === 'sharp' ? 'High: always the full picture, even if the game can\'t keep up.'
+        : d.graphics === 'light' ? 'Low: smoother on a slow phone or computer (fewer effects, a slightly softer picture).'
+          : 'Auto: full graphics, switching to Low by itself if the game can\'t keep up.';
     };
     segInit($('set-graphics'), d.graphics, function (v) { d.graphics = v; Settings.save(); gfxWords(); applyGraphics(); });
     gfxWords();
@@ -892,6 +894,8 @@
         : 'Left thumb: slide left and right to steer. Right thumb: GO and BRAKE. Slide up from GO onto DRS when it lights up.';
     };
     segInit($('set-touchmode'), d.touchMode === 'slide' ? 'slide' : 'arrows', function (v) { d.touchMode = v; Settings.save(); touchWords(); window.TouchUI.refresh(); });
+    segInit($('set-vibrate'), d.vibrate === 'off' ? 'off' : 'on', function (v) { d.vibrate = v; Settings.save(); if (v === 'on') window.Haptics.buzz(40); });
+    $('set-vibrate-row').classList.toggle('hidden', !window.Haptics.can);
     touchWords();
     renderKeys();
     $('set-labels').checked = !!d.labels;
@@ -1638,8 +1642,86 @@
       $('results-note').textContent = '';
     }
     $('pause').classList.add('hidden');
-    show('results');
+    // a race: the top three on the podium first (the results come up after a few seconds, or on a click)
+    if (!(m.type === 'race' && showPodium(m, myPlayer, local))) show('results');
     updateResultsButtons();
+  }
+
+  /* The podium: the top three on their steps in their team colours, with their cars and a burst of confetti. */
+  let podiumTimer = null, confettiRun = null;
+  function showPodium(m, myPlayer, local) {
+    const top = m.results.filter(function (r) { return !r.out && r.pos <= 3; }).sort(function (a, b) { return a.pos - b.pos; });
+    if (!top.length) return false;
+    const T = F1.getTrack(m.track);
+    $('podium-kicker').textContent = (m.round ? 'Round ' + m.round + ' · ' : '') + T.name + (T.country ? ' · ' + T.country : '');
+    $('podium-title').textContent = 'Podium';
+    const box = $('podium-steps');
+    box.innerHTML = '';
+    const small = window.innerHeight <= 520, dpr = Math.min(2, window.devicePixelRatio || 1);
+    [2, 1, 3].forEach(function (p) {
+      const r = top.find(function (x) { return x.pos === p; });
+      if (!r) return;
+      const d = F1.driver(r.driverId), t = F1.team(d.team), mine = myPlayer && myPlayer.driverId === r.driverId;
+      const col = el('div', 'pstep p' + p);
+      if (p === 1) col.appendChild(el('div', 'pwin', 'WINNER'));
+      // the car, nose up, in its colours
+      const cw = small ? 40 : 64, ch = small ? 94 : 150, cv = document.createElement('canvas');
+      cv.width = cw * dpr; cv.height = ch * dpr;
+      const cx = cv.getContext('2d'), k = (ch - 6) / 5.6;
+      cx.scale(dpr, dpr); cx.translate(cw / 2, ch / 2 + 2); cx.rotate(-Math.PI / 2); cx.scale(k, k);
+      window.Renderer.drawCarLocal(cx, t, 0, false, r.tyres ? r.tyres.slice(-1) : null);
+      col.appendChild(cv);
+      const nm = el('div', 'pname', d.name);
+      if (mine) nm.appendChild(el('span', 'pyou', local ? 'YOU' : (myPlayer.name || 'YOU').toUpperCase().slice(0, 10)));
+      else if (!r.isAI && !local) nm.appendChild(el('span', 'pyou', String(r.name || 'Player').toUpperCase().slice(0, 10)));
+      col.append(nm, el('div', 'pteam', t.name));
+      const blk = el('div', 'pblock');
+      const c1 = teamColor(t);
+      blk.style.background = 'linear-gradient(180deg, ' + c1 + ' 0%, ' + c1 + ' 55%, rgba(0,0,0,0.55) 140%)';
+      blk.appendChild(el('span', null, String(p)));
+      col.appendChild(blk);
+      box.appendChild(col);
+    });
+    const mine = myPlayer && m.results.find(function (r) { return r.driverId === myPlayer.driverId; });
+    $('podium-note').textContent = !mine ? '' : mine.out ? 'You did not finish' : mine.pos <= 3 ? (mine.pos === 1 ? 'You won the race!' : 'You finished P' + mine.pos + ' — on the podium!') : 'You finished P' + mine.pos;
+    show('podium');
+    confetti(top.map(function (r) { return teamColor(F1.team(F1.driver(r.driverId).team)); }));
+    clearTimeout(podiumTimer);
+    podiumTimer = setTimeout(leavePodium, 9000);
+    return true;
+  }
+  function leavePodium() {
+    clearTimeout(podiumTimer);
+    if (confettiRun) { confettiRun.stop = true; confettiRun = null; }
+    if ($('podium').classList.contains('active')) show('results');
+  }
+  function confetti(colors) {
+    if (confettiRun) confettiRun.stop = true;
+    const cv = $('podium-confetti'), ctx = cv.getContext('2d'), run = confettiRun = { stop: false };
+    const W = cv.width = cv.clientWidth, H = cv.height = cv.clientHeight;
+    const cols = colors.concat(['#ffffff', '#ffd24a']);
+    const n = document.body.classList.contains('touch') ? 70 : 140, P = [];
+    for (let i = 0; i < n; i++) P.push({ x: Math.random() * W, y: -20 - Math.random() * H * 0.8, vx: (Math.random() - 0.5) * 40, vy: 60 + Math.random() * 90,
+      r: Math.random() * 6.28, vr: (Math.random() - 0.5) * 8, w: 5 + Math.random() * 5, h: 3 + Math.random() * 4, c: cols[i % cols.length] });
+    let last = performance.now(), t0 = last;
+    const step = function (now) {
+      if (run.stop) { ctx.clearRect(0, 0, W, H); return; }
+      const dt = Math.min(0.05, (now - last) / 1000); last = now;
+      ctx.clearRect(0, 0, W, H);
+      const fade = Math.max(0, Math.min(1, 7 - (now - t0) / 1000));
+      if (fade <= 0) return;
+      ctx.globalAlpha = fade;
+      for (let i = 0; i < P.length; i++) {
+        const p = P[i];
+        p.x += (p.vx + Math.sin(now / 400 + i) * 20) * dt; p.y += p.vy * dt; p.r += p.vr * dt;
+        if (p.y > H + 20 && now - t0 < 3500) { p.y = -20; p.x = Math.random() * W; }
+        ctx.save(); ctx.translate(p.x, p.y); ctx.rotate(p.r); ctx.scale(1, Math.abs(Math.cos(p.r * 1.7)) + 0.15);
+        ctx.fillStyle = p.c; ctx.fillRect(-p.w / 2, -p.h / 2, p.w, p.h); ctx.restore();
+      }
+      ctx.globalAlpha = 1;
+      requestAnimationFrame(step);
+    };
+    requestAnimationFrame(step);
   }
   /* Race stat cards: Driver of the day, fastest lap, most overtakes, biggest climber. */
   function showRaceStats(m, myPlayer, local) {
@@ -1720,7 +1802,7 @@
     if (perf.t < 4) return;
     if (perf.slow / perf.t > 0.45) {
       R.setLite(true); perf.autoLite = true;
-      toast('Lighter graphics turned on to keep the game smooth (Settings → Graphics)', 6000);
+      toast('Graphics switched to Low to keep the game smooth (Settings → Graphics)', 6000);
     }
     perf.t = 0; perf.slow = 0;
   }
@@ -1821,7 +1903,7 @@
     watchFrames(dt, audioOn && game.kind !== 'attract');
     updateGarageUI();
     updateTyreUI();
-    if (audioOn && game.audioState) { try { const st = game.audioState(); if (st) GameAudio.update(st, dt); } catch (err) { console.error(err); } }
+    if (audioOn && game.audioState) { try { const st = game.audioState(); if (st) { GameAudio.update(st, dt); window.Haptics.kerb(st.own); } } catch (err) { console.error(err); } }
     requestAnimationFrame(frame);
   }
   requestAnimationFrame(frame);

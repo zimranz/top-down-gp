@@ -284,7 +284,7 @@
     for (let c0 = 0; c0 < N; c0 += CH) {
       const c1 = Math.min(N, c0 + CH);
       const ch = { center: new Path2D(), runoff: [], edges: new Path2D(), kerbR: new Path2D(), kerbW: new Path2D(), kerbAll: new Path2D(), gravel: new Path2D(),
-        narrowFill: new Path2D(), narrowLine: new Path2D(), cx: 0, cy: 0, r: 0 };
+        narrowFill: new Path2D(), narrowLine: new Path2D(), cx: 0, cy: 0, r: 0, c0: c0, c1: c1, pudL: [] };
       const HWE = T.hwE;
       let sx = 0, sy = 0;
       for (let k = c0; k <= c1; k++) {
@@ -387,6 +387,7 @@
         const p = off(i, d), rx = 1.3 + hash01(k + 0.75) * 2.2, ry = 0.55 + hash01(k + 0.6) * 0.75;
         ch.pud.moveTo(p[0] + rx * Math.cos(T.hd[i]), p[1] + rx * Math.sin(T.hd[i]));
         ch.pud.ellipse(p[0], p[1], rx, ry, T.hd[i], 0, TAU);
+        ch.pudL.push({ x: p[0], y: p[1], a: T.hd[i], l: rx * 1.25, w: ry * 1.35, v: Math.floor(hash01(k + 0.9) * 4) });
       }
       G.chunks.push(ch);
     }
@@ -843,17 +844,20 @@
     if (G.pit && Math.hypot(G.pit.cx - vc[0], G.pit.cy - vc[1]) < G.pit.r + vr) {
       ctx.save(); this.drawPit(ctx, G.pit, T, frame); ctx.restore();
     }
-    // asphalt (wet: darker, with a sheen across the screen like the sky reflected in it)
+    // asphalt: a faint grain fixed to the track (wet: darker, with patches holding more water)
     ctx.lineJoin = 'round'; ctx.lineCap = 'round';
-    ctx.strokeStyle = wet > 0.02 ? this.wetAsphalt(COL.asphalt, wet) : COL.asphalt; ctx.lineWidth = 2 * T.hw;
+    ctx.strokeStyle = this.lite ? (wet > 0.02 ? mixHex(COL.asphalt, '#15171c', 0.66 * wet) : COL.asphalt) : this.asphalt(COL.asphalt, wet, night);
+    ctx.lineWidth = 2 * T.hw;
+    ctx.imageSmoothingEnabled = false;                 // (the grain: quicker without smoothing, looks the same)
     ctx.stroke(merge('center'));
-    // drying: the racing line comes through first, lighter than the wet track around it
-    if (wet > 0.03 && ld > 0.05) {
-      ctx.globalAlpha = Math.min(1, wet * 4) * ld * 0.8;
-      ctx.strokeStyle = mixHex(COL.asphalt, '#575a60', 0.45); ctx.lineWidth = 3.2;
-      ctx.stroke(merge('rline'));
-      ctx.globalAlpha = 1;
+    ctx.imageSmoothingEnabled = true;
+    // the racing line: darker where the tyres have laid rubber down all weekend (under water when it is wet)
+    if (!this.lite && wet < 0.3) {
+      ctx.strokeStyle = 'rgba(0,0,0,' + (0.1 * (1 - wet / 0.3)).toFixed(3) + ')'; ctx.lineWidth = 3; ctx.stroke(merge('rline'));
     }
+    // drying: the tyres squeeze the water away, so it starts as two patchy tracks where the wheels run, which
+    // widen and join into one dry line as more cars go round
+    if (wet > 0.03 && ld > 0.05) this.drawDryLine(ctx, T, vis, COL, Math.min(1, wet * 4), ld);
     // banked corners: lighter towards the high side
     for (let v = 0; v < G.banks.length; v++) {
       const bk = G.banks[v];
@@ -881,11 +885,7 @@
     ctx.setLineDash([1.2, 1.2]); ctx.lineWidth = 0.3; ctx.strokeStyle = 'rgba(255,255,255,0.6)'; ctx.stroke(G.drsDet); ctx.setLineDash([]);
 
     // heavy rain: standing water near the edges
-    if (wet > 0.55 && !this.lite) {
-      const a = Math.min(1, (wet - 0.55) / 0.35), pud = merge('pud');
-      ctx.fillStyle = night ? 'rgba(40,50,66,' + (0.75 * a).toFixed(3) + ')' : 'rgba(84,98,118,' + (0.62 * a).toFixed(3) + ')'; ctx.fill(pud);
-      ctx.strokeStyle = 'rgba(196,214,234,' + (0.4 * a).toFixed(3) + ')'; ctx.lineWidth = 0.16; ctx.stroke(pud);
-    }
+    if (wet > 0.55 && !this.lite) this.drawPuddles(ctx, vis, Math.min(1, (wet - 0.55) / 0.35), rain, night, dt, vc, vr);
 
     // skid marks
     if (this.skids.length) {
@@ -939,7 +939,7 @@
     }
 
     // spray behind the cars on a wet track (over the cars behind: in heavy rain it hides them)
-    if (wet > 0.08) this.drawSpray(ctx, cars, wet * (1 - 0.5 * ld), vc, vr);
+    if (wet > 0.08) this.drawSpray(ctx, cars, wet * (1 - 0.5 * ld), vc, vr, night);
     else if (this.trails) this.trails = null;
     // particles
     this.updateParticles(ctx, dt);
@@ -979,24 +979,74 @@
     }
   };
 
-  /* Wet asphalt: darker, with a soft band of sheen across the screen (the sky reflected; it stays put on the screen
-     while the track moves under it, like a reflection). */
-  Renderer.prototype.wetAsphalt = function (dry, wet) {
-    const dark = mixHex(dry, '#15171c', 0.72 * wet), shine = mixHex(dry, '#5a6676', 0.36 * wet), mid = mixHex(dry, '#262a31', 0.62 * wet);
-    const a = this.toWorld(0, 0), b = this.toWorld(this.w, this.h);
-    const g = this.ctx.createLinearGradient(a[0], a[1], b[0], b[1]);
-    g.addColorStop(0, dark); g.addColorStop(0.22, mid); g.addColorStop(0.3, dark);
-    g.addColorStop(0.46, dark); g.addColorStop(0.56, shine); g.addColorStop(0.68, dark); g.addColorStop(1, dark);
-    return g;
+  /* The asphalt as a picture that repeats every 32 m and is fixed to the ground, so it moves with the track:
+     a very faint grain of light and dark specks and slightly uneven patches. Wet (0..1, in tenths): darker, and
+     the uneven patches show more (some hold more water than others). No sheen painted on the screen. */
+  Renderer.prototype.asphalt = function (base, wet, night) {
+    const q = Math.round(F1.clamp(wet, 0, 1) * 10), key = base + q + (night ? 'n' : 'd');
+    const cache = this.asphPat || (this.asphPat = {});
+    if (cache[key]) return cache[key];
+    const S = 256, PX = 8, cv = document.createElement('canvas'); cv.width = cv.height = S;
+    const g = cv.getContext('2d'), w = q / 10;
+    g.fillStyle = w > 0 ? mixHex(base, night ? '#0b0c10' : '#15171c', 0.68 * w) : base; g.fillRect(0, 0, S, S);
+    let seed = 7; const rnd = function () { seed = (seed * 16807) % 2147483647; return (seed - 1) / 2147483646; };
+    const blot = function (x, y, r, col, al) {
+      for (let ox = -S; ox <= S; ox += S) for (let oy = -S; oy <= S; oy += S) {
+        if (x + ox + r < 0 || x + ox - r > S || y + oy + r < 0 || y + oy - r > S) continue;
+        const gr = g.createRadialGradient(x + ox, y + oy, 0, x + ox, y + oy, r);
+        gr.addColorStop(0, 'rgba(' + col + ',' + al.toFixed(3) + ')'); gr.addColorStop(1, 'rgba(' + col + ',0)');
+        g.fillStyle = gr; g.fillRect(x + ox - r, y + oy - r, 2 * r, 2 * r);
+      }
+    };
+    // uneven patches: barely there when dry, plainer to see in the wet
+    for (let n = 0; n < 60; n++) {
+      const x = rnd() * S, y = rnd() * S, r = 12 + rnd() * 44, dark = rnd() < 0.6;
+      blot(x, y, r, dark ? '6,7,10' : (night ? '62,66,76' : '110,116,126'), (dark ? 0.03 + 0.09 * w : 0.015 + 0.045 * w));
+    }
+    // the grain
+    for (let n = 0; n < 2200; n++) {
+      g.fillStyle = rnd() < 0.55 ? 'rgba(0,0,0,' + (0.07 + 0.04 * w).toFixed(3) + ')' : 'rgba(170,176,186,' + (0.035 - 0.015 * w).toFixed(3) + ')';
+      g.fillRect(rnd() * S, rnd() * S, 1.2, 1.2);
+    }
+    const pat = this.ctx.createPattern(cv, 'repeat');
+    pat.setTransform(new DOMMatrix().scale(1 / PX));     // 256 px = 32 m of track
+    cache[key] = pat;
+    return pat;
   };
 
-  /* Spray: the mist a car throws up hangs in the air where the car has been and fades within a second, so it is drawn
-     along the car's path over the last 0.8 s: two thin streaks off the rear wheels that merge into one long, soft
-     plume (layers of different widths, each fading towards the far end). Longer and thicker at speed and in heavy
-     rain; a line of cars leaves a haze. Drawn over the cars: in heavy rain it hides the car behind. */
-  Renderer.prototype.drawSpray = function (ctx, cars, wet, vc, vr) {
-    const now = performance.now() / 1000, LIFE = 0.8, TR = this.trails || (this.trails = {}), seen = {};
-    const lite = this.lite;
+  /* Spray: the fine mist a car throws up hangs in the air where the car has been and fades within a second. It is
+     drawn as a smooth veil along the car's path: soft, see-through shapes laid closely one after another (so no
+     separate puffs show), two narrow ones off the rear wheels that merge right behind the car, widening and fading
+     further back, with faint streaks the way the car is going. Thickest a few metres behind the car; longer and
+     denser at speed and in heavy rain, so a line of cars leaves a haze. Drawn over the cars: it hides the car behind. */
+  Renderer.prototype.veilSprites = function () {
+    if (this.veil) return this.veil;
+    const mk = function (streaks) {
+      const W = 96, H = 64, cv = document.createElement('canvas'); cv.width = W; cv.height = H;
+      const g = cv.getContext('2d');
+      // a soft oval: full in the middle, fading smoothly to nothing at the edges
+      g.save(); g.translate(W / 2, H / 2); g.scale(1, H / W);
+      const gr = g.createRadialGradient(0, 0, 0, 0, 0, W / 2);
+      gr.addColorStop(0, 'rgba(255,255,255,1)'); gr.addColorStop(0.3, 'rgba(255,255,255,0.78)'); gr.addColorStop(0.62, 'rgba(255,255,255,0.3)'); gr.addColorStop(1, 'rgba(255,255,255,0)');
+      g.fillStyle = gr; g.fillRect(-W / 2, -W / 2, W, W);
+      g.restore();
+      if (streaks) {
+        // thin lines along the length, kept only inside the oval
+        g.globalCompositeOperation = 'source-in';
+        g.fillStyle = 'rgba(255,255,255,0.22)'; g.fillRect(0, 0, W, H);
+        g.globalCompositeOperation = 'source-atop';
+        let seed = 5; const rnd = function () { seed = (seed * 16807) % 2147483647; return (seed - 1) / 2147483646; };
+        for (let k = 0; k < 16; k++) { g.fillStyle = 'rgba(255,255,255,' + (0.4 + rnd() * 0.6).toFixed(2) + ')'; g.fillRect(rnd() * W * 0.3, 6 + rnd() * (H - 12), W * (0.4 + rnd() * 0.6), 1 + rnd() * 1.2); }
+      }
+      return cv;
+    };
+    this.veil = { soft: mk(false), streak: mk(true) };
+    return this.veil;
+  };
+  Renderer.prototype.drawSpray = function (ctx, cars, wet, vc, vr, night) {
+    const now = performance.now() / 1000, LIFE = 0.85, TR = this.trails || (this.trails = {}), seen = {};
+    const lite = this.lite, V = this.veilSprites(), step = lite ? 2.6 : 1.3;
+    const tint = night ? 0.72 : 1;
     for (let i = 0; i < cars.length; i++) {
       const c = cars[i];
       if (c.ghost || c.replay || c.garage) continue;
@@ -1005,84 +1055,212 @@
       if (!tr) tr = TR[c.id] = [];
       const last = tr[tr.length - 1];
       if (last && Math.hypot(c.x - last.x, c.y - last.y) > 25) tr.length = 0;          // (put back on the track)
-      if (!tr.length || Math.hypot(c.x - tr[tr.length - 1].x, c.y - tr[tr.length - 1].y) > 1.2) tr.push({ x: c.x, y: c.y, t: now });
+      if (!tr.length || Math.hypot(c.x - tr[tr.length - 1].x, c.y - tr[tr.length - 1].y) > 1.0) tr.push({ x: c.x, y: c.y, t: now });
       while (tr.length && now - tr[0].t > LIFE) tr.shift();
-      if (Math.abs(c.x - vc[0]) > vr + 60 || Math.abs(c.y - vc[1]) > vr + 60) continue;
+      if (Math.abs(c.x - vc[0]) > vr + 70 || Math.abs(c.y - vc[1]) > vr + 70) continue;
       const sp = Math.hypot(c.vx || 0, c.vy || 0), k = Math.min(1, Math.max(0, (sp - 12) / 50)) * wet;
       if (k < 0.04) continue;
-      const ca = Math.cos(c.a), sa = Math.sin(c.a), rx = c.x - ca * 2.3, ry = c.y - sa * 2.3;
-      const pts = [[rx, ry]];
+      const ca = Math.cos(c.a), sa = Math.sin(c.a), rx = c.x - ca * 2.4, ry = c.y - sa * 2.4;
+      // the path behind the car, newest first, from the rear wheels back
+      const pts = [[rx, ry, 0]];
       for (let q = tr.length - 1; q >= 0; q--) {
         const p = tr[q];
-        if ((p.x - c.x) * ca + (p.y - c.y) * sa > -2.8) continue;         // only what is behind the car
-        pts.push([p.x, p.y]);
+        if ((p.x - c.x) * ca + (p.y - c.y) * sa > -2.9) continue;
+        pts.push([p.x, p.y, now - p.t]);
       }
       if (pts.length < 2) continue;
-      const end = pts[pts.length - 1], path = new Path2D();
-      path.moveTo(pts[0][0], pts[0][1]);
-      for (let q = 1; q < pts.length; q++) path.lineTo(pts[q][0], pts[q][1]);
-      // each layer: [width m, strength, [where along the plume (0 = the car .. 1 = the end), how strong there] ...]:
-      // the narrow core is thickest right behind the car, the wide ones build up further back: the plume spreads out
-      const fade = function (a, stops) {
-        const g = ctx.createLinearGradient(rx, ry, end[0], end[1]);
-        for (let q = 0; q < stops.length; q++) g.addColorStop(stops[q][0], 'rgba(220,228,237,' + (a * stops[q][1]).toFixed(3) + ')');
-        return g;
-      };
-      ctx.lineCap = 'round'; ctx.lineJoin = 'round';
-      const core = [2.2, 0.26, [[0, 1], [0.35, 0.6], [1, 0]]], mid = [4.2, 0.14, [[0, 0.25], [0.2, 1], [0.6, 0.5], [1, 0]]];
-      const wide = [6.6, 0.085, [[0, 0], [0.3, 1], [0.7, 0.6], [1, 0]]], haze = [9.2, 0.05, [[0, 0], [0.45, 1], [1, 0]]];
-      const layers = lite ? [mid, core] : [haze, wide, mid, core];
-      for (let q = 0; q < layers.length; q++) {
-        ctx.strokeStyle = fade(layers[q][1] * k * (0.8 + 0.4 * wet), layers[q][2]);
-        ctx.lineWidth = layers[q][0] * (0.75 + 0.35 * k);
-        ctx.stroke(path);
-      }
-      // two thin streaks straight off the rear wheels, merging into the plume
-      if (!lite) {
-        const px = -sa, py = ca, n = Math.min(pts.length, 4), wh = new Path2D();
-        for (const side of [-0.8, 0.8]) {
-          for (let q = 0; q < n; q++) {
-            const f = 1 - q / Math.max(1, n - 1), x = pts[q][0] + px * side * f, y = pts[q][1] + py * side * f;
-            if (q === 0) wh.moveTo(x, y); else wh.lineTo(x, y);
-          }
+      let total = 0;
+      for (let q = 1; q < pts.length; q++) total += Math.hypot(pts[q][0] - pts[q - 1][0], pts[q][1] - pts[q - 1][1]);
+      if (total < 2) continue;
+      const len = total, strength = (0.5 + 0.5 * wet) * k * tint;
+      // walk along the path laying the veil down every `step` metres
+      let q = 1, segL = Math.hypot(pts[1][0] - pts[0][0], pts[1][1] - pts[0][1]), along = 0, at = 0;
+      for (let dist = 0.4; dist < len; dist += step) {
+        while (q < pts.length - 1 && at + segL < dist) { at += segL; q++; segL = Math.hypot(pts[q][0] - pts[q - 1][0], pts[q][1] - pts[q - 1][1]); }
+        const f = segL > 0 ? (dist - at) / segL : 0;
+        const x = pts[q - 1][0] + (pts[q][0] - pts[q - 1][0]) * f, y = pts[q - 1][1] + (pts[q][1] - pts[q - 1][1]) * f;
+        const dir = Math.atan2(pts[q - 1][1] - pts[q][1], pts[q - 1][0] - pts[q][0]);
+        const u = dist / len;                                   // 0 right behind the car .. 1 the far end
+        // thick just behind the car, then thinning out; wider further back
+        const a = strength * Math.min(1, u * 6 + 0.25) * Math.pow(1 - u, 1.25) * (lite ? 0.48 : 0.32);
+        const wid = 1.3 + 4.8 * Math.pow(u, 0.7) * (0.7 + 0.5 * k), lng = step * 2.6 + 1.5 * u;
+        ctx.save(); ctx.translate(x, y); ctx.rotate(dir);
+        if (dist < 5 && !lite) {
+          // first metres: two narrow trails straight off the rear wheels, coming together
+          const sep = 0.8 * (1 - dist / 5);
+          ctx.globalAlpha = a * 0.9;
+          ctx.drawImage(V.soft, -lng / 2, -sep - 0.5, lng, 1.0);
+          ctx.drawImage(V.soft, -lng / 2, sep - 0.5, lng, 1.0);
         }
-        ctx.strokeStyle = fade(0.32 * k, [[0, 1], [0.3, 0.5], [1, 0]]); ctx.lineWidth = 0.55; ctx.stroke(wh);
+        ctx.globalAlpha = a;
+        ctx.drawImage(V.soft, -lng / 2, -wid / 2, lng, wid);
+        if (!lite) { ctx.globalAlpha = a * 0.6; ctx.drawImage(V.streak, -lng * 0.7, -wid * 0.42, lng * 1.4, wid * 0.84); }
+        ctx.restore();
       }
     }
+    ctx.globalAlpha = 1;
     for (const id in TR) if (!seen[id]) delete TR[id];
   };
 
-  /* Rain on the screen: thin, slightly see-through streaks falling at an angle (a few in light rain, dense and fast in
-     a downpour), tiny splash rings, and the picture a little darker and greyer the harder it rains. */
+  /* The dry line coming through after rain: two tyre tracks (a car's wheels are about 1.6 m apart) with ragged,
+     broken edges, widening and joining into one dry line as the track dries (ld 0..1). Each track is a few thin
+     strands broken up in different places, so the patches are irregular. Made the first time it is needed. */
+  Renderer.prototype.drawDryLine = function (ctx, TT, vis, COL, a, ld) {
+    const OFFS = [-1.1, -0.82, -0.55, 0.55, 0.82, 1.1, 0];
+    const build = function (ch, d0) {
+      const p = new Path2D(), N = TT.n;
+      for (let k = ch.c0; k <= ch.c1; k++) {
+        const i = k % N, nx = -Math.sin(TT.hd[i]), ny = Math.cos(TT.hd[i]);
+        // cars don't all drive the exact same line: it wanders a little
+        const wob = 0.3 * Math.sin(k * 0.045) + 0.16 * Math.sin(k * 0.13 + 2.1) + 0.06 * Math.sin(k * 0.71 + d0 * 9);
+        const d = d0 + wob;
+        const x = TT.rlX[i] + nx * d, y = TT.rlY[i] + ny * d;
+        if (k === ch.c0) p.moveTo(x, y); else p.lineTo(x, y);
+      }
+      return p;
+    };
+    const P = OFFS.map(function () { return new Path2D(); });
+    for (const ch of vis) {
+      if (!ch.dryP) ch.dryP = OFFS.map(function (d) { return build(ch, d); });
+      for (let j = 0; j < OFFS.length; j++) P[j].addPath(ch.dryP[j]);
+    }
+    const dry = mixHex(COL.asphalt, '#62666d', 0.2);
+    ctx.save();
+    ctx.lineCap = 'round'; ctx.strokeStyle = dry;
+    // the middle between the wheels dries last
+    if (ld > 0.45) {
+      const f = (ld - 0.45) / 0.55;
+      ctx.globalAlpha = a * f * 0.6;
+      ctx.lineWidth = 0.6 + 1.8 * f;
+      ctx.setLineDash([13, 3.5 * (1 - f), 6, 2.4 * (1 - f), 21, 4.2 * (1 - f), 9, 1.8 * (1 - f)]);
+      ctx.stroke(P[6]);
+    }
+    const gap = Math.max(0.08, 1 - ld), w = 0.3 + 0.35 * ld;
+    const DASH = [4.2, 3.1, 1.6, 1.9, 7.5, 4.4, 2.4, 1.2, 9.8, 2.7, 3.3, 5.1];
+    const dash = DASH.map(function (v, q) { return q % 2 ? v * gap : v; });
+    // [path, strength, dash offset]: the middle of each wheel track strongest, its edges fainter and more broken
+    const strands = [[1, 0.75, 0], [4, 0.75, 6.1], [0, 0.35, 3.1], [2, 0.45, 9.4], [3, 0.45, 12.2], [5, 0.35, 1.7]];
+    ctx.setLineDash(dash); ctx.lineWidth = w;
+    for (const st of strands) {
+      ctx.globalAlpha = a * st[1] * (0.75 + 0.25 * ld);
+      ctx.lineDashOffset = st[2];
+      ctx.stroke(P[st[0]]);
+    }
+    ctx.restore();
+  };
+
+  /* Standing water in heavy rain: soft-edged pools near the edges of the track, longer than they are wide, with
+     no outline. In daylight they mirror the grey sky (a little lighter than the wet track, smooth); at night they
+     are darker, like black glass. Rain drops landing on them make little rings. */
+  Renderer.prototype.puddleSprite = function (v, night) {
+    const cache = this.pudSpr || (this.pudSpr = {}), key = v + (night ? 'n' : 'd');
+    if (cache[key]) return cache[key];
+    const W = 160, H = 64, cv = document.createElement('canvas'); cv.width = W; cv.height = H;
+    const g = cv.getContext('2d');
+    let seed = 31 + v * 977; const rnd = function () { seed = (seed * 16807) % 2147483647; return (seed - 1) / 2147483646; };
+    // a chain of overlapping ovals along the length: one smooth, slightly uneven pool
+    const blobs = [], n = 3 + Math.floor(rnd() * 2);
+    for (let i = 0; i < n; i++) {
+      const t = n > 1 ? i / (n - 1) : 0.5;
+      blobs.push({ x: W * (0.36 + 0.28 * t), y: H / 2 + (rnd() - 0.5) * 5, rx: W * (0.2 + rnd() * 0.06), ry: H * (0.26 + rnd() * 0.08) });
+    }
+    // soft edge: the same shape several times, each a little smaller, so the edge fades in
+    for (let j = 0; j < 8; j++) {
+      const sc = 1.08 - j * 0.04;
+      g.fillStyle = night ? 'rgba(6,8,12,0.13)' : 'rgba(120,130,146,0.085)';
+      g.beginPath();
+      for (const b of blobs) { g.moveTo(b.x + b.rx * sc, b.y); g.ellipse(b.x, b.y, b.rx * sc, b.ry * sc, 0, 0, TAU); }
+      g.fill();
+    }
+    // the reflection: a soft lighter band across the water
+    g.globalCompositeOperation = 'source-atop';
+    const gr = g.createLinearGradient(0, 0, W * 0.6, H);
+    gr.addColorStop(0, 'rgba(255,255,255,0)'); gr.addColorStop(0.55, night ? 'rgba(90,100,120,0.16)' : 'rgba(225,232,242,0.2)'); gr.addColorStop(1, 'rgba(255,255,255,0)');
+    g.fillStyle = gr; g.fillRect(0, 0, W, H);
+    cache[key] = cv;
+    return cv;
+  };
+  Renderer.prototype.drawPuddles = function (ctx, vis, a, rain, night, dt, vc, vr) {
+    const rip = this.ripples || (this.ripples = []), live = [];
+    ctx.save();
+    ctx.globalAlpha = a;
+    for (const ch of vis) {
+      for (const p of ch.pudL) {
+        if (Math.abs(p.x - vc[0]) > vr + 8 || Math.abs(p.y - vc[1]) > vr + 8) continue;
+        live.push(p);
+        ctx.save(); ctx.translate(p.x, p.y); ctx.rotate(p.a);
+        ctx.drawImage(this.puddleSprite(p.v, night), -p.l, -p.w, 2 * p.l, 2 * p.w);
+        ctx.restore();
+      }
+    }
+    ctx.restore();
+    // rain drops landing in them: small rings that spread and fade
+    const st = Math.min(0.05, dt || 0);
+    if (rain > 0.05 && live.length && st > 0) {
+      let want = rain * live.length * 5 * st;
+      while (want > 0 && rip.length < 300) {
+        if (want >= 1 || Math.random() < want) {
+          const p = live[Math.floor(Math.random() * live.length)], u = (Math.random() - 0.5) * 1.3 * p.l, v = (Math.random() - 0.5) * 0.9 * p.w;
+          rip.push({ x: p.x + Math.cos(p.a) * u - Math.sin(p.a) * v, y: p.y + Math.sin(p.a) * u + Math.cos(p.a) * v, t: 0 });
+        }
+        want -= 1;
+      }
+    }
+    if (rip.length) {
+      const path = new Path2D();
+      let k = 0;
+      for (let i = 0; i < rip.length; i++) {
+        const r = rip[i]; r.t += st;
+        if (r.t > 0.5) continue;
+        rip[k++] = r;
+        const rad = 0.08 + r.t * 1.0;
+        path.moveTo(r.x + rad, r.y); path.arc(r.x, r.y, rad, 0, TAU);
+      }
+      rip.length = k;
+      ctx.strokeStyle = night ? 'rgba(170,185,210,' + (0.2 * a).toFixed(3) + ')' : 'rgba(235,242,250,' + (0.26 * a).toFixed(3) + ')';
+      ctx.lineWidth = 0.045; ctx.stroke(path);
+    }
+  };
+
+  /* Rain on the screen, seen from above: faint, short flicks of falling drops, each a little different (length,
+     angle, brightness, speed), with gusts swaying them now and then; little splash rings; and the picture a little
+     darker and greyer the harder it rains (a light haze in a downpour). */
   Renderer.prototype.drawRain = function (ctx, rain, wet, dt) {
     const W = this.w, H = this.h, area = (W * H) / (1366 * 768), ph = Math.min(1.2, Math.max(0.6, H / 768));
-    const shade = 0.05 * wet + 0.24 * Math.max(0, rain - 0.25) / 0.75;
-    if (shade > 0.005) { ctx.fillStyle = 'rgba(30,38,50,' + shade.toFixed(3) + ')'; ctx.fillRect(0, 0, W, H); }
-    const want = rain < 0.02 ? 0 : Math.round(area * (rain < 0.5 ? 40 + 300 * rain : 130 + 300 * rain) * (this.lite ? 0.5 : 1));
-    const P = this.rainP, ang = 0.32, dx = Math.sin(ang), dy = Math.cos(ang);
+    // darker and a little greyer: in heavy rain a light haze hangs over everything (one wash over the screen)
+    const shade = 0.05 * wet + 0.22 * Math.max(0, rain - 0.25) / 0.75, haze = Math.max(0, rain - 0.3) / 0.7;
+    if (shade > 0.005) {
+      const r = Math.round(30 + 40 * haze), g = Math.round(38 + 40 * haze), b = Math.round(50 + 40 * haze);
+      ctx.fillStyle = 'rgba(' + r + ',' + g + ',' + b + ',' + shade.toFixed(3) + ')'; ctx.fillRect(0, 0, W, H);
+    }
+    const now = performance.now() / 1000, mv = Math.min(dt, 0.05);
+    const want = rain < 0.02 ? 0 : Math.round(area * (rain < 0.5 ? 50 + 320 * rain : 140 + 340 * rain) * (this.lite ? 0.5 : 1));
+    const P = this.rainP;
+    // gusts: the angle sways slowly
+    const ang = 0.3 + 0.08 * Math.sin(now * 0.7) + 0.04 * Math.sin(now * 2.3);
     const spawn = function (p, top) {
-      p.y = top ? -40 - Math.random() * H * 0.25 : Math.random() * H;
-      p.x = Math.random() * (W + H * dx) - H * dx * (top ? 0.4 : 0);
-      p.v = (1250 + Math.random() * 650) * ph * (0.85 + 0.3 * rain);
-      p.l = (14 + Math.random() * 14 + 18 * rain) * ph;
-      p.a = Math.random() < 0.5 ? 0 : 1;
+      p.da = (Math.random() - 0.5) * 0.12;                      // each drop a little different
+      p.y = top ? -20 - Math.random() * H * 0.2 : Math.random() * H;
+      p.x = Math.random() * (W + H * 0.4) - H * 0.4 * (top ? 0.5 : 0);
+      p.v = (1100 + Math.random() * 900) * ph * (0.85 + 0.3 * rain);
+      p.l = (3 + Math.random() * 6 + 5 * rain) * ph;            // short flicks
+      p.c = Math.floor(Math.random() * 3);                       // brightness: three shades
       return p;
     };
     while (P.length < want) P.push(spawn({}, false));
     if (P.length > want) P.length = Math.max(want, P.length - Math.ceil(P.length * 0.04 + 1));     // eases off
-    const mv = Math.min(dt, 0.05);
-    const paths = [new Path2D(), new Path2D()];
+    const paths = [new Path2D(), new Path2D(), new Path2D()];
     for (let i = 0; i < P.length; i++) {
-      const p = P[i];
+      const p = P[i], dx = Math.sin(ang + p.da), dy = Math.cos(ang + p.da);
       p.x += dx * p.v * mv; p.y += dy * p.v * mv;
       if (p.y - p.l > H || p.x - p.l > W) spawn(p, true);
-      const path = paths[p.a];
-      path.moveTo(p.x, p.y); path.lineTo(p.x - dx * p.l, p.y - dy * p.l);
+      paths[p.c].moveTo(p.x, p.y); paths[p.c].lineTo(p.x - dx * p.l, p.y - dy * p.l);
     }
     ctx.lineCap = 'butt';
-    ctx.lineWidth = rain > 0.55 ? 1.25 : 1;
-    ctx.strokeStyle = 'rgba(205,220,242,0.26)'; ctx.stroke(paths[0]);
-    ctx.strokeStyle = 'rgba(220,232,250,0.42)'; ctx.stroke(paths[1]);
+    ctx.lineWidth = rain > 0.55 ? 1.2 : 1;
+    const AL = [0.11, 0.2, 0.32];
+    for (let q = 0; q < 3; q++) { ctx.strokeStyle = 'rgba(215,226,244,' + AL[q] + ')'; ctx.stroke(paths[q]); }
+    ctx.lineCap = 'butt';
     // splashes: little rings where drops land (fading as they grow: three shades, one stroke each)
     if (!this.lite) {
       const S = this.splash, now = performance.now() / 1000, life = 0.32;
@@ -1099,7 +1277,7 @@
       }
       S.length = k;
       ctx.lineWidth = 0.9;
-      for (let q = 0; q < 3; q++) { ctx.strokeStyle = 'rgba(215,228,245,' + (0.4 - q * 0.13).toFixed(2) + ')'; ctx.stroke(rings[q]); }
+      for (let q = 0; q < 3; q++) { ctx.strokeStyle = 'rgba(215,228,245,' + (0.26 - q * 0.08).toFixed(2) + ')'; ctx.stroke(rings[q]); }
     }
   };
 
@@ -1229,10 +1407,11 @@
   Renderer.prototype.drawMeGlow = function (ctx, c) {
     ctx.save();
     ctx.translate(c.x, c.y);
-    ctx.fillStyle = 'rgba(255,214,0,0.16)';
-    ctx.beginPath(); ctx.arc(0, 0, 4.4, 0, TAU); ctx.fill();
-    ctx.strokeStyle = 'rgba(255,214,0,0.85)'; ctx.lineWidth = 0.22;
-    ctx.beginPath(); ctx.arc(0, 0, 4.4, 0, TAU); ctx.stroke();
+    // a thin yellow ring: marks you without hiding the track around you
+    ctx.strokeStyle = 'rgba(0,0,0,0.35)'; ctx.lineWidth = 0.3;
+    ctx.beginPath(); ctx.arc(0, 0, 4.0, 0, TAU); ctx.stroke();
+    ctx.strokeStyle = 'rgba(255,214,0,0.9)'; ctx.lineWidth = 0.16;
+    ctx.beginPath(); ctx.arc(0, 0, 4.0, 0, TAU); ctx.stroke();
     ctx.restore();
   };
 
@@ -1246,19 +1425,28 @@
   const FLOOR = [-2.0, -0.62, -0.9, -0.74, 0.9, -0.62, 1.2, -0.3, 1.2, 0.3, 0.9, 0.62, -0.9, 0.74, -2.0, 0.62];
   const COVER = [-2.12, -0.1, -0.4, -0.2, 0.3, -0.15, 0.3, 0.15, -0.4, 0.2, -2.12, 0.1];
 
-  /* Draws a car centred at (c.x, c.y) heading c.a in world metres. */
+  /* Draws a car centred at (c.x, c.y) heading c.a in world metres: a soft shadow in the car's shape (offset fixed
+     in world space, as if from the sun), the front wheels (they steer), then the rest of the car from a picture
+     made once per team / tyre / DRS (shaded paint and all), so a full grid costs little to draw. */
   Renderer.prototype.drawCar = function (ctx, c, team, delta, drsOpen) {
+    const sh = carShadow();
     ctx.save();
-    // shadow (offset fixed in world space)
-    ctx.fillStyle = 'rgba(0,0,0,0.32)';
-    ctx.translate(c.x + 0.28, c.y + 0.34);
+    ctx.translate(c.x + 0.32, c.y + 0.4);
     ctx.rotate(c.a);
-    ctx.fillRect(-2.6, -0.85, 5.25, 1.7);
+    ctx.globalAlpha *= 0.5;
+    ctx.drawImage(sh, -CAR_X0 - SH_PAD, -CAR_HW - SH_PAD, (CAR_X0 + CAR_X1) + 2 * SH_PAD, 2 * CAR_HW + 2 * SH_PAD);
     ctx.restore();
     ctx.save();
     ctx.translate(c.x, c.y);
     ctx.rotate(c.a);
-    drawCarLocal(ctx, team, delta, drsOpen);
+    const tc = c.tyreC && F1.TYRES[c.tyreC] ? F1.TYRES[c.tyreC].col : null;
+    for (const sy of [-0.77, 0.77]) {
+      ctx.save(); ctx.translate(1.55, sy); ctx.rotate(delta * 1.6);
+      tyreShape(ctx, -0.35, -0.17, 0.7, 0.34, tc);
+      ctx.restore();
+    }
+    const spr = carSprite(team, tc, drsOpen);
+    ctx.drawImage(spr, -CAR_X0, -CAR_HW, CAR_X0 + CAR_X1, 2 * CAR_HW);
     if (this.night) {
       // night races: the red rear light glows
       ctx.fillStyle = 'rgba(255,40,40,0.28)';
@@ -1268,49 +1456,191 @@
     ctx.restore();
   };
 
-  function drawCarLocal(ctx, team, delta, drsOpen) {
-    ctx.fillStyle = '#121212';
+  // the car picture covers x -2.9 .. 2.8 m (rear to front wing), y -1.05 .. 1.05 m; 40 px a metre
+  const CAR_X0 = 2.9, CAR_X1 = 2.8, CAR_HW = 1.05, SPR_K = 40, SH_PAD = 0.45;
+  const sprites = {};
+  function carSprite(team, tc, drsOpen) {
+    const key = team.primary + team.secondary + team.accent + (team.split ? 's' : '') + (tc || '-') + (drsOpen ? 'd' : '');
+    let cv = sprites[key];
+    if (cv) return cv;
+    cv = document.createElement('canvas');
+    cv.width = Math.ceil((CAR_X0 + CAR_X1) * SPR_K); cv.height = Math.ceil(2 * CAR_HW * SPR_K);
+    const g = cv.getContext('2d');
+    g.scale(SPR_K, SPR_K); g.translate(CAR_X0, CAR_HW);
+    drawCarLocal(g, team, 0, drsOpen, null, tc, true);
+    sprites[key] = cv;
+    return cv;
+  }
+  // the shadow: the car's outline, blurred (the same for every car)
+  let shadowCv = null;
+  function carShadow() {
+    if (shadowCv) return shadowCv;
+    const K = 20, cv = document.createElement('canvas');
+    cv.width = Math.ceil((CAR_X0 + CAR_X1 + 2 * SH_PAD) * K); cv.height = Math.ceil((2 * CAR_HW + 2 * SH_PAD) * K);
+    const g = cv.getContext('2d');
+    // build the silhouette once, then lay it down several times, shifted a little each time: a soft edge
+    const sil = document.createElement('canvas'); sil.width = cv.width; sil.height = cv.height;
+    const s = sil.getContext('2d');
+    s.scale(K, K); s.translate(CAR_X0 + SH_PAD, CAR_HW + SH_PAD);
+    s.fillStyle = '#000';
+    s.fillRect(-2.34, -0.97, 0.78, 0.44); s.fillRect(-2.34, 0.53, 0.78, 0.44);      // rear tyres
+    s.fillRect(1.2, -0.94, 0.7, 0.34); s.fillRect(1.2, 0.6, 0.7, 0.34);             // front tyres
+    poly(s, FLOOR); s.fill(); poly(s, BODY); s.fill();
+    s.fillRect(2.3, -0.98, 0.36, 1.96);                                             // front wing
+    s.fillRect(-2.78, -0.58, 0.36, 1.16);                                           // rear wing
+    const offs = [[0, 0], [1, 0], [-1, 0], [0, 1], [0, -1], [1, 1], [-1, -1], [1, -1], [-1, 1], [2, 0], [-2, 0], [0, 2], [0, -2]];
+    g.globalAlpha = 1 / 5;
+    for (const o of offs) g.drawImage(sil, o[0] * 2, o[1] * 2);
+    shadowCv = cv;
+    return cv;
+  }
+
+  function shadeHex(h, f) {           // f < 1 darker, > 1 lighter
+    const n = parseInt(h.slice(1), 16), r = n >> 16, g = (n >> 8) & 255, b = n & 255;
+    const m = function (v) { return Math.max(0, Math.min(255, Math.round(f < 1 ? v * f : v + (255 - v) * (f - 1)))); };
+    return 'rgb(' + m(r) + ',' + m(g) + ',' + m(b) + ')';
+  }
+  function rrectPath(ctx, x, y, w, h, r) { ctx.beginPath(); ctx.moveTo(x + r, y); ctx.arcTo(x + w, y, x + w, y + h, r); ctx.arcTo(x + w, y + h, x, y + h, r); ctx.arcTo(x, y + h, x, y, r); ctx.arcTo(x, y, x + w, y, r); ctx.closePath(); }
+  // a tyre from above: rounded, darker at the edges, a coloured band on each sidewall (the compound)
+  function tyreShape(ctx, x, y, w, h, col) {
+    const g = ctx.createLinearGradient(0, y, 0, y + h);
+    g.addColorStop(0, '#141416'); g.addColorStop(0.5, '#38383c'); g.addColorStop(1, '#141416');
+    ctx.fillStyle = g; rrectPath(ctx, x, y, w, h, 0.09); ctx.fill();
+    ctx.strokeStyle = 'rgba(0,0,0,0.7)'; ctx.lineWidth = 0.03; ctx.stroke();
+    if (col) {
+      ctx.fillStyle = col;
+      ctx.fillRect(x + 0.1, y + 0.025, w - 0.2, 0.055); ctx.fillRect(x + 0.1, y + h - 0.08, w - 0.2, 0.055);
+    }
+  }
+
+  /* The car in its own frame (metres, nose along +x). tc = the tyre colour (sidewall bands) or null;
+     noFront: leave out the front tyres (drawCar draws them, turned with the steering). */
+  function drawCarLocal(ctx, team, delta, drsOpen, tyreC, tc, noFront) {
+    if (tc === undefined) tc = tyreC && F1.TYRES[tyreC] ? F1.TYRES[tyreC].col : null;
     // rear tyres
-    ctx.fillRect(-2.32, -0.95, 0.74, 0.42);
-    ctx.fillRect(-2.32, 0.53, 0.74, 0.42);
+    tyreShape(ctx, -2.34, -0.97, 0.78, 0.44, tc);
+    tyreShape(ctx, -2.34, 0.53, 0.78, 0.44, tc);
     // front tyres (steer)
-    for (const sy of [-0.77, 0.77]) {
+    if (!noFront) for (const sy of [-0.77, 0.77]) {
       ctx.save(); ctx.translate(1.55, sy); ctx.rotate(delta * 1.6);
-      ctx.fillRect(-0.34, -0.16, 0.68, 0.32);
+      tyreShape(ctx, -0.35, -0.17, 0.7, 0.34, tc);
       ctx.restore();
     }
     // suspension arms
-    ctx.strokeStyle = '#2b2b2b'; ctx.lineWidth = 0.06;
+    ctx.strokeStyle = '#3a3a3d'; ctx.lineWidth = 0.055; ctx.lineCap = 'round';
     ctx.beginPath();
     ctx.moveTo(1.2, -0.22); ctx.lineTo(1.55, -0.62); ctx.moveTo(1.2, 0.22); ctx.lineTo(1.55, 0.62);
     ctx.moveTo(1.0, -0.3); ctx.lineTo(1.5, -0.62); ctx.moveTo(1.0, 0.3); ctx.lineTo(1.5, 0.62);
     ctx.moveTo(-1.6, -0.4); ctx.lineTo(-1.95, -0.55); ctx.moveTo(-1.6, 0.4); ctx.lineTo(-1.95, 0.55);
     ctx.stroke();
-    // floor
-    ctx.fillStyle = '#1b1b1d'; poly(ctx, FLOOR); ctx.fill();
-    // body
-    ctx.fillStyle = team.primary; poly(ctx, BODY); ctx.fill();
+    // floor, with a lighter edge
+    ctx.fillStyle = '#18181a'; poly(ctx, FLOOR); ctx.fill();
+    ctx.strokeStyle = '#2e2e33'; ctx.lineWidth = 0.05; ctx.stroke();
+    // body: rounded across its width (light along the top, darker down the sides)
+    const bodyGrad = function (col) {
+      const g = ctx.createLinearGradient(0, -0.66, 0, 0.66);
+      g.addColorStop(0, shadeHex(col, 0.52)); g.addColorStop(0.28, shadeHex(col, 0.92)); g.addColorStop(0.5, shadeHex(col, 1.1));
+      g.addColorStop(0.72, shadeHex(col, 0.92)); g.addColorStop(1, shadeHex(col, 0.52));
+      return g;
+    };
+    ctx.fillStyle = bodyGrad(team.primary); poly(ctx, BODY); ctx.fill();
     if (team.split) {
       ctx.save(); ctx.beginPath(); ctx.rect(-3, 0, 6, 1.5); ctx.clip();
-      ctx.fillStyle = team.secondary; poly(ctx, BODY); ctx.fill();
+      ctx.fillStyle = bodyGrad(team.secondary); poly(ctx, BODY); ctx.fill();
       ctx.restore();
     }
-    ctx.fillStyle = team.split ? team.accent : team.secondary; poly(ctx, COVER); ctx.fill();
-    ctx.strokeStyle = 'rgba(0,0,0,0.35)'; ctx.lineWidth = 0.04; poly(ctx, BODY); ctx.stroke();
-    // front wing
-    ctx.fillStyle = team.secondary; ctx.fillRect(2.3, -0.93, 0.36, 1.86);
-    ctx.fillStyle = team.primary; ctx.fillRect(2.28, -0.95, 0.4, 0.08); ctx.fillRect(2.28, 0.87, 0.4, 0.08);
-    // rear wing (flap opens with DRS)
-    ctx.fillStyle = team.primary; ctx.fillRect(-2.72, -0.52, 0.2, 1.04);
-    ctx.fillStyle = drsOpen ? '#7CFF6B' : team.secondary; ctx.fillRect(drsOpen ? -2.47 : -2.52, -0.5, 0.16, 1.0);
-    ctx.fillStyle = '#111'; ctx.fillRect(-2.74, -0.55, 0.3, 0.06); ctx.fillRect(-2.74, 0.49, 0.3, 0.06);
-    // cockpit, helmet, halo
-    ctx.fillStyle = '#0b0b0c'; ctx.beginPath(); ctx.ellipse(0.5, 0, 0.46, 0.25, 0, 0, TAU); ctx.fill();
-    ctx.fillStyle = team.accent; ctx.beginPath(); ctx.arc(0.42, 0, 0.16, 0, TAU); ctx.fill();
-    ctx.strokeStyle = '#2c2c2e'; ctx.lineWidth = 0.08;
+    // sidepod inlets
+    ctx.fillStyle = 'rgba(0,0,0,0.55)';
+    ctx.beginPath(); ctx.ellipse(0.2, -0.55, 0.16, 0.07, 0.35, 0, TAU); ctx.ellipse(0.2, 0.55, 0.16, 0.07, -0.35, 0, TAU); ctx.fill();
+    // engine cover in the second colour, also rounded
+    const cov = team.split ? team.accent : team.secondary;
+    const cg = ctx.createLinearGradient(0, -0.22, 0, 0.22);
+    cg.addColorStop(0, shadeHex(cov, 0.62)); cg.addColorStop(0.5, shadeHex(cov, 1.08)); cg.addColorStop(1, shadeHex(cov, 0.62));
+    ctx.fillStyle = cg; poly(ctx, COVER); ctx.fill();
+    // a shine along the top of the nose and the engine cover
+    ctx.strokeStyle = 'rgba(255,255,255,0.26)'; ctx.lineWidth = 0.06;
+    ctx.beginPath(); ctx.moveTo(1.3, 0); ctx.lineTo(2.45, 0); ctx.moveTo(-0.5, 0); ctx.lineTo(-1.9, 0); ctx.stroke();
+    ctx.strokeStyle = 'rgba(0,0,0,0.4)'; ctx.lineWidth = 0.035; poly(ctx, BODY); ctx.stroke();
+    // front wing: main plane and flap, swept back at the tips, with end plates
+    ctx.fillStyle = shadeHex(team.secondary, 0.95);
+    ctx.beginPath(); ctx.moveTo(2.66, -0.25); ctx.lineTo(2.66, 0.25); ctx.lineTo(2.56, 0.95); ctx.lineTo(2.36, 0.95); ctx.lineTo(2.44, 0.25); ctx.lineTo(2.44, -0.25); ctx.lineTo(2.36, -0.95); ctx.lineTo(2.56, -0.95); ctx.closePath(); ctx.fill();
+    ctx.fillStyle = '#151517'; ctx.fillRect(2.3, -0.9, 0.07, 1.8);
+    ctx.fillStyle = team.primary; ctx.fillRect(2.3, -0.98, 0.32, 0.06); ctx.fillRect(2.3, 0.92, 0.32, 0.06);
+    // rear wing (flap opens with DRS), end plates
+    ctx.fillStyle = shadeHex(team.primary, 0.85); ctx.fillRect(-2.74, -0.54, 0.22, 1.08);
+    ctx.fillStyle = drsOpen ? '#7CFF6B' : team.secondary; ctx.fillRect(drsOpen ? -2.46 : -2.52, -0.5, 0.15, 1.0);
+    ctx.fillStyle = '#0f0f10'; ctx.fillRect(-2.78, -0.58, 0.36, 0.07); ctx.fillRect(-2.78, 0.51, 0.36, 0.07);
+    // cockpit, helmet with visor, halo
+    ctx.fillStyle = '#0a0a0b'; ctx.beginPath(); ctx.ellipse(0.5, 0, 0.46, 0.25, 0, 0, TAU); ctx.fill();
+    const hg = ctx.createRadialGradient(0.46, -0.05, 0.02, 0.42, 0, 0.17);
+    hg.addColorStop(0, shadeHex(team.accent, 1.35)); hg.addColorStop(1, shadeHex(team.accent, 0.8));
+    ctx.fillStyle = hg; ctx.beginPath(); ctx.arc(0.42, 0, 0.16, 0, TAU); ctx.fill();
+    ctx.fillStyle = '#16181c'; ctx.fillRect(0.5, -0.09, 0.07, 0.18);
+    ctx.strokeStyle = '#4a4b50'; ctx.lineWidth = 0.075;
     ctx.beginPath(); ctx.ellipse(0.47, 0, 0.36, 0.27, 0, -1.25, 1.25); ctx.moveTo(0.83, 0); ctx.lineTo(1.0, 0); ctx.stroke();
+    ctx.strokeStyle = 'rgba(255,255,255,0.18)'; ctx.lineWidth = 0.03;
+    ctx.beginPath(); ctx.ellipse(0.47, 0, 0.36, 0.27, 0, -1.0, -0.2); ctx.stroke();
+    ctx.lineCap = 'butt';
   }
   Renderer.drawCarLocal = drawCarLocal;
+
+  /* A radio-style message strip: your engineer (blue tag, with a little radio level meter for a moment) or race
+     control (yellow tag for a warning, red for a penalty). Title and second line share one line when they fit,
+     otherwise the second line goes underneath. Slim, so the road ahead stays in view. Returns its height. */
+  Renderer.prototype.drawRadioStrip = function (ctx, m, cx, y, maxW, phone) {
+    const rc = m.from === 'rc', pen = m.sign === 'pen';
+    const tagTxt = rc ? 'RACE CONTROL' : 'ENGINEER';
+    const tagBg = rc ? (pen ? '#e10600' : '#ffd400') : '#2f6fed', tagFg = rc && !pen ? '#111' : '#fff';
+    const fTag = phone ? 9 : 10, fT = phone ? 13 : 16, fS = phone ? 11.5 : 13.5;
+    const padX = phone ? 8 : 10, gap = phone ? 7 : 9, meterW = rc ? 0 : (phone ? 12 : 14);
+    ctx.save();
+    ctx.globalAlpha = m.alpha === undefined ? 1 : m.alpha;
+    ctx.textBaseline = 'middle'; ctx.textAlign = 'left';
+    ctx.font = '800 ' + fTag + 'px ' + FONT;
+    const tagW = ctx.measureText(tagTxt).width + (phone ? 10 : 12);
+    let tFont = fT;
+    ctx.font = '800 ' + tFont + 'px ' + FONT;
+    let titleW = ctx.measureText(m.text).width;
+    const head = padX + tagW + gap + (meterW ? meterW + gap : 0);
+    while (tFont > 10 && head + titleW + padX > maxW) { tFont--; ctx.font = '800 ' + tFont + 'px ' + FONT; titleW = ctx.measureText(m.text).width; }
+    ctx.font = '600 ' + fS + 'px ' + FONT;
+    const sub = m.sub || '', subW = sub ? ctx.measureText(sub).width : 0;
+    const one = !sub || head + titleW + 14 + subW + padX <= maxW;
+    let subs = [];
+    if (sub && !one) subs = wrapText(ctx, sub, maxW - head - padX);
+    let w = one ? head + titleW + (sub ? 14 + subW : 0) + padX : head + Math.max(titleW, Math.max.apply(null, subs.map(function (t) { return ctx.measureText(t).width; }))) + padX;
+    w = Math.min(w, maxW);
+    const lh = phone ? 24 : 30, sh = phone ? 15 : 18;
+    const h = one ? lh : lh + subs.length * sh - (phone ? 4 : 6);
+    const x = cx - w / 2;
+    ctx.fillStyle = 'rgba(10,10,14,0.86)'; roundRect(ctx, x, y, w, h, 5); ctx.fill();
+    ctx.fillStyle = m.color || tagBg; ctx.fillRect(x, y, 3, h);
+    // the label
+    const tagH = phone ? 14 : 17, ty = y + lh / 2;
+    ctx.fillStyle = tagBg; roundRect(ctx, x + padX, ty - tagH / 2, tagW, tagH, 3); ctx.fill();
+    ctx.fillStyle = tagFg; ctx.font = '800 ' + fTag + 'px ' + FONT; ctx.textAlign = 'center';
+    ctx.fillText(tagTxt, x + padX + tagW / 2, ty + 0.5);
+    ctx.textAlign = 'left';
+    let tx = x + padX + tagW + gap;
+    if (meterW) {
+      // radio level meter: bouncing while the message comes in, then resting
+      const live = (m.age || 0) < 1400, t = (m.age || 0) / 1000;
+      for (let k = 0; k < 4; k++) {
+        const lvl = live ? 0.35 + 0.65 * Math.abs(Math.sin(t * (9 + k * 3.7) + k * 1.3)) : 0.3;
+        const bh = Math.max(2, (tagH - 3) * lvl);
+        ctx.fillStyle = live ? '#8fb4ff' : 'rgba(143,180,255,0.55)';
+        ctx.fillRect(tx + k * (meterW / 4), ty + tagH / 2 - 1.5 - bh, meterW / 4 - 1.2, bh);
+      }
+      tx += meterW + gap;
+    }
+    ctx.fillStyle = '#fff'; ctx.font = '800 ' + tFont + 'px ' + FONT;
+    ctx.fillText(m.text, tx, ty + 0.5);
+    ctx.font = '600 ' + fS + 'px ' + FONT; ctx.fillStyle = m.subColor || '#cfd3d8';
+    if (one && sub) ctx.fillText(sub, tx + titleW + 14, ty + 0.5);
+    else for (let k = 0; k < subs.length; k++) ctx.fillText(subs[k], tx, y + lh - (phone ? 3 : 4) + k * sh + sh / 2);
+    ctx.restore();
+    return h;
+  };
 
   Renderer.prototype.drawYouTag = function (ctx, x, y, small) {
     ctx.save();
@@ -1469,22 +1799,34 @@
         ctx.fillStyle = r.me ? '#111' : (r.out ? '#777' : '#fff');
         ctx.font = '800 ' + Math.round(rh * 0.62) + 'px ' + FONT;
         ctx.fillText(r.code, x0 + 37, y + rh / 2);
-        if (r.tyre) drawTyreIcon(ctx, x0 + (compact ? 72 : 84), y + rh / 2, Math.max(4, rh * (compact ? 0.28 : 0.32)), r.tyre, r.me);
-        if (r.pen) {
-          const pw2 = Math.round(rh * 1.45), px2 = x0 + (compact ? 70 : 92) + (r.tyre ? (compact ? 10 : 8) : 0);
-          ctx.fillStyle = '#e10600'; roundRect(ctx, px2, y + 3, pw2, rh - 7, 3); ctx.fill();
-          ctx.fillStyle = '#fff'; ctx.font = '800 ' + Math.round(rh * 0.5) + 'px ' + FONT; ctx.textAlign = 'center';
-          ctx.fillText('+' + r.pen + 's', px2 + pw2 / 2, y + rh / 2);
+        // after the name, one after another: tyre, chequered flag (finished), penalty
+        let nx = x0 + (compact ? 66 : 77);
+        if (r.tyre) {
+          const tr = Math.max(4, rh * (compact ? 0.28 : 0.32));
+          drawTyreIcon(ctx, nx + tr, y + rh / 2, tr, r.tyre, r.me);
+          nx += 2 * tr + (compact ? 4 : 5);
         }
+        if (r.done) {
+          const s = Math.max(2, Math.floor((rh - 8) / 3)), fy = Math.round(y + rh / 2 - 1.5 * s);
+          ctx.fillStyle = 'rgba(0,0,0,0.6)'; ctx.fillRect(nx - 1, fy - 1, 3 * s + 2, 3 * s + 2);
+          for (let a = 0; a < 3; a++) for (let b = 0; b < 3; b++) { ctx.fillStyle = (a + b) % 2 ? '#111' : '#fff'; ctx.fillRect(nx + a * s, fy + b * s, s, s); }
+          nx += 3 * s + (compact ? 4 : 5);
+        }
+        if (r.pen) {
+          const pw2 = Math.round(rh * (compact ? 1.3 : 1.45));
+          ctx.fillStyle = '#e10600'; roundRect(ctx, nx, y + 3, pw2, rh - 7, 3); ctx.fill();
+          ctx.fillStyle = '#fff'; ctx.font = '800 ' + Math.round(rh * 0.5) + 'px ' + FONT; ctx.textAlign = 'center';
+          ctx.fillText('+' + r.pen + 's', nx + pw2 / 2, y + rh / 2);
+          nx += pw2 + 4;
+        }
+        r.infoX = nx;                                // (the time / gap on the right must start after this)
         ctx.textAlign = 'right';
         ctx.font = '600 ' + Math.round(rh * 0.56) + 'px ' + FONT;
         ctx.fillStyle = r.me ? '#111' : r.tag === 'pit' ? '#6ea2ff' : r.tag === 'gar' ? '#8f96a0' : (r.purple ? '#c77dff' : (r.out ? '#777' : '#d7dbe0'));
         if (r.tag) ctx.font = '800 ' + Math.round(rh * 0.5) + 'px ' + FONT;
-        ctx.fillText(r.info || '', x0 + tw - 8, y + rh / 2);
-        if (r.done) {
-          const fx = x0 + 76, fy = y + 4, s = Math.max(2, Math.floor((rh - 8) / 3));
-          for (let a = 0; a < 3; a++) for (let b = 0; b < 3; b++) { ctx.fillStyle = (a + b) % 2 ? '#111' : '#fff'; ctx.fillRect(fx + a * s, fy + b * s, s, s); }
-        }
+        const room = x0 + tw - 8 - r.infoX, iw = ctx.measureText(r.info || '').width;
+        if (iw > room && room > 10) { ctx.save(); ctx.translate(x0 + tw - 8, y + rh / 2); ctx.scale(room / iw, 1); ctx.fillText(r.info || '', 0, 0); ctx.restore(); }
+        else ctx.fillText(r.info || '', x0 + tw - 8, y + rh / 2);
         y += rh;
         if (cut && i === 0) {
           // some cars are left out between the leader and the ones around you
@@ -1640,6 +1982,7 @@
       // a phone shows the two newest, so the road ahead stays in view
       const list = phone && hud.msgs.length > 2 ? hud.msgs.slice(-2) : hud.msgs;
       for (let i = 0; i < list.length; i++) {
+        if (list[i].from) { my2 += this.drawRadioStrip(ctx, list[i], mcx, my2, mfit ? mroom : Math.min(W - 40, 760), phone) + (phone ? 5 : 7); continue; }
         const m = list[i], sign = !!m.sign;
         let fT = m.big ? 30 : sign ? 21 : 20, fS = 14, subs = m.sub ? [m.sub] : [];
         const wT = sign ? '900 ' : '800 ', wS = sign ? '700 ' : '600 ';
@@ -1768,6 +2111,20 @@
       const cx2 = bx + 206;
       ctx.textAlign = 'left'; ctx.fillStyle = '#fff'; ctx.font = '800 26px ' + FONT;
       ctx.fillText(hud.posText || '', cx2, by + 28);
+      // live gaps (races): the car ahead above, the car behind below, right of your position
+      if (hud.gaps) {
+        const posW = ctx.measureText(hud.posText || '').width;
+        const gr = dc ? bx + bw - 14 : bx + 366, room = gr - (cx2 + posW + 10);
+        const lines = [hud.gaps.a, hud.gaps.b].filter(function (g) { return !!g; });
+        for (let i = 0; i < lines.length; i++) {
+          let f = dc ? 12 : 13;
+          ctx.font = '800 ' + f + 'px ' + FONT;
+          while (f > 9 && ctx.measureText(lines[i].text).width > room) { f--; ctx.font = '800 ' + f + 'px ' + FONT; }
+          ctx.textAlign = 'right'; ctx.fillStyle = lines[i].color;
+          ctx.fillText(lines[i].text, gr, by + (dc ? 25 : 20) + i * (dc ? 15 : 17) + (lines.length === 1 ? (dc ? 7 : 8) : 0));
+        }
+        ctx.textAlign = 'left';
+      }
       ctx.font = '700 13px ' + FONT; ctx.fillStyle = '#cfd3d8';
       ctx.fillText(hud.lapText || '', cx2, by + (dc ? 54 : 50));
       // sector blocks: S1 S2 S3 light up as you finish each sector (purple / green / yellow)
@@ -1916,7 +2273,20 @@
     const cur = hud.cur || '--:--.---';
     ctx.fillText(cur, bx + bw - 12, by + 46);
     const best = hud.best ? 'BEST ' + hud.best : hud.pb ? 'PB ' + hud.pb : '';
-    if (best) {
+    if (hud.gaps && (hud.gaps.a || hud.gaps.b)) {
+      // races: the live gaps in the middle of the bottom line (ahead · behind)
+      const l = bx + 12 + lapW + 10, r = bx + bw - 12 - ctx.measureText(cur).width - 10;
+      const parts = [hud.gaps.a, hud.gaps.b].filter(function (g) { return !!g; });
+      let f = 11;
+      const width = function () { ctx.font = '800 ' + f + 'px ' + FONT; let w = 0; for (let i = 0; i < parts.length; i++) w += ctx.measureText(parts[i].text).width; return w + (parts.length > 1 ? ctx.measureText('  ·  ').width : 0); };
+      while (f > 8 && width() > r - l) f--;
+      let x = (l + r) / 2 - width() / 2;
+      ctx.textAlign = 'left';
+      for (let i = 0; i < parts.length; i++) {
+        if (i) { ctx.fillStyle = '#6b7079'; ctx.fillText('  ·  ', x, by + 46); x += ctx.measureText('  ·  ').width; }
+        ctx.fillStyle = parts[i].color; ctx.fillText(parts[i].text, x, by + 46); x += ctx.measureText(parts[i].text).width;
+      }
+    } else if (best) {
       ctx.font = '700 11px ' + FONT;
       const l = bx + 12 + lapW + 12, r = bx + bw - 12 - 62 - 12;
       if (r - l >= ctx.measureText(best).width) {

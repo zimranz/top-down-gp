@@ -471,6 +471,16 @@
     },
     /* The other cars on the grid hold their revs while the lights come on (a different rhythm for each car). */
     gridRev: function (id, t) { return 0.36 + 0.24 * (0.5 + 0.5 * Math.sin(t * (2.1 + (id % 5) * 0.41) + id * 1.7)); },
+    /* Your engineer on the radio: a crackle of static, the two-tone radio beep, a little hiss under the message. */
+    radio: function () {
+      if (!this.ready || !this.active) return;
+      this.noiseHit('bandpass', 1900, 0.9, 0.2, 0.08);
+      this.noiseHit('bandpass', 2700, 1.6, 0.13, 0.04, 0.05);
+      this.noiseHit('bandpass', 1300, 1.2, 0.12, 0.06, 0.09);
+      this.beep(1320, 0.05, 0.17, 'square', 2600, 0.15);
+      this.beep(990, 0.075, 0.17, 'square', 2600, 0.21);
+      this.noiseHit('bandpass', 2100, 0.8, 0.05, 0.6, 0.3);
+    },
     warnBeep: function () { this.beep(880, 0.09, 0.3, 'square', 3000); this.beep(880, 0.09, 0.3, 'square', 3000, 0.14); },
     penaltyBuzz: function () { this.beep(196, 0.32, 0.36, 'sawtooth', 900); this.beep(147, 0.42, 0.34, 'sawtooth', 900, 0.3); },
     go: function () { this.beep(880, 0.25, 0.3, 'square', 3000); },
@@ -500,7 +510,6 @@
       } else if (e.k === 'tl' && e.id === myId) { if (e.pen) this.penaltyBuzz(); else this.warnBeep(); }
       else if (e.k === 'jump' && e.id === myId) this.penaltyBuzz();
       else if (e.k === 'noStop' && e.id === myId) this.penaltyBuzz();
-      else if ((e.k === 'mustStop' || e.k === 'wxTyres' || (e.k === 'tyres' && e.n === 2)) && e.id === myId) this.warnBeep();
       else if (e.k === 'finish' && e.id === myId) this.chequered();
       else if (e.k === 'chequered' && myId === null) this.chequered();
     }

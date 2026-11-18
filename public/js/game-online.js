@@ -329,6 +329,7 @@
       }
       window.HUD.eventMessage(this.msgs, e, this.myId, function (id) { return self.code(id); });
       window.GameAudio.event(e, this.myId);
+      if (window.Haptics && this.kind !== 'attract') window.Haptics.event(e);
     }
   };
 
@@ -398,6 +399,7 @@
       const v = this.carView(id);
       v.x = e.x + r.ex; v.y = e.y + r.ey; v.a = e.a + r.ea; v.vx = e.vx; v.vy = e.vy;
       v.delta = r.st.delta; v.drsOpen = !!(r.flags & 1); v.me = false; v.ghost = ghost; v.surf = 0; v.lock = !!(r.flags & 256);
+      v.tyreC = this.rows[id] ? this.rows[id].ty || null : null;
       v.lvl = r.flags & 512 ? 1 : r.flags & 1024 ? -1 : 0;
       v.garage = !!(r.flags & 2048);
       if (v.garage) { v.ghost = false; garage.push(v); } else cars.push(v);
@@ -413,6 +415,7 @@
       v.a = window.Renderer.lerpAngle(p.a, own.a, alpha) + this.err.a;
       v.vx = own.vx; v.vy = own.vy; v.delta = own.delta; v.drsOpen = own.drsOpen; v.surf = own.surf;
       v.me = true; v.ghost = false; v.lock = false;
+      v.tyreC = this.rows[this.myId] ? this.rows[this.myId].ty || null : null;
       v.lvl = this.T.bridge ? F1.levelAt(this.T, own.s) : 0;
       v.garage = !!own.gar;
       if (v.garage) garage.push(v); else cars.push(v);
@@ -435,6 +438,7 @@
       const f = this.fx[i];
       R.sparks(f[0], f[1], f[2]);
       if (focus) window.GameAudio.contact(f[2], Math.hypot(f[0] - focus.x, f[1] - focus.y));
+      if (focus && focus.me && window.Haptics) window.Haptics.hit(f[2], Math.hypot(f[0] - focus.x, f[1] - focus.y));
     }
     this.fx = [];
     this.focus = focus;
@@ -507,6 +511,7 @@
     const hud = window.HUD.build({
       type: this.type, laps: this.laps, track: this.T, title: this.title,
       order: tm ? tm.o : Object.keys(this.entries).map(Number),
+      gaps: this.type === 'race' ? (this.gapT || (this.gapT = new window.HUD.GapTracker())) : null,
       rows: this.rows, entries: this.entries, myId: this.myId, phase: this.phase, lights: this.lights,
       time: this.serverTime + Math.min(1, (now - this.snapRecv) / 1000),
       timeLeft: tm && tm.tl >= 0 ? tm.tl : -1,

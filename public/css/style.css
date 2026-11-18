@@ -661,3 +661,37 @@ body.touch .tyre-chip { min-width: 50px; padding: 5px 4px 4px; }
 body.touch .tyre-chip .tc-key { display: none; }
 body.touch .tp-title { font-size: 13px; }
 @media (max-height: 430px) { body.touch #tyrepick { bottom: 92px; } body.touch .tyre-ring { width: 22px; height: 22px; border-width: 3.5px; font-size: 11px; } }
+
+/* ---------------------------------------------------------------- podium (after a race) */
+#podium { position: absolute; inset: 0; background: radial-gradient(ellipse at 50% 38%, #2a2d36 0%, #121318 55%, #08080b 100%); overflow: hidden; }
+#podium.active { display: flex; align-items: center; justify-content: center; }
+#podium-confetti { position: absolute; inset: 0; width: 100%; height: 100%; pointer-events: none; }
+.podium-wrap { position: relative; display: flex; flex-direction: column; align-items: center; gap: 14px; padding: 18px; max-height: 100%; }
+.podium-head { text-align: center; }
+.podium-kicker { font-weight: 800; letter-spacing: 3px; font-size: 13px; color: #e10600; text-transform: uppercase; }
+#podium-title { margin: 4px 0 0; font-size: 34px; font-weight: 900; }
+.podium { display: flex; align-items: flex-end; gap: 14px; }
+.pstep { display: flex; flex-direction: column; align-items: center; width: 200px; animation: pstepIn 0.7s cubic-bezier(.2,.9,.3,1.2) both; }
+.pstep.p1 { animation-delay: 0.9s; } .pstep.p2 { animation-delay: 0.5s; } .pstep.p3 { animation-delay: 0.15s; }
+@keyframes pstepIn { from { opacity: 0; transform: translateY(40px); } to { opacity: 1; transform: none; } }
+.pstep canvas { width: 64px; height: 150px; margin-bottom: 6px; filter: drop-shadow(0 6px 6px rgba(0,0,0,0.5)); }
+.pstep .pwin { font-size: 12px; font-weight: 900; letter-spacing: 2px; color: #ffd24a; margin-bottom: 4px; }
+.pstep .pname { font-size: 19px; font-weight: 900; text-align: center; line-height: 1.1; }
+.pstep .pteam { font-size: 13px; font-weight: 600; color: #b9bec6; margin: 2px 0 8px; text-align: center; }
+.pstep .pyou { display: inline-block; background: #ffd600; color: #111; font-size: 11px; font-weight: 900; padding: 1px 6px; border-radius: 4px; margin-left: 6px; vertical-align: middle; }
+.pstep .pblock { width: 100%; border-radius: 8px 8px 0 0; display: flex; align-items: flex-start; justify-content: center; padding-top: 10px;
+  box-shadow: inset 0 2px 0 rgba(255,255,255,0.35), inset 0 -30px 40px rgba(0,0,0,0.35); }
+.pstep .pblock span { font-size: 48px; font-weight: 900; color: #fff; text-shadow: 0 3px 8px rgba(0,0,0,0.55); }
+.pstep.p1 .pblock { height: 150px; } .pstep.p2 .pblock { height: 110px; } .pstep.p3 .pblock { height: 80px; }
+.podium-note { margin: 0; font-weight: 700; color: #d5d9de; min-height: 1.2em; }
+@media (max-height: 520px) {
+  .podium-wrap { gap: 6px; padding: 8px; }
+  #podium-title { font-size: 22px; }
+  .podium-kicker { font-size: 11px; }
+  .pstep { width: 150px; }
+  .pstep canvas { width: 40px; height: 94px; margin-bottom: 2px; }
+  .pstep .pname { font-size: 15px; }
+  .pstep .pteam { font-size: 11px; margin: 1px 0 4px; }
+  .pstep .pblock span { font-size: 30px; }
+  .pstep.p1 .pblock { height: 84px; } .pstep.p2 .pblock { height: 62px; } .pstep.p3 .pblock { height: 46px; }
+}

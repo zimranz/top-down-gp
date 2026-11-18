@@ -367,12 +367,23 @@
   // spread   = how much the drivers' pace differs (up to this much slower); slowStart = chance of a slow getaway
   // attack   = 0..1: goes for a pass from further back / with less of a speed advantage
   // defend   = 0..1: with a car close behind on the way into a braking zone, makes one early move to cover the inside
+  // tow      = 0..1: chance (per braking zone) of the slipstream move: sit in the tow down the straight, pull out late,
+  //            get alongside and brake on the inside. towFit = how well the pull-out is timed (1 = the best moment)
+  // late     = 0..1: chance of braking later than usual when alongside on the inside into a corner (an attack)
+  // fight    = 0..1: chance of fighting back after losing a place (stays in its tow, goes for the switchback)
+  // fake     = 0..1: chance of a dummy move to one side before pulling out the other way
+  // undercut = 0..1: chance of pitting a lap or two early to get past a car it is stuck behind (with tyre wear)
   const AI_LEVELS = (F1.AI_LEVELS = {
-    easy: { lat: 0.8, brake: 0.72, pace: 0.965, mistake: 0.34, divebomb: 0.05, gap: 0.2, react: [0.2, 0.55] },
-    medium: { lat: 0.88, brake: 0.84, pace: 0.985, mistake: 0.18, divebomb: 0.025, gap: 0.16, react: [0.15, 0.4] },
-    hard: { lat: 0.95, brake: 0.93, pace: 1.0, mistake: 0.1, divebomb: 0.015, gap: 0.13, react: [0.1, 0.28] },
-    extrahard: { lat: 0.975, brake: 0.965, pace: 1.0, spread: 0.008, mistake: 0.05, divebomb: 0.008, gap: 0.12, react: [0.07, 0.2], slowStart: 0.05, attack: 0.5, defend: 0.5 },
-    expert: { lat: 1.0, brake: 1.0, pace: 1.0, spread: 0.004, mistake: 0.015, divebomb: 0.004, gap: 0.11, react: [0.05, 0.15], slowStart: 0.03, attack: 1, defend: 1 }
+    easy: { lat: 0.8, brake: 0.72, pace: 0.965, mistake: 0.34, divebomb: 0.05, gap: 0.2, react: [0.2, 0.55],
+      tow: 0.15, towFit: 0 },
+    medium: { lat: 0.88, brake: 0.84, pace: 0.985, mistake: 0.18, divebomb: 0.025, gap: 0.16, react: [0.15, 0.4],
+      tow: 0.4, towFit: 0.3, fight: 0.35 },
+    hard: { lat: 0.95, brake: 0.93, pace: 1.0, mistake: 0.1, divebomb: 0.015, gap: 0.13, react: [0.1, 0.28], defend: 0.25,
+      tow: 0.75, towFit: 0.6, late: 0.6, fight: 0.75, undercut: 0.5 },
+    extrahard: { lat: 0.975, brake: 0.965, pace: 1.0, spread: 0.008, mistake: 0.05, divebomb: 0.008, gap: 0.12, react: [0.07, 0.2], slowStart: 0.05, attack: 0.5, defend: 0.5,
+      tow: 0.9, towFit: 0.85, late: 0.8, fight: 0.9, fake: 0.35, undercut: 0.7 },
+    expert: { lat: 1.0, brake: 1.0, pace: 1.0, spread: 0.004, mistake: 0.015, divebomb: 0.004, gap: 0.11, react: [0.05, 0.15], slowStart: 0.03, attack: 1, defend: 1,
+      tow: 1, towFit: 1, late: 1, fight: 1, fake: 0.8, undercut: 1 }
   });
   F1.AI_LEVEL_IDS = ['easy', 'medium', 'hard', 'extrahard', 'expert'];
   F1.isAILevel = function (v) { return typeof v === 'string' && F1.AI_LEVEL_IDS.indexOf(v) >= 0; };
@@ -386,7 +397,10 @@
     const gq = g === undefined || g >= 0.995 ? 1 : Math.max(0.5, Math.round(g * 100) / 100);
     const key = gq === 1 ? level : level + '@' + gq;
     if (T._prof[key]) return T._prof[key];
-    const L0 = level === 'limit' ? LIMIT : AI_LEVELS[level] || AI_LEVELS.medium;
+    // 'hard!late': the same cornering, braking later (an attack up the inside; as late as the car can)
+    const late = level.slice(-5) === '!late', lv0 = late ? level.slice(0, -5) : level;
+    const B0 = lv0 === 'limit' ? LIMIT : AI_LEVELS[lv0] || AI_LEVELS.medium;
+    const L0 = late ? { lat: B0.lat, brake: 1 } : B0;
     const Lv = gq === 1 ? L0 : { lat: L0.lat * gq, brake: L0.brake * (0.35 + 0.65 * gq) };
     const N = T.n, K = T.rlK, ds = T.ds, BK = T.bank;
     const v = new Float64Array(N);
@@ -683,6 +697,13 @@
     return true;
   }
 
+  /* Flat out from s0 to s1: the speed plan never asks for less than v on the way (a straight, or bends taken flat). */
+  function flatTo(T, prof, s0, s1, v) {
+    const n = Math.ceil(F1.wrapS(s1 - s0, T.length) / T.ds);
+    for (let k = 0; k < n; k += 2) if (prof[F1.idxAt(T, s0 + k * T.ds)] < v) return false;
+    return true;
+  }
+
   /* Fresh AI driver state for car c. */
   F1.newAI = function (c, lvl, rng) {
     return {
@@ -692,7 +713,7 @@
       pace: lvl.pace * (1 - rng() * (lvl.spread === undefined ? 0.012 : lvl.spread)),
       // reaction to lights out: quicker on harder levels, and now and then a slow getaway
       react: lvl.react[0] + rng() * (lvl.react[1] - lvl.react[0]) + (rng() < (lvl.slowStart === undefined ? 0.08 : lvl.slowStart) ? 0.2 + rng() * 0.35 : 0),
-      cover: null, coveredS: -1
+      cover: null, coveredS: -1, tow: null, towS: -1, fight: null, lost: null, behind: -1, behindLaps: 0
     };
   };
 
@@ -774,13 +795,107 @@
           }
         }
         // ahead: will we run into it on our current line?
-        const dNow = Math.abs(dD), dTgt = Math.abs(o.d - ai.latT);
-        let inPath = dTgt < 2.4;
-        if (!inPath && dNow < 2.4) {
+        const dNow = Math.abs(dD);
+        let inPath;
+        if (ai.pass && ai.pass.id === o.id && ai.pass.tow) {
+          // the car we are pulling out to pass: in the way until we are clear of it sideways (at the rate we are
+          // actually moving away from it)
           const tReach = gap > 0 ? gap / Math.max(0.5, cv - ov) : 0;
-          inPath = tReach < (2.4 - dNow) / 3 + 0.25;
+          const away = ((c.vx - o.vx) * T.nx[c.seg] + (c.vy - o.vy) * T.ny[c.seg]) * (dD < 0 ? 1 : -1);
+          const clr = myExt + halfWidthOnTrack(o, T) + 0.15;
+          inPath = dNow < clr && (gap < 1.5 || away < 0.4 || tReach < (clr - dNow) / away + 0.3);
+        } else {
+          inPath = Math.abs(o.d - ai.latT) < 2.4;
+          if (!inPath && dNow < 2.4) {
+            const tReach = gap > 0 ? gap / Math.max(0.5, cv - ov) : 0;
+            inPath = tReach < (2.4 - dNow) / 3 + 0.25;
+          }
         }
         if (inPath && gap < leadGap) { lead = o; leadGap = gap; leadV = ov; }
+      }
+    }
+
+    // ---- the next braking zone ahead, and the one we are braking in (if any)
+    let Zn = null, toB = Infinity, Zc = null;
+    for (let z = 0; z < zones.length; z++) {
+      const d = F1.wrapS(zones[z].s - c.s, L);
+      if (d < toB) { toB = d; Zn = zones[z]; }
+      if (d < 25 || L - d < F1.wrapS(zones[z].apex - zones[z].s, L) + 2) Zc = zones[z];
+    }
+    const pl = c.pitPlan, pitting = !!(pl && pl.stage === 'in');
+    const settled = race && S.firstBrake !== null && c.raceDist > S.firstBrake + 30;    // (lap 1: after the first corner)
+
+    // fighting back: just lost a place - stay in that car's tow and have a go at the next corner
+    if (ai.lost) {
+      if (lvl.fight && settled && c.lapsDone >= 1 && !pitting && S.rng() < lvl.fight) ai.fight = { id: ai.lost.id, until: now + 9 };
+      ai.lost = null;
+    }
+    if (ai.fight && (now > ai.fight.until || !S.byId[ai.fight.id] || S.byId[ai.fight.id].out)) ai.fight = null;
+    const fightId = ai.fight ? ai.fight.id : -1;
+
+    // the slipstream move: sit right behind the car ahead down the straight (less drag, so more speed), pull out at the
+    // right moment, get alongside and brake on the inside. Weaker drivers try it less often and time it worse.
+    let towWant = null, towing = false, towGap = 0;
+    if (ai.tow) {
+      const tw = ai.tow, o = S.byId[tw.id];
+      const toZ = F1.wrapS(tw.s - c.s, L);
+      const dS = o && !o.out ? realDS(T, c, o, wrapD(o.s - c.s, L)) : 999;
+      if (!o || o.out || o.inPit || ai.pass || ai.mk || pitting || toZ > tw.toZ0 + 5 || toZ < 35 || dS > 70 || dS < CAR.length - 0.3 ||
+          now - tw.t > 20 || Math.abs(o.d - c.d) > 6) {
+        ai.tow = null;
+      } else {
+        const ov = o.vx * T.tx[o.seg] + o.vy * T.ty[o.seg], gap = dS - CAR.length, dv = cv - ov;
+        // pull out when right up behind it, with the most speed from the tow. The best drivers wait until about four
+        // seconds before the braking point (so the run lasts to the corner); the others go as soon as they are there.
+        const release = clamp(cv * 4.2, 280, 460) * tw.err, gMin = 2.4 + cv * 0.015;   // (the closest it follows)
+        const close = (dv > 0.8 && gap < gMin + 0.6 + dv * 0.55) || gap < gMin - 0.5;   // right up behind it, still closing
+        if (tw.fake && !tw.faked && toZ < release && gap < 7) tw.faked = now;   // a dummy move first
+        const faking = tw.faked && now - tw.faked < tw.fakeDur;
+        // at the end of the straight, close behind it: a late lunge up the inside (the drivers who brake late)
+        const lunge = tw.late && toZ < 140 && gap < 5 && dv > -0.5;
+        if (toZ < 60 && !close && !lunge) ai.tow = null;                // never got close enough: just follow it in
+        else if (!faking && (close || lunge || (tw.faked && gap < 8))) {
+          // the inside of the corner if there is room for a car there (otherwise wait in the tow; the other side
+          // only when right up behind it)
+          let side = 0;
+          for (let k = 0; k < (close ? 2 : 1) && !side; k++) {
+            const sd = k === 0 ? tw.side : -tw.side, lane = o.d + sd * 2.9;
+            if (lane > room + 0.3 || lane < -room - 0.3 || lane < lo || lane > hi) continue;
+            if (laneClear(S, c, lane, o.id, -8, gap + 45)) side = sd;
+          }
+          if (side) {
+            ai.pass = { id: o.id, side: side, t: now, urgent: false, late: tw.late, tow: true };
+            if (lead === o) { lead = null; leadGap = Infinity; }               // (no longer in our way)
+            ai.tow = null;
+          } else if (close) ai.tow = null;                                // boxed in: just follow it
+          else { towing = true; towWant = o.d; towGap = gMin; }
+        } else {
+          towing = true;
+          towWant = faking ? o.d - tw.side * 1.8 : o.d;               // right behind it (or the dummy move)
+          towGap = tw.hold && toZ > release ? 6.5 : gMin;                  // well timed: not too soon
+        }
+      }
+    } else if (race && S.drafting && lvl.tow && settled && !ai.mk && !pitting && Zn && Zn.s !== ai.towS && Zn.drop >= 15 && (S.tick + c.id) % 4 === 0) {
+      // the car to tow behind: the one ahead of us, or the one we have just pulled out on (not alongside it yet)
+      let tg = lead, tGap = leadGap, tV = leadV;
+      if (!ai.pass && tg && Math.abs(tg.d - c.d) > 2.4) tg = null;
+      if (ai.pass) {
+        const o = ai.pass.urgent || ai.pass.tow ? null : S.byId[ai.pass.id];
+        const dS = o && !o.out ? realDS(T, c, o, wrapD(o.s - c.s, L)) : 0;
+        tg = dS > CAR.length + 1.5 ? o : null;
+        if (tg) { tGap = dS - CAR.length; tV = o.vx * T.tx[o.seg] + o.vy * T.ty[o.seg]; }
+      }
+      if (tg && tGap < 18 && toB > 170 + Math.max(0, tGap - 6) * 40 && tV > 40 && cv - tV > -2 && cv - tV < 5 && flatTo(T, prof, c.s, Zn.s, cv + 4)) {
+        ai.towS = Zn.s;                                                 // one decision per braking zone
+        const fit = tg.id === fightId ? Math.max(lvl.towFit, 0.85) : lvl.towFit;
+        if (tg.id === fightId || S.rng() < lvl.tow) {
+          if (ai.pass) { ai.pass = null; if (lead === null) { lead = tg; leadGap = tGap; leadV = tV; } }   // back into its tow
+          ai.tow = { id: tg.id, s: Zn.s, toZ0: toB, t: now, side: Zn.turn,
+            err: 1 + (1 - fit) * (S.rng() * 0.6 - 0.3),                 // (the moment it lets the run start)
+            hold: fit >= 0.8, late: S.rng() < (lvl.late || 0),
+            fake: S.rng() < (lvl.fake || 0), fakeAt: 50 + S.rng() * 60, fakeDur: 0.4 + S.rng() * 0.3, faked: 0 };
+          towing = true; towWant = tg.d; towGap = 2.4 + cv * 0.015;
+        }
       }
     }
 
@@ -791,6 +906,8 @@
       const w = clamp((S.firstBrake - 30 - c.raceDist) / 170, 0, 1);
       if (w > 0) want = want * (1 - w) + ai.gridLane * w;
     }
+
+    if (towWant !== null) want = clamp(towWant, -room - 0.3, room + 0.3);
 
     // overtaking, or getting round a slow / stopped car
     let passing = false, urgent = false;
@@ -805,9 +922,11 @@
       }
     }
     if (!ai.pass && lead) {
-      const closing = cv - leadV, ak = lvl.attack || 0;
+      const fightIt = lead.id === fightId, ak = fightIt ? 1 : lvl.attack || 0;
+      const closing = cv - leadV;
       const slow = leadV < Math.max(8, cv * 0.6);
-      if (leadGap < (slow ? 90 : 38 + 12 * ak) && (slow || closing > 1 - 0.6 * ak || (leadGap < 14 + 6 * ak && vFree > leadV + 2 - ak))) {
+      if ((slow || !towing) && leadGap < (slow ? 90 : 38 + 12 * ak) &&
+          (slow || closing > 1 - 0.6 * ak || (leadGap < 14 + 6 * ak && vFree > leadV + 2 - ak) || (fightIt && leadGap < 12 && closing > -1.5))) {
         let best = 0, bestScore = -Infinity;
         for (let side = -1; side <= 1; side += 2) {
           const lane = lead.d + side * 2.9;
@@ -818,7 +937,7 @@
           if (score > bestScore) { bestScore = score; best = side; }
         }
         if (best) {
-          ai.pass = { id: lead.id, side: best, t: now, urgent: slow };
+          ai.pass = { id: lead.id, side: best, t: now, urgent: slow, late: !slow && S.rng() < (lvl.late || 0) };
           want = clamp(lead.d + best * 2.9, -room - 0.3, room + 0.3);
           passing = true; urgent = slow;
         }
@@ -829,7 +948,6 @@
     // to cover the inside, held through the braking zone to the apex (the slower, tighter line). Never a move
     // towards a car that has already pulled out to the inside (we stop where we are), and never into a car
     // alongside (see lo / hi).
-    const pl = c.pitPlan;
     let covering = false;
     if (ai.cover) {
       const cv2 = ai.cover, o = S.byId[cv2.id];
@@ -845,13 +963,7 @@
           want = tgt; covering = true;
         }
       }
-    } else if (lvl.defend && race && atk && !passing && !ai.mk && !(pl && pl.stage === 'in') && S.firstBrake !== null && c.raceDist > S.firstBrake + 30) {
-      // the next braking zone ahead
-      let Zn = null, toB = Infinity;
-      for (let z = 0; z < zones.length; z++) {
-        const d = F1.wrapS(zones[z].s - c.s, L);
-        if (d < toB) { toB = d; Zn = zones[z]; }
-      }
+    } else if (lvl.defend && race && atk && !passing && !towing && !ai.mk && !pitting && settled) {
       const reach = 10 + 15 * lvl.defend;                 // how close the car behind must be
       if (Zn && Zn.drop >= 25 && toB > 40 && toB < 300 && Zn.s !== ai.coveredS && -atkDS < reach && atkV - cv > -2 &&
           Math.abs(atk.d - c.d) < 1.4 && c.d * Zn.turn < room - 2.4 && straightTo(T, c.s, Zn.s)) {
@@ -895,7 +1007,7 @@
     }
 
     // ---- steering: pure pursuit towards the chosen line
-    const r = (urgent ? 6 : passing || covering ? 3.4 : 2.6) * F1.DT;
+    const r = (urgent ? 6 : ai.pass && ai.pass.tow ? 4.2 : passing || covering || towing ? 3.4 : 2.6) * F1.DT;
     const db = want - T.rlOff[i] - ai.bias;
     ai.bias += db > r ? r : db < -r ? -r : db;
     let latT = T.rlOff[i] + ai.bias;
@@ -926,11 +1038,27 @@
     if (offLine > 1.5 && vt < 70) vt *= 1 - Math.min(0.08, (offLine - 1.5) * 0.015);   // off line = less grip
     const lim = F1.speedProfile(T, 'limit')[iv];
     if (mkType === 'wide' && mkRel > mk.apexRel - 40 && mkRel < mk.apexRel + 40) vt = Math.max(vt, lim * (1.03 + 0.07 * mk.sev));
+    // late braking: alongside on the inside into the corner the pass is for, it brakes later than usual
+    if (passing && ai.pass.late && Zc && ai.pass.side === Zc.turn && !mkType && c.lapsDone >= 1) {
+      const o = S.byId[ai.pass.id];
+      const dS = o ? realDS(T, c, o, wrapD(o.s - c.s, L)) : 99;
+      if (dS < CAR.length + 3.5 && dS > -6 && Math.abs(o.d - c.d) > 2.2 && !(o.pitPlan && o.pitPlan.stage === 'in'))
+        vt = Math.max(vt, F1.speedProfile(T, S.aiLevel + '!late', c.tg)[iv] * ai.pace);
+    }
     if (lead) {   // keep a safe gap to the car in front: always able to slow to its speed in time
-      const gd = 1.5 + Math.max(0, cv) * lvl.gap;
       const lv = Math.max(0, leadV);
-      const b = 0.55 * Math.min(P.BRAKE_MAX, P.BRAKE0 + P.BRAKE_K * lv * lv);
-      const vCap = leadGap > gd ? Math.sqrt(lv * lv + 2 * b * (leadGap - gd)) : lv - (gd - leadGap) * 0.8;
+      let vCap;
+      if ((towing && lead.id === ai.tow.id) || (ai.pass && ai.pass.tow && lead.id === ai.pass.id)) {
+        // in its tow on a straight: close right up (still able to brake to its speed in time) to pull out with a run
+        // (and the same while pulling out from behind it)
+        const bR = 0.3 * Math.min(P.BRAKE_MAX, P.BRAKE0 + P.BRAKE_K * lv * lv);
+        const g0 = towing ? towGap : 2.4 + cv * 0.015;
+        vCap = leadGap > g0 ? lv + Math.sqrt(2 * bR * (leadGap - g0)) : lv - (g0 - leadGap) * 0.8;
+      } else {
+        const gd = 1.5 + Math.max(0, cv) * lvl.gap * (lead.id === fightId ? 0.7 : 1);
+        const b = 0.55 * Math.min(P.BRAKE_MAX, P.BRAKE0 + P.BRAKE_K * lv * lv);
+        vCap = leadGap > gd ? Math.sqrt(lv * lv + 2 * b * (leadGap - gd)) : lv - (gd - leadGap) * 0.8;
+      }
       if (vCap < vt) vt = Math.max(0, vCap);
     }
     const diving = mkType === 'dive';                  // committed to a lunge: no backing out
@@ -1586,7 +1714,7 @@
       const need = weatherNeed(c.tyre.c, lw), key = need || '';
       if (key !== (c.wxTip || '')) {
         c.wxTip = key;
-        if (need) this.events.push({ k: 'wxTyres', id: c.id, need: need });
+        if (need) this.events.push({ k: 'wxTyres', id: c.id, need: need, have: c.tyre.c });
       }
     }
   };
@@ -1628,6 +1756,7 @@
       if (this.tyres && c.tyre.w > 0.9 && left >= 3) { k = c.tyre.c; urgent = true; }
     }
     else if (next && c.lapsDone + 1 >= next.lap && left >= 2) k = next.c;
+    else if (next && this.undercut(c, next, left)) k = next.c;
     else if (this.tyres && c.tyre.w > 0.86 && left >= 2) { k = F1.tyreForLaps(left - 1); urgent = true; }
     else if (this.mustStop && c.stops === 0 && !c.usedWet && left <= 2) { k = F1.tyreForLaps(left - 1); urgent = true; }
     if (k === null) return;
@@ -1635,6 +1764,20 @@
     const mate = this.cars.find(function (o) { return o !== c && o.team === c.team && !o.out && o.pitPlan && o.pitPlan.why === 'stop'; });
     if (mate && !urgent && left > 2) return;
     c.pitPlan = { stage: 'in', why: 'stop', entered: false, tyre: k };
+  };
+
+  /* The undercut (at the line): stuck right behind the same car for a whole lap, with our stop due in the next two laps
+     and that car still to stop - come in now, and the fresh tyres may get us ahead when it stops. */
+  Session.prototype.undercut = function (c, next, left) {
+    const lv = AI_LEVELS[this.aiLevel] || AI_LEVELS.medium, ai = c.ai;
+    if (!this.tyres || !lv.undercut || !ai || c.pos < 2 || left < 3 || next.lap - (c.lapsDone + 1) > 2) return false;
+    const o = this.cars.find(function (x) { return x.pos === c.pos - 1; });
+    const v = Math.max(20, Math.hypot(c.vx, c.vy));
+    const near = o && !o.out && !o.finished && !o.inPit && !o.pitPlan && o.team !== c.team && o.stops === c.stops && (o.raceDist - c.raceDist) / v < 1.2;
+    if (!near) { ai.behind = -1; ai.behindLaps = 0; return false; }
+    if (ai.behind !== o.id) { ai.behind = o.id; ai.behindLaps = 0; return false; }
+    ai.behindLaps++;
+    return this.rng() < lv.undercut;
   };
 
   /* How many AI cars should be out on track now (see runShare). */
@@ -1959,6 +2102,7 @@
     if (A.out || B.out || A.finished || B.finished || A.inPit || B.inPit) return;
     if (this.time - B.troubleT < 3) return;          // it had just gone off, spun or slowed right down
     A.overtakes++;
+    if (B.ai) B.ai.lost = { id: A.id, t: this.time };   // (an AI driver may fight back)
   };
 
   Session.prototype.checkEnd = function () {

@@ -18,6 +18,7 @@
       this.data.touchSteer = F1.clamp(Math.round(Number(this.data.touchSteer) || 5), 1, 10);
       if (this.data.touchMode !== 'slide') this.data.touchMode = 'arrows';      // phones: arrow buttons unless the slider was chosen
       if (['auto', 'sharp', 'light'].indexOf(this.data.graphics) < 0) this.data.graphics = 'auto';   // lighter graphics: by itself / never / always
+      if (this.data.vibrate !== 'off') this.data.vibrate = 'on';                                      // phones: a buzz on contact, kerbs, lights out
       this.data.keys = cleanKeys(this.data.keys);
     },
     save: function () {
@@ -245,21 +246,43 @@
     }
   };
 
+  // ------------------------------------------------------------- phone vibration
+  /* Short buzzes on phones that can (Android; iPhones can't): contact, kerbs, lights out. Settings → Vibration. */
+  const Haptics = {
+    can: typeof navigator !== 'undefined' && typeof navigator.vibrate === 'function',
+    kerbAt: 0,
+    on: function () { return this.can && Settings.data.vibrate !== 'off' && document.body.classList.contains('touch'); },
+    buzz: function (p) { if (this.on()) { try { navigator.vibrate(p); } catch (e) { /* not allowed yet */ } } },
+    // session events: lights out
+    event: function (e) { if (e.k === 'lightsOut') this.buzz(90); },
+    // a hit near your car (power: how hard)
+    hit: function (power, dist) { if (dist < 6) this.buzz(Math.round(F1.clamp(18 + power / 120, 20, 90))); },
+    // riding a kerb at speed: a quick rumble
+    kerb: function (own) {
+      if (!own || own.surf !== 1 || own.speed < 8) return;
+      const now = performance.now();
+      if (now - this.kerbAt > 95) { this.kerbAt = now; this.buzz(14); }
+    }
+  };
+
   // ------------------------------------------------------------- on-screen messages
+  /* opts.from: 'eng' = your race engineer on the radio (with the radio beep, unless opts.quiet), 'rc' = race control.
+     opts.sign: 'warn' / 'pen' (race control: a warning or a penalty). */
   function Messages() { this.list = []; }
   Messages.prototype.add = function (text, opts) {
     opts = opts || {};
     const now = performance.now();
     if (opts.key) this.list = this.list.filter(function (m) { return m.key !== opts.key; });
-    this.list.push({ text: text, sub: opts.sub, color: opts.color, subColor: opts.subColor, big: opts.big, sign: opts.sign, key: opts.key, until: now + (opts.dur || 3000), start: now });
+    this.list.push({ text: text, sub: opts.sub, color: opts.color, subColor: opts.subColor, big: opts.big, sign: opts.sign, from: opts.from, key: opts.key, until: now + (opts.dur || 3000), start: now });
     if (this.list.length > 3) this.list.shift();
+    if (opts.from === 'eng' && !opts.quiet && window.GameAudio && window.GameAudio.radio) window.GameAudio.radio();
   };
   Messages.prototype.active = function () {
     const now = performance.now();
     this.list = this.list.filter(function (m) { return m.until > now; });
     return this.list.map(function (m) {
       const left = m.until - now;
-      return { text: m.text, sub: m.sub, color: m.color, subColor: m.subColor, big: m.big, sign: m.sign, alpha: Math.min(1, left / 400) };
+      return { text: m.text, sub: m.sub, color: m.color, subColor: m.subColor, big: m.big, sign: m.sign, from: m.from, age: now - m.start, alpha: Math.min(1, left / 400) };
     });
   };
 
@@ -282,6 +305,7 @@
   }
 
   window.Settings = Settings;
+  window.Haptics = Haptics;
   window.PB = PB;
   window.Input = Input;
   window.KeyBind = KeyBind;

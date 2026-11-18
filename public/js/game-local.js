@@ -144,6 +144,7 @@
       }
       window.HUD.eventMessage(this.msgs, e, this.myId, function (id) { return self.S.byId[id].driverId; });
       window.GameAudio.event(e, this.myId);
+      if (window.Haptics && this.kind !== 'attract') window.Haptics.event(e);
     }
     const fx = this.S.drainFx();
     for (let i = 0; i < fx.length; i++) this.fx.push(fx[i]);
@@ -165,6 +166,7 @@
     v.y = c.py + (c.y - c.py) * alpha;
     v.a = window.Renderer.lerpAngle(c.pa, c.a, alpha);
     v.vx = c.vx; v.vy = c.vy; v.delta = c.delta; v.drsOpen = c.drsOpen; v.surf = c.surf; v.lock = c.lockFx;
+    v.tyreC = this.tyresShown() && c.tyre ? c.tyre.c : null;          // (coloured sidewalls)
     v.me = this.me === c;
     v.ghost = this.type === 'quali' && !v.me;
     v.lvl = this.T.bridge ? F1.levelAt(this.T, c.s) : 0;      // on / under a bridge (drawing order)
@@ -200,6 +202,7 @@
       const f = this.fx[i];
       R.sparks(f[0], f[1], f[2]);
       if (focus) window.GameAudio.contact(f[2], Math.hypot(f[0] - focus.x, f[1] - focus.y));
+      if (focus && focus.me && window.Haptics) window.Haptics.hit(f[2], Math.hypot(f[0] - focus.x, f[1] - focus.y));
     }
     this.fx = [];
     this.focus = focus;
@@ -252,6 +255,7 @@
     }
     const hud = window.HUD.build({
       type: this.type, laps: S.laps, track: this.T, order: S.order, rows: rows, entries: this.entries, title: this.opts.title, delta: delta,
+      gaps: this.type === 'race' ? (this.gapT || (this.gapT = new window.HUD.GapTracker())) : null,
       myId: this.myId, phase: PH[S.phase], lights: S.lights, time: S.time,
       timeLeft: isFinite(S.timeLimit) ? Math.max(0, S.timeLimit - S.time) : -1,
       fastestId: S.fastest ? S.fastest.id : null, own: this.me, msgs: this.msgs, ping: null, tyres: S.tyres, tyresShow: this.tyresShown(),
