@@ -728,6 +728,7 @@
     const i = F1.idxAt(T, c.s + look);
     const hwE = Math.min(T.hwE[i], T.hwE[c.seg]);          // usable half width (less in narrow sections)
     const room = hwE - 1.05;
+    const passMax = Math.min(hwE, T.hw) - 1.2;              // overtaking: the whole car stays on the track
     const cv = c.vx * T.tx[c.seg] + c.vy * T.ty[c.seg];      // speed along the track
     const zones = F1.brakeZones(T, S.aiLevel);
     const race = S.type === 'race';
@@ -860,7 +861,7 @@
           let side = 0;
           for (let k = 0; k < (close ? 2 : 1) && !side; k++) {
             const sd = k === 0 ? tw.side : -tw.side, lane = o.d + sd * 2.9;
-            if (lane > room + 0.3 || lane < -room - 0.3 || lane < lo || lane > hi) continue;
+            if (lane > passMax || lane < -passMax || lane < lo || lane > hi) continue;
             if (laneClear(S, c, lane, o.id, -8, gap + 45)) side = sd;
           }
           if (side) {
@@ -916,7 +917,8 @@
       const dS = o && !o.out ? wrapD(o.s - c.s, L) : 999;
       if (dS < -9 || dS > 80 || now - ai.pass.t > 12) ai.pass = null;
       else {
-        const lane = clamp(o.d + ai.pass.side * 2.9, -room - 0.3, room + 0.3);
+        const lim = ai.pass.urgent ? room + 0.3 : passMax;  // (round a stopped car: right to the edge if need be)
+        const lane = clamp(o.d + ai.pass.side * 2.9, -lim, lim);
         if (Math.abs(lane - o.d) < 2.6 || !laneClear(S, c, lane, o.id, -6, Math.max(12, dS + 25))) ai.pass = null;
         else { want = lane; passing = true; urgent = ai.pass.urgent; }
       }
@@ -929,16 +931,16 @@
           (slow || closing > 1 - 0.6 * ak || (leadGap < 14 + 6 * ak && vFree > leadV + 2 - ak) || (fightIt && leadGap < 12 && closing > -1.5))) {
         let best = 0, bestScore = -Infinity;
         for (let side = -1; side <= 1; side += 2) {
-          const lane = lead.d + side * 2.9;
-          if (lane > room + 0.3 || lane < -room - 0.3 || lane < lo || lane > hi) continue;
+          const lane = lead.d + side * 2.9, lim = slow ? room + 0.3 : passMax;
+          if (lane > lim || lane < -lim || lane < lo || lane > hi) continue;
           if (!laneClear(S, c, lane, lead.id, -6, leadGap + 30)) continue;
           let score = -Math.abs(lane - c.d) * 0.25;
-          if (toCorner < 260 && side === inside) score += 1.5;
+          if (toCorner < 260 && side === inside) score += 2.5;
           if (score > bestScore) { bestScore = score; best = side; }
         }
         if (best) {
           ai.pass = { id: lead.id, side: best, t: now, urgent: slow, late: !slow && S.rng() < (lvl.late || 0) };
-          want = clamp(lead.d + best * 2.9, -room - 0.3, room + 0.3);
+          want = clamp(lead.d + best * 2.9, -(slow ? room + 0.3 : passMax), slow ? room + 0.3 : passMax);
           passing = true; urgent = slow;
         }
       }
@@ -992,7 +994,7 @@
     }
 
     // ---- mistakes (armed at a braking zone, see below)
-    let mkType = null, mkRel = 0, edge = room + 0.3;
+    let mkType = null, mkRel = 0, edge = passing && !urgent ? passMax : room + 0.3;
     const mk = ai.mk;
     if (mk) {
       mkRel = F1.wrapS(c.s - mk.s, L);                  // metres since the braking point

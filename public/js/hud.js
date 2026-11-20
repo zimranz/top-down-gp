@@ -45,13 +45,13 @@
     else if (e.k === 'wxTyres' && e.id === myId) {
       // what is wrong with the tyres you are on (e.have)
       let title, sub;
-      if (e.need === 'W') { title = 'BOX FOR FULL WETS'; sub = e.have === 'I' ? 'Too much water for your inters' : 'Slicks in standing water: no grip'; }
-      else if (e.need === 'I') { title = 'BOX FOR INTERS'; sub = e.have === 'W' ? 'Too dry for full wets' : 'Track\u2019s too wet for slicks'; }
-      else { title = 'TIME FOR SLICKS'; sub = 'The racing line is dry: box for slicks'; }
+      if (e.need === 'W') { title = 'BOX FOR FULL WETS'; sub = e.have === 'I' ? 'Too much water for your inters' : 'Dry tyres in standing water: no grip'; }
+      else if (e.need === 'I') { title = 'BOX FOR INTERS'; sub = e.have === 'W' ? 'Too dry for full wets' : 'Track\u2019s too wet for dry tyres'; }
+      else { title = 'TIME FOR DRY TYRES'; sub = 'The racing line is dry: box for dry tyres'; }
       msgs.add(title, { sub: sub, color: '#ffd600', from: 'eng', key: 'wxt', dur: 5500 });
     }
     else if (e.k === 'jump') {
-      if (e.id === myId) msgs.add('JUMP START', { sub: '5-second penalty: wait for the lights to go out', sign: 'pen', from: 'rc', key: 'jump', dur: 6000 });
+      if (e.id === myId) msgs.add('JUMP START', { sub: '5-second penalty: wait for the lights to go out', sign: 'pen', big: true, from: 'rc', key: 'jump', dur: 6000 });
       else msgs.add('JUMP START  ' + codeOf(e.id), { sub: '5-second penalty', color: '#ffd600', key: 'pen', dur: 3500 });
     }
     else if (e.k === 'lap') {
@@ -63,7 +63,7 @@
           : e.record ? 'NEW PERSONAL BEST' : e.pb ? 'SESSION BEST' : null;
         msgs.add('LAP ' + e.n + '   ' + F1.fmtLap(e.t), {
           sub: e.pen ? 'Includes ' + e.pen + ' s penalty for track limits' + (sub ? ' · ' + sub : '') : sub,
-          subColor: e.pen ? '#ffd600' : e.fastest ? '#c77dff' : '#19c94a', color: e.fastest ? '#9b30ff' : '#19c94a', from: 'eng', quiet: true, key: 'mylap', dur: e.record ? 5000 : 4000
+          subColor: e.pen ? '#ffd600' : e.fastest ? '#c77dff' : '#19c94a', color: e.fastest ? '#9b30ff' : '#19c94a', key: 'mylap', dur: e.record ? 5000 : 4000
         });
       } else if (e.fastest) {
         msgs.add('FASTEST LAP', { sub: codeOf(e.id) + '  ' + F1.fmtLap(e.t), color: '#9b30ff', subColor: '#c77dff', key: 'fl', dur: 3000 });
@@ -93,7 +93,7 @@
     if (e.n < 2 && msgs) {
       const sub = gap === null ? (e.best ? 'FASTEST OF THE SESSION' : null)
         : (gap <= 0 ? '−' : '+') + Math.abs(gap).toFixed(3) + (saved ? '  VS YOUR BEST LAP' : '  VS YOUR SESSION BEST');
-      msgs.add('SECTOR ' + (e.n + 1) + '   ' + fmtSector(e.t), { sub: sub, color: SEC_COL[col][0], subColor: SEC_COL[col][1], from: 'eng', quiet: true, key: 'sector', dur: 2600 });
+      msgs.add('SECTOR ' + (e.n + 1) + '   ' + fmtSector(e.t), { sub: sub, color: SEC_COL[col][0], subColor: SEC_COL[col][1], key: 'sector', dur: 2600 });
     }
   };
   SectorTracker.prototype.onLap = function (e) {
@@ -106,8 +106,7 @@
 
   /* Live gaps in a race, the way TV measures them: how long ago the car ahead was exactly where you are now, and
      how long ago you were where the car behind is now. Every car's distance is noted against the race clock as it
-     goes round; the gaps come from those notes, so they change smoothly, corner by corner. trend: green when you
-     are gaining on the car ahead / pulling away from the car behind, red when losing (over about the last second). */
+     goes round; the gaps come from those notes, so they change smoothly, corner by corner (shown in white). */
   function GapTracker() { this.h = {}; this.hist = { a: [], b: [] }; this.who = { a: null, b: null }; }
   GapTracker.prototype.note = function (id, d, t) {
     let H = this.h[id];
@@ -144,10 +143,7 @@
     while (ib < order.length && rows[order[ib]] && rows[order[ib]].out) ib++;
     const code = function (id) { return o.entries[id] ? o.entries[id].driverId : ''; };
     const out = { a: null, b: null };
-    const show = function (k, gap, who, sign) {
-      const tr = this.trend(k, who, gap, t), good = k === 'a' ? tr < -0.03 : tr > 0.03, bad = k === 'a' ? tr > 0.03 : tr < -0.03;
-      out[k] = { text: sign + gap.toFixed(1) + ' ' + code(who), color: good ? '#19c94a' : bad ? '#ff5a4f' : '#ffffff' };
-    }.bind(this);
+    const show = function (k, gap, who, sign) { out[k] = { text: sign + gap.toFixed(1) + ' ' + code(who), color: '#ffffff' }; };
     if (ia >= 0) {
       const id = order[ia], r = rows[id];
       if (r.dist - me.dist > L) { const n = Math.floor((r.dist - me.dist) / L); out.a = { text: '+' + n + (n > 1 ? ' LAPS ' : ' LAP ') + code(id), color: '#ffffff' }; }

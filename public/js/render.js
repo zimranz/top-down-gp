@@ -844,17 +844,11 @@
     if (G.pit && Math.hypot(G.pit.cx - vc[0], G.pit.cy - vc[1]) < G.pit.r + vr) {
       ctx.save(); this.drawPit(ctx, G.pit, T, frame); ctx.restore();
     }
-    // asphalt: a faint grain fixed to the track (wet: darker, with patches holding more water)
+    // asphalt: one plain colour (darker when wet)
     ctx.lineJoin = 'round'; ctx.lineCap = 'round';
-    ctx.strokeStyle = this.lite ? (wet > 0.02 ? mixHex(COL.asphalt, '#15171c', 0.66 * wet) : COL.asphalt) : this.asphalt(COL.asphalt, wet, night);
+    ctx.strokeStyle = wet > 0.02 ? mixHex(COL.asphalt, '#15171c', 0.66 * wet) : COL.asphalt;
     ctx.lineWidth = 2 * T.hw;
-    ctx.imageSmoothingEnabled = false;                 // (the grain: quicker without smoothing, looks the same)
     ctx.stroke(merge('center'));
-    ctx.imageSmoothingEnabled = true;
-    // the racing line: darker where the tyres have laid rubber down all weekend (under water when it is wet)
-    if (!this.lite && wet < 0.3) {
-      ctx.strokeStyle = 'rgba(0,0,0,' + (0.1 * (1 - wet / 0.3)).toFixed(3) + ')'; ctx.lineWidth = 3; ctx.stroke(merge('rline'));
-    }
     // drying: the tyres squeeze the water away, so it starts as two patchy tracks where the wheels run, which
     // widen and join into one dry line as more cars go round
     if (wet > 0.03 && ld > 0.05) this.drawDryLine(ctx, T, vis, COL, Math.min(1, wet * 4), ld);
@@ -977,41 +971,6 @@
       if (c.me) this.drawYouTag(ctx, sp[0], sp[1] - 3.6 * cam.z - (small ? 10 : 14), small);
       else if (frame.labels) this.drawLabel(ctx, sp[0], sp[1] - 3.2 * cam.z - (small ? 6 : 8), c, small);
     }
-  };
-
-  /* The asphalt as a picture that repeats every 32 m and is fixed to the ground, so it moves with the track:
-     a very faint grain of light and dark specks and slightly uneven patches. Wet (0..1, in tenths): darker, and
-     the uneven patches show more (some hold more water than others). No sheen painted on the screen. */
-  Renderer.prototype.asphalt = function (base, wet, night) {
-    const q = Math.round(F1.clamp(wet, 0, 1) * 10), key = base + q + (night ? 'n' : 'd');
-    const cache = this.asphPat || (this.asphPat = {});
-    if (cache[key]) return cache[key];
-    const S = 256, PX = 8, cv = document.createElement('canvas'); cv.width = cv.height = S;
-    const g = cv.getContext('2d'), w = q / 10;
-    g.fillStyle = w > 0 ? mixHex(base, night ? '#0b0c10' : '#15171c', 0.68 * w) : base; g.fillRect(0, 0, S, S);
-    let seed = 7; const rnd = function () { seed = (seed * 16807) % 2147483647; return (seed - 1) / 2147483646; };
-    const blot = function (x, y, r, col, al) {
-      for (let ox = -S; ox <= S; ox += S) for (let oy = -S; oy <= S; oy += S) {
-        if (x + ox + r < 0 || x + ox - r > S || y + oy + r < 0 || y + oy - r > S) continue;
-        const gr = g.createRadialGradient(x + ox, y + oy, 0, x + ox, y + oy, r);
-        gr.addColorStop(0, 'rgba(' + col + ',' + al.toFixed(3) + ')'); gr.addColorStop(1, 'rgba(' + col + ',0)');
-        g.fillStyle = gr; g.fillRect(x + ox - r, y + oy - r, 2 * r, 2 * r);
-      }
-    };
-    // uneven patches: barely there when dry, plainer to see in the wet
-    for (let n = 0; n < 60; n++) {
-      const x = rnd() * S, y = rnd() * S, r = 12 + rnd() * 44, dark = rnd() < 0.6;
-      blot(x, y, r, dark ? '6,7,10' : (night ? '62,66,76' : '110,116,126'), (dark ? 0.03 + 0.09 * w : 0.015 + 0.045 * w));
-    }
-    // the grain
-    for (let n = 0; n < 2200; n++) {
-      g.fillStyle = rnd() < 0.55 ? 'rgba(0,0,0,' + (0.07 + 0.04 * w).toFixed(3) + ')' : 'rgba(170,176,186,' + (0.035 - 0.015 * w).toFixed(3) + ')';
-      g.fillRect(rnd() * S, rnd() * S, 1.2, 1.2);
-    }
-    const pat = this.ctx.createPattern(cv, 'repeat');
-    pat.setTransform(new DOMMatrix().scale(1 / PX));     // 256 px = 32 m of track
-    cache[key] = pat;
-    return pat;
   };
 
   /* Spray: the fine mist a car throws up hangs in the air where the car has been and fades within a second. It is
@@ -1407,11 +1366,10 @@
   Renderer.prototype.drawMeGlow = function (ctx, c) {
     ctx.save();
     ctx.translate(c.x, c.y);
-    // a thin yellow ring: marks you without hiding the track around you
-    ctx.strokeStyle = 'rgba(0,0,0,0.35)'; ctx.lineWidth = 0.3;
-    ctx.beginPath(); ctx.arc(0, 0, 4.0, 0, TAU); ctx.stroke();
-    ctx.strokeStyle = 'rgba(255,214,0,0.9)'; ctx.lineWidth = 0.16;
-    ctx.beginPath(); ctx.arc(0, 0, 4.0, 0, TAU); ctx.stroke();
+    ctx.fillStyle = 'rgba(255,214,0,0.16)';
+    ctx.beginPath(); ctx.arc(0, 0, 4.4, 0, TAU); ctx.fill();
+    ctx.strokeStyle = 'rgba(255,214,0,0.85)'; ctx.lineWidth = 0.22;
+    ctx.beginPath(); ctx.arc(0, 0, 4.4, 0, TAU); ctx.stroke();
     ctx.restore();
   };
 
@@ -1982,8 +1940,11 @@
       // a phone shows the two newest, so the road ahead stays in view
       const list = phone && hud.msgs.length > 2 ? hud.msgs.slice(-2) : hud.msgs;
       for (let i = 0; i < list.length; i++) {
-        if (list[i].from) { my2 += this.drawRadioStrip(ctx, list[i], mcx, my2, mfit ? mroom : Math.min(W - 40, 760), phone) + (phone ? 5 : 7); continue; }
+        if (list[i].from === 'eng') { my2 += this.drawRadioStrip(ctx, list[i], mcx, my2, mfit ? mroom : Math.min(W - 40, 760), phone) + (phone ? 5 : 7); continue; }
         const m = list[i], sign = !!m.sign;
+        // race control: a small tag sitting on top of the sign
+        const tagH = sign && m.from === 'rc' ? (phone ? 15 : 18) : 0;
+        my2 += tagH ? tagH - 4 : 0;
         let fT = m.big ? 30 : sign ? 21 : 20, fS = 14, subs = m.sub ? [m.sub] : [];
         const wT = sign ? '900 ' : '800 ', wS = sign ? '700 ' : '600 ';
         if (mfit) {
@@ -2019,6 +1980,14 @@
           ctx.fillText(m.text, mcx + off, ty);
           ctx.font = wS + fS + 'px ' + FONT;
           for (let k = 0; k < subs.length; k++) ctx.fillText(subs[k], mcx + off, sy + k * hS);
+          if (tagH) {
+            ctx.font = '900 ' + (phone ? 9 : 11) + 'px ' + FONT;
+            const tw = ctx.measureText('RACE CONTROL').width + (phone ? 14 : 18), tx0 = sx + (phone ? 10 : 14), ty0 = my2 - tagH + 4;
+            ctx.fillStyle = pen ? '#ffffff' : '#111111';
+            roundRect(ctx, tx0, ty0, tw, tagH, 4); ctx.fill();
+            ctx.fillStyle = pen ? '#d40a00' : '#ffd400'; ctx.textAlign = 'center';
+            ctx.fillText('RACE CONTROL', tx0 + tw / 2, ty0 + tagH / 2 + 1);
+          }
         } else {
           ctx.fillStyle = 'rgba(10,10,14,0.88)';
           roundRect(ctx, mcx - w / 2, my2, w, h, 6); ctx.fill();

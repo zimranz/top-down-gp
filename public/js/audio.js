@@ -474,12 +474,12 @@
     /* Your engineer on the radio: a crackle of static, the two-tone radio beep, a little hiss under the message. */
     radio: function () {
       if (!this.ready || !this.active) return;
-      this.noiseHit('bandpass', 1900, 0.9, 0.2, 0.08);
-      this.noiseHit('bandpass', 2700, 1.6, 0.13, 0.04, 0.05);
-      this.noiseHit('bandpass', 1300, 1.2, 0.12, 0.06, 0.09);
-      this.beep(1320, 0.05, 0.17, 'square', 2600, 0.15);
-      this.beep(990, 0.075, 0.17, 'square', 2600, 0.21);
-      this.noiseHit('bandpass', 2100, 0.8, 0.05, 0.6, 0.3);
+      this.noiseHit('bandpass', 1900, 0.9, 0.42, 0.09);
+      this.noiseHit('bandpass', 2700, 1.6, 0.3, 0.05, 0.06);
+      this.noiseHit('bandpass', 1300, 1.2, 0.28, 0.07, 0.1);
+      this.beep(1320, 0.09, 0.55, 'square', 4200, 0.17);
+      this.beep(990, 0.13, 0.55, 'square', 4200, 0.28);
+      this.noiseHit('bandpass', 2100, 0.8, 0.1, 0.6, 0.42);
     },
     warnBeep: function () { this.beep(880, 0.09, 0.3, 'square', 3000); this.beep(880, 0.09, 0.3, 'square', 3000, 0.14); },
     penaltyBuzz: function () { this.beep(196, 0.32, 0.36, 'sawtooth', 900); this.beep(147, 0.42, 0.34, 'sawtooth', 900, 0.3); },

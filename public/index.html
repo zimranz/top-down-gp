@@ -342,17 +342,10 @@
     </section>
 
     <!-- PODIUM: after a race, before the results -->
-    <section id="podium" class="screen">
-      <canvas id="podium-confetti"></canvas>
-      <div class="podium-wrap">
-        <div class="podium-head">
-          <div class="podium-kicker" id="podium-kicker">Race</div>
-          <h2 id="podium-title">Podium</h2>
-        </div>
-        <div class="podium" id="podium-steps"></div>
-        <p class="podium-note" id="podium-note"></p>
-        <button class="btn red" id="podium-next">Results →</button>
-      </div>
+    <section id="podium" class="screen panel">
+      <div class="panel-head"><span></span><h2 id="podium-title">Podium</h2><span></span></div>
+      <div class="podium-wrap"><div class="podium" id="podium-steps"></div></div>
+      <div class="results-foot"><span id="podium-note"></span><div class="foot-btns"><button class="btn" id="podium-next">Results</button></div></div>
     </section>
   </div>
 
