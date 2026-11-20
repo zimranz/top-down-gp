@@ -69,7 +69,6 @@
     o.arrowTop = o.left.y;
     o.gx = 12 + half;
     o.gy = H - o.bottom - Math.round(ah / 2);
-    o.leftW = left;                            // width of the left thumb's block, from the left edge
     // top right: the minimap, with pause and "back on track" beside it
     o.mini = phone ? F1.clamp(Math.round(H * 0.27), 76, 112) : W < 820 ? 130 : 200;
     o.btn = phone ? 40 : 48;
@@ -82,7 +81,6 @@
     o.dashW = o.dash === 'full' ? 560 : o.dash === 'compact' ? 400 : F1.clamp(room, 200, 400);
     o.dashCx = Math.round((x0 + x1) / 2);
     o.dashX = Math.round(o.dashCx - o.dashW / 2);
-    o.dashH = o.dash === 'full' ? 96 : o.dash === 'compact' ? 84 : 56;
     return o;
   }
 
@@ -282,7 +280,6 @@
      (the screen stays awake, so the phone does not drop out of the room between sessions) */
   api.show = function (on, busy) { wanted = !!on; refresh(); keepAwake((wanted || !!busy) && T.active); };
   api.refresh = refresh;
-  api.upright = function () { return portrait; };
   /* Called with every HUD frame: the DRS button shows whether DRS can be used, the reset button pulses when stuck. */
   api.hud = function (h) {
     const st = h.speed === undefined || h.pit ? '' : h.drs;

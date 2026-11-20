@@ -1,4 +1,5 @@
-/* Sessions simulated entirely in the browser: practice, Grand Prix (qualifying + race) and the menu background. */
+/* Sessions simulated entirely in the browser: practice, time trial, Grand Prix (qualifying + race; also each round of
+   a championship) and the menu background. */
 (function () {
   'use strict';
   const F1 = window.F1;
@@ -150,6 +151,8 @@
     for (let i = 0; i < fx.length; i++) this.fx.push(fx[i]);
     if (this.me) {
       if (this.T.bank && this.kind !== 'attract' && !this.ff) window.HUD.bankHint(this.T, this.me, this.msgs, this.bankSeen || (this.bankSeen = {}));
+      // (not while the garage panel is up: it would hide the message)
+      if (this.T.airDown < 1 && this.kind !== 'attract' && !this.ff && !this.garageState()) window.HUD.airHint(this.T, this.msgs, this.airSeen || (this.airSeen = {}), this.S.time);
       this.wrongT = F1.isWrongWay(this.me, this.T) ? this.wrongT + F1.DT : 0;
       const sp = Math.hypot(this.me.vx, this.me.vy);
       this.stuckT = sp < 2 && this.S.phase !== 'countdown' && !this.me.inPit && !this.me.gar && this.S.time > 4 ? this.stuckT + F1.DT : 0;
@@ -258,7 +261,7 @@
       gaps: this.type === 'race' ? (this.gapT || (this.gapT = new window.HUD.GapTracker())) : null,
       myId: this.myId, phase: PH[S.phase], lights: S.lights, time: S.time,
       timeLeft: isFinite(S.timeLimit) ? Math.max(0, S.timeLimit - S.time) : -1,
-      fastestId: S.fastest ? S.fastest.id : null, own: this.me, msgs: this.msgs, ping: null, tyres: S.tyres, tyresShow: this.tyresShown(),
+      fastestId: S.fastest ? S.fastest.id : null, own: this.me, msgs: this.msgs, tyres: S.tyres, tyresShow: this.tyresShown(),
       weather: S.weatherOn ? { rain: S.rain, wet: S.wet, ld: S.lineDry } : null,
       started: this.started, wrongT: this.wrongT, stuckT: this.stuckT, sectors: this.sectors.view()
     });

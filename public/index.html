@@ -23,7 +23,7 @@
     <section id="home" class="screen active">
       <div class="brand">
         <div class="logo">TOP-DOWN <span>GP</span></div>
-        <div class="tag">2026 grid · 11 teams · 22 drivers · 14 circuits</div>
+        <div class="tag">2026 grid · 11 teams · 22 drivers · 27 circuits</div>
       </div>
       <div class="menu">
         <button class="btn big" data-go="practice">Practice</button>
@@ -186,7 +186,8 @@
       <div class="cols">
         <div class="col narrow">
           <h3>Calendar</h3>
-          <p class="note cal-note">Click the tracks in the order you want to race them (2 to 19 races).</p>
+          <p class="note cal-note">Click the tracks in the order you want to race them (2 to 27 races).</p>
+          <div class="cal-btns"><button type="button" class="btn small" id="champ-all">Select all</button><button type="button" class="btn small ghost" id="champ-none">Clear all</button></div>
           <div class="tracks" id="champ-tracks"></div>
           <h3>Opponents</h3>
           <div class="row"><input type="range" id="champ-ai" min="1" max="21" value="15"><span class="val" id="champ-ai-val">15</span></div>
@@ -287,7 +288,7 @@
           <div class="settings-grid" id="lobby-settings">
             <label class="span2">Mode<select id="set-mode"><option value="single">Single race weekend</option><option value="champ">Championship (a season of races)</option></select></label>
             <div class="lobby-cal span2" id="lobby-cal">
-              <div class="cal-head">Calendar <span id="lobby-cal-n"></span></div>
+              <div class="cal-head">Calendar <span id="lobby-cal-n"></span><span class="cal-btns mini" id="lobby-cal-btns"><button type="button" class="btn small" id="lobby-cal-all">Select all</button><button type="button" class="btn small ghost" id="lobby-cal-none">Clear all</button></span></div>
               <div class="cal-chips" id="lobby-cal-chips"></div>
             </div>
             <label id="set-track-wrap">Track<select id="set-track"></select></label>

@@ -349,6 +349,7 @@
     this.ownPrev = { x: own.x, y: own.y, a: own.a };
     this.simulate(inp, this.pending.length, this.snapT);
     if (this.T.bank) window.HUD.bankHint(this.T, own, this.msgs, this.bankSeen || (this.bankSeen = {}));
+    if (this.T.airDown < 1 && !this.garageState()) window.HUD.airHint(this.T, this.msgs, this.airSeen || (this.airSeen = {}), this.serverTime);   // (not under the garage panel)
     this.wrongT = F1.isWrongWay(own, this.T) ? this.wrongT + DT : 0;
     this.stuckT = Math.hypot(own.vx, own.vy) < 2 && this.phase >= 1 && !own.inPit && !own.gar ? this.stuckT + DT : 0;
   };
@@ -358,7 +359,9 @@
     if (this.myId === null || !this.own || this.own.out || this.ended) return;
     const inp = { throttle: 0, brake: 1, steer: 0, drs: false, reset: false };
     this.seq++;
-    this.net.emit('i', [this.seq, 0, 1, 0, 0]);
+    // (with the tyre pick, as every input carries it: without it the server would take it as "no pick")
+    const tp = this.tyrePick ? F1.TYRE_KEYS.indexOf(this.tyrePick) + 1 : 0;
+    this.net.emit('i', [this.seq, 0, 1, 0, 0, tp]);
     this.pending.push({ seq: this.seq, inp: inp });
   };
 
@@ -516,7 +519,7 @@
       time: this.serverTime + Math.min(1, (now - this.snapRecv) / 1000),
       timeLeft: tm && tm.tl >= 0 ? tm.tl : -1,
       fastestId: tm && tm.f ? tm.f[0] : null,
-      own: this.own, msgs: this.msgs, ping: this.net.ping, tyres: this.tyresOn, tyresShow: this.tyresShown(),
+      own: this.own, msgs: this.msgs, tyres: this.tyresOn, tyresShow: this.tyresShown(),
       weather: this.weatherOn ? this.wxV : null,
       started: this.started, wrongT: this.wrongT, stuckT: this.stuckT, sectors: this.sectors.view()
     });

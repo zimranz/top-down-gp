@@ -53,7 +53,6 @@
     this.cut = 0; this.cutG = 1;
     this.over = 0; this.pop = 0; this.popPending = 0; this.popProb = 0;
     this.turboPh = 0;
-    this.blockFc = -1;
   }
   V6Core.prototype.rand = function () {   // xorshift, -1..1
     let x = this.seed;

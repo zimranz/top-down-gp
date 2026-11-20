@@ -107,7 +107,7 @@
   /* Live gaps in a race, the way TV measures them: how long ago the car ahead was exactly where you are now, and
      how long ago you were where the car behind is now. Every car's distance is noted against the race clock as it
      goes round; the gaps come from those notes, so they change smoothly, corner by corner (shown in white). */
-  function GapTracker() { this.h = {}; this.hist = { a: [], b: [] }; this.who = { a: null, b: null }; }
+  function GapTracker() { this.h = {}; }
   GapTracker.prototype.note = function (id, d, t) {
     let H = this.h[id];
     if (!H || d < H.d[H.d.length - 1] - 30 || t < H.t[H.t.length - 1]) H = this.h[id] = { d: [d], t: [t] };   // (a new session)
@@ -124,13 +124,6 @@
     while (hi - lo > 1) { const m = (lo + hi) >> 1; if (H.d[m] <= d) lo = m; else hi = m; }
     const span = H.d[hi] - H.d[lo];
     return span > 0 ? H.t[lo] + (H.t[hi] - H.t[lo]) * (d - H.d[lo]) / span : H.t[lo];
-  };
-  GapTracker.prototype.trend = function (k, who, gap, t) {
-    if (this.who[k] !== who) { this.who[k] = who; this.hist[k] = []; }
-    const H = this.hist[k];
-    if (!H.length || t - H[H.length - 1][0] > 0.1) H.push([t, gap]);
-    while (H.length > 2 && t - H[1][0] > 1.2) H.shift();
-    return H.length > 1 && t - H[0][0] > 0.5 ? gap - H[0][1] : 0;
   };
   // -> { a: {text, color} | null, b: ... }
   GapTracker.prototype.update = function (o) {
@@ -159,7 +152,7 @@
 
   /* o = { type, laps, track, order, rows:{id:{laps,last,best,gap,lapStart,fin,out,qdone,dist}}, entries:{id:{driverId}},
            myId, phase (0 countdown, 1 running, 2 finishing, 3 done), lights, time, timeLeft, fastestId,
-           own (car state or null), msgs, ping, started, wrongT, stuckT } */
+           own (car state or null), msgs, started, wrongT, stuckT } */
   function buildHud(o) {
     const T = o.track, rows = o.rows, order = o.order, isRace = o.type === 'race', isQuali = o.type === 'quali';
     const limited = isQuali || (o.type === 'practice' && o.laps > 0);   // a set number of timed laps
@@ -191,8 +184,7 @@
       title: o.title || (isRace ? 'RACE' : isQuali ? 'QUALIFYING' : 'PRACTICE'),
       towerRight: isRace ? 'LAP ' + Math.min(o.laps, (leader ? leader.laps : 0) + 1) + '/' + o.laps : (T.short || T.name).toUpperCase(),
       tower: tower,
-      msgs: o.msgs.active(),
-      ping: o.ping
+      msgs: o.msgs.active()
     };
     if (o.delta !== null && o.delta !== undefined && isFinite(o.delta)) {
       hud.delta = { text: (o.delta >= 0 ? '+' : '−') + Math.abs(o.delta).toFixed(3), color: o.delta > 0.0005 ? '#ff5a4f' : '#19c94a' };
@@ -259,7 +251,7 @@
     return hud;
   }
 
-  /* Banked corners (Zandvoort): say once per corner and session that the slope gives more grip. seen = {} kept by the game. */
+  /* Banked corners (Zandvoort, Madring): say once per corner and session that the slope gives more grip. seen = {} kept by the game. */
   function bankHint(T, car, msgs, seen) {
     if (!T.bank || !car || car.out || !(T.bank[car.seg] > 1.08)) return;
     for (let z = 0; z < T.banked.length; z++) {
@@ -272,6 +264,14 @@
     }
   }
 
-  window.HUD = { eventMessage: eventMessage, build: buildHud, bankHint: bankHint, GapTracker: GapTracker };
+  /* Thin air (Mexico City): say once per session, a moment after it starts (t: session time), why the car feels
+     different there. seen = {} kept by the game. */
+  function airHint(T, msgs, seen, t) {
+    if (seen.air || !(T.airDown < 1) || !(t > 1.5)) return;
+    seen.air = true;
+    msgs.add('THIN AIR', { sub: 'Mexico City is 2,200 m up: faster on the straights, less grip in the corners', color: '#3fb6ff', from: 'eng', key: 'air', dur: 5500 });
+  }
+
+  window.HUD = { eventMessage: eventMessage, build: buildHud, bankHint: bankHint, airHint: airHint, GapTracker: GapTracker };
   window.SectorTracker = SectorTracker;
 })();

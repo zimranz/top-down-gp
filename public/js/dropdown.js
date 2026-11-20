@@ -198,5 +198,5 @@
     }
   }).observe(D.body, { childList: true, subtree: true });
 
-  window.Dropdown = { closeAll: close, isOpen: function () { return !!open; }, enhance: enhance, sync: sync };
+  window.Dropdown = { closeAll: close };
 })();

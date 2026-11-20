@@ -523,6 +523,5 @@
   window.addEventListener('touchend', unlock, true);
   window.addEventListener('click', unlock, true);
 
-  Audio.rpmFor = rpmFor;
   window.GameAudio = Audio;
 })();

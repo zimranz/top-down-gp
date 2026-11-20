@@ -114,7 +114,7 @@
 
   /* Everything in the pit complex, built once per track. Offsets are measured from the track centre
      towards the pit side: track edge hw, pit wall, fast lane, working lane with the boxes, garages, paddock. */
-  function buildPit(T, mctx) {
+  function buildPit(T) {
     const P = T.pit, side = P.side, L = T.length, ds = T.ds, hw = T.hw;
     const pt = function (s, d) { return F1.trackPoint(T, s, side * d); };
     const samp = function (arr, s) {
@@ -283,7 +283,7 @@
     }
     for (let c0 = 0; c0 < N; c0 += CH) {
       const c1 = Math.min(N, c0 + CH);
-      const ch = { center: new Path2D(), runoff: [], edges: new Path2D(), kerbR: new Path2D(), kerbW: new Path2D(), kerbAll: new Path2D(), gravel: new Path2D(),
+      const ch = { center: new Path2D(), edges: new Path2D(), kerbR: new Path2D(), kerbAll: new Path2D(), gravel: new Path2D(),
         narrowFill: new Path2D(), narrowLine: new Path2D(), cx: 0, cy: 0, r: 0, c0: c0, c1: c1, pudL: [] };
       const HWE = T.hwE;
       let sx = 0, sy = 0;
@@ -326,17 +326,6 @@
       for (let k = c0; k <= c1; k++) { const i = k % N, a = off(i, edgeOff(i, 1)); if (k === c0) ch.grass.moveTo(a[0], a[1]); else ch.grass.lineTo(a[0], a[1]); }
       for (let k = c1; k >= c0; k--) { const i = k % N, a = off(i, -edgeOff(i, -1)); ch.grass.lineTo(a[0], a[1]); }
       ch.grass.closePath();
-      // run-off groups by (rounded) barrier distance
-      let gStart = c0, gW = Math.round(T.wall[c0 % N]);
-      for (let k = c0 + 1; k <= c1 + 1; k++) {
-        const wv = k <= c1 ? Math.round(T.wall[k % N]) : -1;
-        if (wv !== gW) {
-          const p = new Path2D();
-          for (let q = gStart; q <= Math.min(k, c1); q++) { const i = q % N; if (q === gStart) p.moveTo(X[i], Y[i]); else p.lineTo(X[i], Y[i]); }
-          ch.runoff.push({ w: gW, path: p });
-          gStart = k - 1 < c0 ? c0 : k - 1; gW = wv;
-        }
-      }
       // white edge lines (closer together where the track narrows)
       for (const side of [-1, 1]) {
         for (let k = c0; k <= c1; k++) {
@@ -359,11 +348,11 @@
       for (let k = c0; k < c1; k++) {
         const i = k % N, j = (k + 1) % N;
         if (T.kerb[i] && T.kerb[j]) {
-          // the whole kerb is filled white, then the red blocks go on top: no seams between blocks
-          const path = k % 2 === 0 ? ch.kerbR : ch.kerbW;
+          // the whole kerb is filled white, then the red blocks (every other one) go on top: no seams between blocks
+          const red = k % 2 === 0;
           for (const side of [-1, 1]) {
             const a = off(i, side * (HWE[i] - 0.2)), b = off(j, side * (HWE[j] - 0.2)), c = off(j, side * (HWE[j] + T.kerbW)), d = off(i, side * (HWE[i] + T.kerbW));
-            for (const pth of [path, ch.kerbAll]) { pth.moveTo(a[0], a[1]); pth.lineTo(b[0], b[1]); pth.lineTo(c[0], c[1]); pth.lineTo(d[0], d[1]); pth.closePath(); }
+            for (const pth of red ? [ch.kerbR, ch.kerbAll] : [ch.kerbAll]) { pth.moveTo(a[0], a[1]); pth.lineTo(b[0], b[1]); pth.lineTo(c[0], c[1]); pth.lineTo(d[0], d[1]); pth.closePath(); }
           }
         }
         for (const side of [-1, 1]) {
@@ -377,16 +366,11 @@
           }
         }
       }
-      // the racing line (after rain it dries first) and where water collects in heavy rain (near the edges)
-      ch.rline = new Path2D();
-      for (let k = c0; k <= c1; k++) { const i = k % N; if (k === c0) ch.rline.moveTo(T.rlX[i], T.rlY[i]); else ch.rline.lineTo(T.rlX[i], T.rlY[i]); }
-      ch.pud = new Path2D();
+      // where water collects in heavy rain (near the edges)
       for (let k = c0; k < c1; k++) {
         if (k % 8 || hash01(k) > 0.36) continue;
         const i = k % N, side = hash01(k + 0.5) < 0.5 ? -1 : 1, d = side * (HWE[i] - 1.0 - hash01(k + 0.25) * 2.2);
         const p = off(i, d), rx = 1.3 + hash01(k + 0.75) * 2.2, ry = 0.55 + hash01(k + 0.6) * 0.75;
-        ch.pud.moveTo(p[0] + rx * Math.cos(T.hd[i]), p[1] + rx * Math.sin(T.hd[i]));
-        ch.pud.ellipse(p[0], p[1], rx, ry, T.hd[i], 0, TAU);
         ch.pudL.push({ x: p[0], y: p[1], a: T.hd[i], l: rx * 1.25, w: ry * 1.35, v: Math.floor(hash01(k + 0.9) * 4) });
       }
       G.chunks.push(ch);
@@ -463,7 +447,6 @@
       const c = F1.trackPoint(T, z.detect, -hw + 0.4), d = F1.trackPoint(T, z.detect, hw - 0.4);
       G.drsDet.moveTo(c.x, c.y); G.drsDet.lineTo(d.x, d.y);
     });
-    G.drsText = T.drs.map(function (z) { return F1.trackPoint(T, z.start + 6, 0); });
 
     // grandstands opposite the pits
     const rand = F1.rng(T.n * 7 + 3);
@@ -476,7 +459,7 @@
     for (let s = -300; s < 200; s += 64) block(s, s + 56, standSide * (wallS + 5), standSide * (wallS + 19), '#2d4f8c', '#e8e8e8');
 
     // pit lane, garages, paddock; start-light gantry over the grid
-    if (T.pit) G.pit = buildPit(T, this.ctx);
+    if (T.pit) G.pit = buildPit(T);
     G.gantry = buildGantry(T);
 
     // trees outside the barriers (spatial hash, 100 m cells)
@@ -744,7 +727,7 @@
   };
 
   // ------------------------------------------------------------- frame
-  /* frame = { track, cars:[{id,x,y,a,vx,vy,delta,team,code,number,me,ghost,drsOpen,label}], focus, ghostMode } */
+  /* frame = { track, cars:[{id,x,y,a,vx,vy,delta,team,code,number,me,ghost,drsOpen,label}], focus } */
   Renderer.prototype.drawWorld = function (frame, dt) {
     const ctx = this.ctx, T = frame.track, G = this.prep(T), cam = this.cam, dpr = this.dpr;
     const COL = G.pal, night = !!T.night;        // night races use the dark palette
@@ -1705,7 +1688,7 @@
   const FONT = '"Titillium Web", system-ui, sans-serif';
 
   /* hud = { title, lapText, tower:[{pos,code,color,info,me,out,done,purple}], lights, lightsOn, speed, gear, drs, cur, last, best,
-             posText, msgs:[{text,sub,color}], wrongWay, timeLeft, hint, ping, cars (minimap dots), centre } */
+             posText, msgs:[{text,sub,color}], wrongWay, timeLeft, hint, cars (minimap dots), centre } */
   Renderer.prototype.drawHUD = function (hud, frame) {
     const ctx = this.ctx, W = this.w, H = this.h;
     ctx.setTransform(this.dpr, 0, 0, this.dpr, 0, 0);
@@ -2133,7 +2116,7 @@
       }
     }
 
-    // ---- hints / ping
+    // ---- hints
     ctx.textAlign = 'left'; ctx.font = '600 12px ' + FONT;
     if (hud.hint) {
       const lines = hud.hint;
@@ -2319,6 +2302,7 @@
     drawCarLocal(ctx, team, 0, false);
   };
 
+  /* A track's picture for the menus. T: a built track, or just its outline (F1.trackOutline). */
   Renderer.trackPreview = function (canvas, T) {
     const dpr = Math.min(2, window.devicePixelRatio || 1);
     const w = canvas.clientWidth || 160, h = canvas.clientHeight || 110;
@@ -2334,8 +2318,7 @@
     ctx.closePath();
     ctx.strokeStyle = 'rgba(0,0,0,0.5)'; ctx.lineWidth = 6; ctx.stroke();
     ctx.strokeStyle = '#fff'; ctx.lineWidth = 2.5; ctx.stroke();
-    const s = F1.trackPoint(T, 0, 0);
-    ctx.fillStyle = '#e10600'; ctx.beginPath(); ctx.arc(s.x * sc + ox, s.y * sc + oy, 3.5, 0, TAU); ctx.fill();
+    ctx.fillStyle = '#e10600'; ctx.beginPath(); ctx.arc(T.x[0] * sc + ox, T.y[0] * sc + oy, 3.5, 0, TAU); ctx.fill();   // the start line
   };
 
   Renderer.lerpAngle = lerpAngle;

@@ -1,5 +1,6 @@
 /* Car physics, collisions, AI drivers and session logic (practice / qualifying / race).
-   Runs on the server (authoritative online races) and in the browser (practice + prediction). */
+   Runs on the server (online sessions: it has the final say) and in the browser (offline sessions, and
+   predicting your own car online). */
 (function (root) {
   'use strict';
   const F1 = (root.F1 = root.F1 || {});
@@ -201,7 +202,8 @@
     const ca = Math.cos(c.a), sa = Math.sin(c.a);
     let vf = c.vx * ca + c.vy * sa;
     let vl = -c.vx * sa + c.vy * ca;
-    let latRef = Math.min(P.LAT_MAX, P.LAT0 + P.LAT_K * sp * sp);
+    // (thin air, Mexico City: T.airDown < 1, less downforce; T.airDrag < 1, less drag. Both 1 everywhere else)
+    let latRef = Math.min(P.LAT_MAX, P.LAT0 + P.LAT_K * sp * sp * T.airDown);
     if (T.bank) latRef *= T.bank[Q.idx];           // a banked corner: more grip
     let latAvail = latRef * grip;
     if (c.dirty < 1) latAvail *= c.dirty;          // dirty air behind another car
@@ -232,17 +234,17 @@
     vl = -c.vx * sa2 + c.vy * ca2;
 
     // longitudinal
-    const drag = P.DRAG * (c.drsOpen ? P.DRS_DRAG : 1) * (c.tow || 1);     // slipstream: less air to push through
+    const drag = P.DRAG * (c.drsOpen ? P.DRS_DRAG : 1) * (c.tow || 1) * T.airDrag;     // slipstream: less air to push through
     const aero = (drag * vf * Math.abs(vf)) / CAR.MASS;
     if (c.inPit && vf > PIT_LIMIT - 0.4) thr = 0;   // pit limiter
     if (vf > 0.4) {
       let acc = 0;
       if (c.inPit && vf > PIT_LIMIT + 0.4) acc -= Math.min(12, (vf - PIT_LIMIT) * 3);
       if (thr > 0) {
-        const tr = Math.min(P.TRACT_MAX, P.TRACT0 + P.TRACT_K * sp * sp) * traction;
+        const tr = Math.min(P.TRACT_MAX, P.TRACT0 + P.TRACT_K * sp * sp * T.airDown) * traction;
         acc += thr * Math.min(P.POWER / (CAR.MASS * Math.max(vf, 4)), tr);
       } else acc -= P.ENGINE_BRAKE;
-      if (brk > 0) acc -= brk * Math.min(P.BRAKE_MAX, P.BRAKE0 + P.BRAKE_K * sp * sp) * (0.35 + 0.65 * grip);
+      if (brk > 0) acc -= brk * Math.min(P.BRAKE_MAX, P.BRAKE0 + P.BRAKE_K * sp * sp * T.airDown) * (0.35 + 0.65 * grip);
       acc -= aero + P.ROLL;
       vf += acc * dt;
       if (vf < 0) vf = 0;
@@ -402,20 +404,20 @@
     const B0 = lv0 === 'limit' ? LIMIT : AI_LEVELS[lv0] || AI_LEVELS.medium;
     const L0 = late ? { lat: B0.lat, brake: 1 } : B0;
     const Lv = gq === 1 ? L0 : { lat: L0.lat * gq, brake: L0.brake * (0.35 + 0.65 * gq) };
-    const N = T.n, K = T.rlK, ds = T.ds, BK = T.bank;
+    const N = T.n, K = T.rlK, ds = T.ds, BK = T.bank, AD = T.airDown, AR = T.airDrag;
     const v = new Float64Array(N);
     for (let i = 0; i < N; i++) {
       // banked corners can be taken faster (the AI uses a little over half of the extra grip, to keep a margin)
       const k = Math.abs(K[i]), m = BK ? Lv.lat * (1 + (BK[i] - 1) * 0.55) : Lv.lat;
       let vmax = 105;
-      if (k > P.LAT_K * m) vmax = Math.min(vmax, Math.sqrt((P.LAT0 * m) / (k - P.LAT_K * m)));
+      if (k > P.LAT_K * m * AD) vmax = Math.min(vmax, Math.sqrt((P.LAT0 * m) / (k - P.LAT_K * m * AD)));
       vmax = Math.min(vmax, Math.sqrt((P.LAT_MAX * m) / Math.max(k, 1e-6)));
       v[i] = vmax;
     }
     for (let pass = 0; pass < 2; pass++) {
       for (let k = N - 1; k >= 0; k--) {
         const i = k, nI = (i + 1) % N, vn = v[nI];
-        const dec = Math.min(P.BRAKE_MAX, P.BRAKE0 + P.BRAKE_K * vn * vn) * Lv.brake + (P.DRAG * vn * vn) / CAR.MASS;
+        const dec = Math.min(P.BRAKE_MAX, P.BRAKE0 + P.BRAKE_K * vn * vn * AD) * Lv.brake + (P.DRAG * vn * vn * AR) / CAR.MASS;
         const limv = Math.sqrt(vn * vn + 2 * dec * ds);
         if (limv < v[i]) v[i] = limv;
       }
@@ -453,7 +455,7 @@
     for (let lap = 0; lap < 2; lap++) {
       t = 0;
       for (let i = 0; i < T.n; i++) {
-        const acc = Math.min(P.POWER / (CAR.MASS * Math.max(v, 4)), P.TRACT0) - (P.DRAG * v * v) / CAR.MASS;
+        const acc = Math.min(P.POWER / (CAR.MASS * Math.max(v, 4)), P.TRACT0) - (P.DRAG * v * v * T.airDrag) / CAR.MASS;
         let vn = Math.sqrt(Math.max(1, v * v + 2 * acc * T.ds));
         if (vn > prof[i]) vn = prof[i];
         t += T.ds / ((v + vn) / 2);
@@ -521,7 +523,6 @@
   });
   const TYRE_KEYS = (F1.TYRE_KEYS = ['S', 'M', 'H', 'I', 'W']);
   const SLICK = { S: true, M: true, H: true };
-  F1.isSlick = function (k) { return !!SLICK[k]; };
   /* Grip left as a tyre wears: a slow fade to 75% worn (-2.5%), then the cliff (-7% when worn out, much worse after). */
   function wearGrip(w) {
     if (w <= 0.75) return 1 - 0.025 * (w / 0.75);
@@ -624,7 +625,8 @@
   /* The chance of rain in a session at each track (from how often it rains there on a race weekend). */
   const RAIN = { spa: 0.38, silverstone: 0.33, interlagos: 0.33, zandvoort: 0.27, suzuka: 0.25, montreal: 0.25, redbullring: 0.25,
     singapore: 0.22, monaco: 0.16, monza: 0.14, baku: 0.06, jeddah: 0.03, lasvegas: 0.03, abudhabi: 0.02,
-    australia: 0.22, china: 0.25, miami: 0.2, barcelona: 0.1, bahrain: 0.02 };
+    australia: 0.22, china: 0.25, miami: 0.2, barcelona: 0.1, bahrain: 0.02,
+    sepang: 0.45, hungaroring: 0.2, istanbul: 0.2, austin: 0.15, mexico: 0.15, madring: 0.08, portimao: 0.08, lusail: 0.01 };
   F1.rainChance = function (T) { return RAIN[T.id] !== undefined ? RAIN[T.id] : 0.2; };
   /* A session's weather, from its seed: the rain showers over the session (start, end, how hard at their peak).
      Sometimes it is already raining when the session starts; a long session can have a second shower. */
@@ -661,7 +663,6 @@
     if (cur === 'I') return lw > 0.68 ? 'W' : lw < 0.07 ? 'dry' : null;
     return lw < 0.07 ? 'dry' : lw < 0.46 ? 'I' : null;
   }
-  F1.weatherNeed = weatherNeed;
 
   /* How far a car reaches sideways across the track (more when it is at an angle to the track). */
   function halfWidthOnTrack(c, T) {
@@ -894,7 +895,7 @@
           ai.tow = { id: tg.id, s: Zn.s, toZ0: toB, t: now, side: Zn.turn,
             err: 1 + (1 - fit) * (S.rng() * 0.6 - 0.3),                 // (the moment it lets the run start)
             hold: fit >= 0.8, late: S.rng() < (lvl.late || 0),
-            fake: S.rng() < (lvl.fake || 0), fakeAt: 50 + S.rng() * 60, fakeDur: 0.4 + S.rng() * 0.3, faked: 0 };
+            fake: S.rng() < (lvl.fake || 0), fakeDur: 0.4 + S.rng() * 0.3, faked: 0 };
           towing = true; towWant = tg.d; towGap = 2.4 + cv * 0.015;
         }
       }
@@ -946,7 +947,7 @@
       }
     }
 
-    // defending (extra hard, expert): a car close behind on the way into a proper braking zone - one early move
+    // defending (hard, extra hard, expert): a car close behind on the way into a proper braking zone - one early move
     // to cover the inside, held through the braking zone to the apex (the slower, tighter line). Never a move
     // towards a car that has already pulled out to the inside (we stop where we are), and never into a car
     // alongside (see lo / hi).
@@ -1026,7 +1027,7 @@
     const lx = dx * ca + dy * sa, ly = -dx * sa + dy * ca;
     const curv = (2 * ly) / Math.max(1, lx * lx + ly * ly);
     const vf = c.vx * ca + c.vy * sa, vfa = Math.abs(vf);
-    let latRef = Math.min(P.LAT_MAX, P.LAT0 + P.LAT_K * sp * sp);
+    let latRef = Math.min(P.LAT_MAX, P.LAT0 + P.LAT_K * sp * sp * T.airDown);
     if (T.bank) latRef *= T.bank[c.seg];             // the same steering range as the car has there (banked corner)
     const maxDelta = Math.min(P.STEER_MAX, Math.atan(CAR.WB * latRef / Math.max(vfa * vfa, 1)) * 1.05);
     let steer = Math.atan(CAR.WB * curv) / maxDelta;
@@ -1053,12 +1054,12 @@
       if ((towing && lead.id === ai.tow.id) || (ai.pass && ai.pass.tow && lead.id === ai.pass.id)) {
         // in its tow on a straight: close right up (still able to brake to its speed in time) to pull out with a run
         // (and the same while pulling out from behind it)
-        const bR = 0.3 * Math.min(P.BRAKE_MAX, P.BRAKE0 + P.BRAKE_K * lv * lv);
+        const bR = 0.3 * Math.min(P.BRAKE_MAX, P.BRAKE0 + P.BRAKE_K * lv * lv * T.airDown);
         const g0 = towing ? towGap : 2.4 + cv * 0.015;
         vCap = leadGap > g0 ? lv + Math.sqrt(2 * bR * (leadGap - g0)) : lv - (g0 - leadGap) * 0.8;
       } else {
         const gd = 1.5 + Math.max(0, cv) * lvl.gap * (lead.id === fightId ? 0.7 : 1);
-        const b = 0.55 * Math.min(P.BRAKE_MAX, P.BRAKE0 + P.BRAKE_K * lv * lv);
+        const b = 0.55 * Math.min(P.BRAKE_MAX, P.BRAKE0 + P.BRAKE_K * lv * lv * T.airDown);
         vCap = leadGap > gd ? Math.sqrt(lv * lv + 2 * b * (leadGap - gd)) : lv - (gd - leadGap) * 0.8;
       }
       if (vCap < vt) vt = Math.max(0, vCap);
@@ -1071,8 +1072,8 @@
     if (passing || lo > -98 || hi < 98 || Math.abs(ai.bias) > 1) ai.dispT = now;
     const kArc = Math.abs(curv), mArc = Math.min(1, lvl.lat + 0.08);
     const offTarget = Math.abs(c.d - T.rlOff[c.seg] - ai.bias);
-    if (!diving && now - ai.dispT < 2.5 && offTarget > 1.5 && kArc > P.LAT_K * mArc) {
-      const vArc = Math.sqrt((P.LAT0 * mArc) / (kArc - P.LAT_K * mArc));
+    if (!diving && now - ai.dispT < 2.5 && offTarget > 1.5 && kArc > P.LAT_K * mArc * T.airDown) {
+      const vArc = Math.sqrt((P.LAT0 * mArc) / (kArc - P.LAT_K * mArc * T.airDown));
       if (vArc < vt) vt = vArc;
     }
     if (offTrack) { vt = Math.min(vt, 30); if (rejoinBlocked) vt = Math.min(vt, 12); }
@@ -1089,14 +1090,14 @@
       inp.throttle = 0; inp.brake = 1; inp.lock = true;
       inp.steer *= 0.25;
       if (sp > 4) {
-        const f = (P.BRAKE0 * (0.45 + 0.35 * (1 - mk.sev))) / Math.max(1, P.BRAKE0 + P.BRAKE_K * sp * sp);
+        const f = (P.BRAKE0 * (0.45 + 0.35 * (1 - mk.sev))) / Math.max(1, P.BRAKE0 + P.BRAKE_K * sp * sp * T.airDown);
         inp.brake = Math.min(1, f);
       }
       if (sp < mk.vMin * 0.85) mk.locked = false;
     }
     if (mkType === 'dive' && mkRel < mk.apexRel + 10 && sp > 4) {
       // divebomb: brakes far too late up the inside, still turning, and slides wide at the apex
-      const f = (P.BRAKE0 * (0.75 + 0.35 * (1 - mk.sev))) / Math.max(1, P.BRAKE0 + P.BRAKE_K * sp * sp);
+      const f = (P.BRAKE0 * (0.75 + 0.35 * (1 - mk.sev))) / Math.max(1, P.BRAKE0 + P.BRAKE_K * sp * sp * T.airDown);
       if (inp.brake > f) inp.brake = f;
       if (inp.brake > 0) inp.lock = true;
     }
@@ -1169,7 +1170,6 @@
     const b = F1.trackPoint(T, s1, side * tlEdge(T, F1.idxAt(T, s1)));
     return len + Math.hypot(b.x - px, b.y - py);
   }
-  F1.tlLegal = tlLegal;
   // the quickest a hard AI could get between two points on the racing line (no time lost accelerating)
   function tlRefTime(T, s0, s1) {
     if (!T._tlCum) {
@@ -1294,7 +1294,7 @@
     const lx = dx * ca + dy * sa, ly = -dx * sa + dy * ca;
     const curv = (2 * ly) / Math.max(1, lx * lx + ly * ly);
     const vfa = Math.abs(c.vx * ca + c.vy * sa);
-    const latRef = Math.min(PH.LAT_MAX, PH.LAT0 + PH.LAT_K * sp * sp);
+    const latRef = Math.min(PH.LAT_MAX, PH.LAT0 + PH.LAT_K * sp * sp * T.airDown);
     const maxDelta = Math.min(PH.STEER_MAX, Math.atan(CAR.WB * latRef / Math.max(vfa * vfa, 1)) * 1.05);
     inp.steer = clamp(lx < 0 ? (ly > 0 ? 1 : -1) : Math.atan(CAR.WB * curv) / maxDelta, -1, 1);
     // speed: down to the limit before the line, stop in the box, wait for a gap before pulling out
@@ -1742,7 +1742,8 @@
     this.events.push({ k: 'stopDone', id: c.id, t: Math.round(ps.dur * 10) / 10, tyre: ps.k });
   };
   /* An AI car in a race (at the line, and at the start): time to come in at the end of this lap? As planned; earlier if
-     the tyres are worn out; before the end if the compulsory stop is still to do; (the weather: see part 4). */
+     the tyres are worn out; before the end if the compulsory stop is still to do; a change of weather
+     (rain tyres, or slicks again) comes first. */
   Session.prototype.aiPitCall = function (c) {
     if (!c.isAI || c.finished || c.out || c.pitPlan || !this.track.pit || this.type !== 'race') return;
     const left = this.laps - c.lapsDone;              // laps to go, counting this one
@@ -2141,12 +2142,14 @@
     if (this.type === 'race') {
       // time penalties: cars that end on the same lap are ordered by their time plus penalties (a car still on its
       // last lap: the leader's time plus its gap), so a big penalty (no pit stop: 30 s) can drop a car behind one
-      // that has not crossed the line yet
-      const lf = this.leaderFinishTime;
+      // that has not crossed the line yet. A car not across the line can't have finished before now, though: its gap
+      // is from the last timing point it passed, so a car stopped on its last lap (or still on the grid in a 1-lap
+      // race) would otherwise be classified ahead of the cars that finished.
+      const lf = this.leaderFinishTime, now = this.time;
       const idx = new Map(order.map(function (c, i) { return [c, i]; }));
       const live = order.filter(function (c) { return !c.out; });
       const done = function (c) { return c.finished ? c.lapsDone : c.lapsDone + 1; };
-      const est = function (c) { return c.finished ? c.finishTime + c.penalty : lf === null ? Infinity : lf + c.gap + c.penalty; };
+      const est = function (c) { return c.finished ? c.finishTime + c.penalty : lf === null ? Infinity : Math.max(lf + c.gap, now) + c.penalty; };
       live.sort(function (a, b) {
         const d = done(b) - done(a);
         if (d) return d;

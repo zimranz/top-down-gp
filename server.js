@@ -93,6 +93,8 @@ function newRoom(code, hostId) {
     session: null,
     carOf: new Map(), ownerOf: new Map(), inputQ: new Map(), lastIn: new Map(), ack: new Map(), lastSeq: new Map(),
     qualiOrder: null, weekendAI: null, stages: null, stageIdx: 0, stage: null, timer: null, lastResults: null,
+    // this weekend's track (settings.track can be 'random': "Surprise me", picked when the weekend starts)
+    weekendTrack: null, surprise: false, lastSurprise: null,
     // championship: the season, and the pause while the host is away
     season: null, hostAway: false, awayName: null, awayCar: null, resumeAt: 0
   };
@@ -129,6 +131,7 @@ function sessionInfo(room) {
     stage: room.stage,
     title: (room.season ? 'R' + (room.season.rounds.length + 1) + ' ' : '') + (STAGE_TITLE[room.stage] || ''),
     track: S.track.id,
+    surprise: room.surprise && room.stageIdx === 0,              // a "Surprise me" track: shown to everyone as the weekend starts
     laps: S.laps,
     aiLevel: S.aiLevel,
     drafting: S.drafting,
@@ -215,6 +218,8 @@ function startRound(room) {
   if (!se || se.done) return;
   const o = se.opts;
   room.settings.track = se.calendar[se.rounds.length];
+  room.weekendTrack = room.settings.track;
+  room.surprise = false;
   room.qualiOrder = null;
   room.weekendAI = se.aiDrivers.slice();
   room.lastResults = null;
@@ -386,7 +391,8 @@ function startSession(room, stage) {
   if (room.timer) { clearTimeout(room.timer); room.timer = null; }
   const type = stage === 'quali' || stage === 'race' ? stage : 'practice';
   const se = room.season, o = se ? se.opts : room.settings;
-  const T = F1.getTrack(room.settings.track);
+  if (!room.weekendTrack) room.weekendTrack = F1.TRACK_DEFS[room.settings.track] ? room.settings.track : 'monza';
+  const T = F1.getTrack(room.weekendTrack);
   let humans = Array.from(room.players.values());
   let aiDrivers;
   if (se) {
@@ -788,7 +794,7 @@ io.on('connection', function (socket) {
       s.calendar.forEach(function (id) { if (F1.TRACK_DEFS[id] && cal.indexOf(id) < 0 && cal.length < MAX_ROUNDS) cal.push(id); });
       st.calendar = cal;
     }
-    if (s.track && F1.TRACK_DEFS[s.track]) st.track = s.track;
+    if (s.track && (F1.TRACK_DEFS[s.track] || s.track === 'random')) st.track = s.track;
     ['p1', 'p2', 'p3'].forEach(function (k) { if (s[k] !== undefined) st[k] = intIn(s[k], 0, 3, st[k]); });
     if (s.qualiLaps !== undefined) st.qualiLaps = intIn(s.qualiLaps, 0, 5, st.qualiLaps);
     if (s.reverseGrid !== undefined) st.reverseGrid = s.reverseGrid === true;
@@ -814,6 +820,12 @@ io.on('connection', function (socket) {
     }
     // the weekend: practice sessions the host picked, qualifying (if any), then the race
     const st = room.settings;
+    room.surprise = st.track === 'random';
+    if (room.surprise) {
+      // "Surprise me": a random track (not the same one twice in a row), the same one all weekend
+      const ids = Object.keys(F1.TRACK_DEFS).filter(function (id) { return id !== room.lastSurprise; });
+      room.weekendTrack = room.lastSurprise = ids[Math.floor(Math.random() * ids.length)];
+    } else room.weekendTrack = F1.TRACK_DEFS[st.track] ? st.track : 'monza';
     room.stages = ['p1', 'p2', 'p3'].filter(function (k) { return st[k] > 0; });
     if (st.qualiLaps > 0) room.stages.push('quali');
     room.stages.push('race');
