@@ -20,7 +20,7 @@
     GameAudio.click(kind);
   }, true);
   document.addEventListener('change', function (e) { if (e.target.matches && e.target.matches('select, input[type=checkbox]')) GameAudio.click('tap'); }, true);
-  const R = new Renderer($('game'));
+  const R = new Renderer($('game'), { cpu: /[?&]cpu=1(&|$)/.test(location.search) });
 
   let game = null;
   let mode = 'menu';          // 'menu' | 'practice' | 'tt' | 'gp' | 'online'
@@ -118,7 +118,11 @@
     $('soundbtn').classList.toggle('ingame', !!inGame);
     $('fsbtn').classList.toggle('hidden', !fsSupported || (!inGame && !home));
     $('fsbtn').classList.toggle('ingame', !!inGame);
-    window.TouchUI.show(!!inGame, !!inGame || (mode === 'online' && !!room));     // the on-screen controls (phones and tablets) are up while you drive
+    // the on-screen controls (phones and tablets) are up while you drive; with the pause menu open in an offline session
+    // (everything frozen) they keep any finger that is still resting on them, so a thumb kept on the gas carries on at
+    // "go". Online the session keeps running behind the menu, so there they let go as before.
+    const paused = mode !== 'menu' && game && game.kind === 'local' && !$('pause').classList.contains('hidden');
+    window.TouchUI.show(!!inGame, !!inGame || (mode === 'online' && !!room), paused);
   }
   /* Full screen (button or F): the game fills the whole screen, without the browser's bars. */
   const fsSupported = !!(document.documentElement.requestFullscreen || document.documentElement.webkitRequestFullscreen);
@@ -209,11 +213,70 @@
   }
   function teamColor(t) { return F1.teamUiColor(t); }
 
-  function startAttract() {
+  function startAttract(forceMid) {
+    // the race behind the menus: on the track you have just raced (it is ready, so no wait), otherwise a random one
     const ids = Object.keys(F1.TRACK_DEFS);
-    game = new window.LocalGame({ attract: true, type: 'practice', track: ids[Math.floor(Math.random() * ids.length)], aiCount: 12, aiLevel: 'hard', collisions: true });
+    const was = game && game.T && F1.TRACK_DEFS[game.T.id] ? game.T.id : null;
+    const id = was || ids[Math.floor(Math.random() * ids.length)];
+    game = new window.LocalGame({ attract: true, type: 'practice', track: id, aiCount: 12, aiLevel: 'hard', collisions: true });
+    keepTracks(id);
+    // about half the time the race is already under way (somewhere mid-race, cars fighting for places); otherwise it
+    // starts from the grid. Either way the camera follows a car in the thick of it.
+    const mid = typeof forceMid === 'boolean' ? forceMid : Math.random() < 0.5;
+    if (mid) { game.placeMidRace(); for (let i = 0; i < 150; i++) game.step(true); game.fx.length = 0; }    // (2.5 s to settle)
+    game.pickAttractCar(!mid);
     R.resetEffects();
   }
+  /* Only the tracks in use stay built in memory: the one on screen and the one before it (your statistics and best
+     laps are saved separately). Going back to another track builds it again. */
+  let tracksInUse = [];
+  function keepTracks(id) {
+    tracksInUse = [id].concat(tracksInUse.filter(function (t) { return t !== id; })).slice(0, 2);
+    F1.forgetTracks(tracksInUse);
+    R.keepTracks(tracksInUse);
+  }
+
+  // ---- getting a track ready
+  /* Pressing Start: the first time a track is used, its shapes have to be built, which takes a moment (longer on a
+     phone). A card with the track shows meanwhile instead of a frozen screen. A track that is ready already (a
+     restart, the next session of a weekend) starts at once. go() starts the session. */
+  const LC = { on: false, ready: false, tok: 0, at: 0, frames: 0, t: null };
+  function withTrack(id, go) {
+    const tok = ++LC.tok;
+    if (!F1.TRACK_DEFS[id] || (F1.trackBuilt(id) && R.hasTrack(id))) { if (LC.on) hideLoadCard(true); go(); return; }
+    const T0 = F1.trackOutline(id);
+    $('lc-name').textContent = T0.name;
+    $('lc-sub').textContent = T0.country + ' · ' + (T0.length / 1000).toFixed(3) + ' km';
+    $('lc-fill').style.width = '12%';
+    clearTimeout(LC.t);
+    $('loadcard').classList.remove('hidden', 'gone');
+    LC.on = true; LC.ready = false; LC.at = performance.now(); LC.frames = 0;
+    Renderer.trackPreview($('lc-map'), T0);
+    // one piece of work at a time, each after the card has been put on the screen
+    const later = function (fn) { requestAnimationFrame(function () { setTimeout(function () { if (tok === LC.tok) fn(); }, 0); }); };
+    later(function () {
+      const T = F1.getTrack(id);              // the track itself: its shape, racing line and run-off
+      $('lc-fill').style.width = '55%';
+      later(function () {
+        R.prep(T);                            // what is drawn: grass, gravel, kerbs, trees and buildings, the pit lane
+        graphicsChip();                       // (and, the first time, whether the browser draws with the graphics chip)
+        $('lc-fill').style.width = '100%';
+        later(function () { LC.ready = true; go(); });
+      });
+    });
+  }
+  /* The card goes once the session's first picture is on the screen (and has been up long enough to read). */
+  function loadCardFrame(now) {
+    if (!LC.on || !LC.ready || LC.t) return;
+    if (++LC.frames >= 2 && now - LC.at >= 350) hideLoadCard(false);
+  }
+  function hideLoadCard(now) {
+    clearTimeout(LC.t); LC.t = null;
+    if (now) { LC.on = false; $('loadcard').classList.add('hidden'); return; }
+    $('loadcard').classList.add('gone');
+    LC.t = setTimeout(function () { LC.t = null; LC.on = false; $('loadcard').classList.add('hidden'); }, 200);
+  }
+  function cancelLoading() { LC.tok++; onlineLoading = null; if (LC.on) hideLoadCard(true); }
   /* The Rejoin season button (home screen) and the season box (online screen), when you host a season. */
   function updateSeasonButtons() {
     const sv = OnlineSeason.load(), fr = sv ? null : FriendSeason.load();
@@ -235,6 +298,7 @@
     }
   }
   function goHome() {
+    cancelLoading();
     lobbyNoticeShown = false;
     $('fsnotice').classList.add('hidden');
     $('busy').classList.add('hidden');
@@ -252,6 +316,7 @@
     $('settings').classList.add('hidden');
     startAttract();
     show('home');
+    smoothTip();
   }
 
   // ------------------------------------------------------------- shared widgets
@@ -355,12 +420,15 @@
     Settings.save();
     const surprise = practiceOpts.track === 'random';
     if (!again || !practiceTrack) practiceTrack = surprise ? surpriseTrack() : practiceOpts.track;
-    mode = 'practice';
-    game = new window.LocalGame(Object.assign({ type: 'practice' }, practiceOpts, { track: practiceTrack }));
-    R.resetEffects();
-    GameAudio.newSession();
-    show(null);
-    if (surprise && !again) revealTrack(practiceTrack, 'Today you practise at');
+    withTrack(practiceTrack, function () {
+      mode = 'practice';
+      game = new window.LocalGame(Object.assign({ type: 'practice' }, practiceOpts, { track: practiceTrack }));
+      keepTracks(practiceTrack);
+      R.resetEffects();
+      GameAudio.newSession();
+      show(null);
+      if (surprise && !again) revealTrack(practiceTrack, 'Today you practise at');
+    });
   }
   $('practice-start').addEventListener('click', function () { fsGate(startPractice); });
 
@@ -416,12 +484,15 @@
     Settings.save();
     const surprise = ttOpts.track === 'random';
     if (!again || !ttTrack) ttTrack = surprise ? surpriseTrack() : ttOpts.track;
-    mode = 'tt';
-    game = new window.LocalGame({ type: 'practice', tt: true, track: ttTrack, driverId: ttOpts.driverId, aiCount: 0, title: 'TIME TRIAL' });
-    R.resetEffects();
-    GameAudio.newSession();
-    show(null);
-    if (surprise && !again) revealTrack(ttTrack, 'Your time trial is at');
+    withTrack(ttTrack, function () {
+      mode = 'tt';
+      game = new window.LocalGame({ type: 'practice', tt: true, track: ttTrack, driverId: ttOpts.driverId, aiCount: 0, title: 'TIME TRIAL' });
+      keepTracks(ttTrack);
+      R.resetEffects();
+      GameAudio.newSession();
+      show(null);
+      if (surprise && !again) revealTrack(ttTrack, 'Your time trial is at');
+    });
   }
   $('tt-start').addEventListener('click', function () { fsGate(startTT); });
 
@@ -483,7 +554,8 @@
     gp.stages.push('race');
     startGpStage(0);
   }
-  function startGpStage(i) {
+  function startGpStage(i) { withTrack(gp.opts.track, function () { gpStage(i); }); }
+  function gpStage(i) {
     const o = gp.opts, stage = gp.stages[i];
     const type = stage === 'quali' ? 'quali' : stage === 'race' ? 'race' : 'practice';
     gp.idx = i;
@@ -513,6 +585,7 @@
         showResults({ type: type, stage: stage, track: o.track, results: results, round: round, stats: g && g.S.stats, grid: rev ? gp.grid : null }, gp.champ ? 'champ' : 'gp');
       }
     });
+    keepTracks(o.track);
     R.resetEffects();
     GameAudio.newSession();
     show(null);
@@ -927,7 +1000,7 @@
     const gfxWords = function () {
       $('set-graphics-note').textContent = d.graphics === 'sharp' ? 'High: always the full picture, even if the game can\'t keep up.'
         : d.graphics === 'light' ? 'Low: smoother on a slow phone or computer (fewer effects, a slightly softer picture).'
-          : 'Auto: full graphics (on a phone it switches to Low by itself if the game can\'t keep up).';
+          : 'Auto: full graphics. On a phone it switches to Low by itself if the game can\'t keep up; on a computer drawing without its graphics chip, the picture gets a little softer instead.';
     };
     segInit($('set-graphics'), d.graphics, function (v) { d.graphics = v; Settings.save(); gfxWords(); applyGraphics(); });
     gfxWords();
@@ -953,7 +1026,7 @@
     $('set-ghost').onchange = function () { d.ghost = this.checked; Settings.save(); };
     ['master', 'engine', 'effects'].forEach(function (k) {
       const inp = $('set-vol-' + k), out = $('set-vol-' + k + '-val');
-      inp.value = Math.round(GameAudio.vol[k] * 100); out.textContent = inp.value;
+      inp.value = Math.round(GameAudio.vol[k] * 100); out.textContent = Math.round(GameAudio.vol[k] * 100);   // (the engines' 68 sits between two steps of the slider)
       inp.oninput = function () { out.textContent = this.value; GameAudio.setVolume(k, Number(this.value) / 100); };
     });
     $('set-mute').checked = !!GameAudio.vol.muted;
@@ -1094,6 +1167,23 @@
     mode: function () { syncSoundUI(); syncFsUI(); }
   });
   $('pause-resume').addEventListener('click', function () { resume(); });
+  /* Phones: a tap on a pause-menu button with another finger still on the screen (a thumb resting on the gas) makes no
+     'click' in the browser: press the button ourselves when the tap starts and ends on it. */
+  (function () {
+    const started = {};
+    $('pause').addEventListener('touchstart', function (e) {
+      for (let i = 0; i < e.changedTouches.length; i++) { const t = e.changedTouches[i]; started[t.identifier] = t.target && t.target.closest ? t.target.closest('button') : null; }
+    }, { passive: true });
+    $('pause').addEventListener('touchend', function (e) {
+      for (let i = 0; i < e.changedTouches.length; i++) {
+        const t = e.changedTouches[i], b = started[t.identifier];
+        delete started[t.identifier];
+        if (!b || e.touches.length === 0) continue;                 // one finger only: the browser's own click does it
+        const at = document.elementFromPoint(t.clientX, t.clientY);
+        if (at && at.closest && at.closest('button') === b && !b.disabled) { if (e.cancelable) e.preventDefault(); b.click(); }
+      }
+    }, { passive: false });
+  })();
   $('pause-restart').addEventListener('click', function () {
     resume(true);
     if (mode === 'gp' && gp) startGpStage(gp.idx); else if (mode === 'tt') startTT(true); else startPractice(true);
@@ -1205,10 +1295,10 @@
     net = { socket: socket, ping: null, jitWorst: 0, id: function () { return socket.id; }, emit: function () { socket.emit.apply(socket, arguments); } };
     socket.on('room', onRoom);
     socket.on('session', onSession);
-    socket.on('snap', function (m) { if (game && game.kind === 'online') game.onSnap(m); });
-    socket.on('timing', function (m) { if (game && game.kind === 'online') game.onTiming(m); });
-    socket.on('ev', function (m) { if (game && game.kind === 'online') game.onEvents(m); });
-    socket.on('sessionEnd', onSessionEnd);
+    socket.on('snap', function (m) { toOnline('onSnap', m); });
+    socket.on('timing', function (m) { toOnline('onTiming', m); });
+    socket.on('ev', function (m) { toOnline('onEvents', m); });
+    socket.on('sessionEnd', function (m) { if (onlineLoading) onlineLoading.buf.push(['end', m]); else onSessionEnd(m); });
     socket.on('season', onSeason);
     socket.on('msg', onQuickMsg);
     socket.on('seasonEnded', function (m) {
@@ -1591,13 +1681,34 @@
     updateResultsButtons();
   }
 
+  /* An online session whose track is still getting ready (the card is up): what the server sends meanwhile is kept
+     and passed on, in order, once the session is on. */
+  let onlineLoading = null;
+  function toOnline(fn, m) {
+    if (onlineLoading) { onlineLoading.buf.push([fn, m]); return; }
+    if (game && game.kind === 'online') game[fn](m);
+  }
   function onSession(info) {
+    const wait = onlineLoading = { buf: [] };
+    withTrack(info.track, function () {
+      if (onlineLoading !== wait) return;
+      onlineLoading = null;
+      startOnline(info);
+      for (let i = 0; i < wait.buf.length; i++) {
+        const x = wait.buf[i];
+        if (x[0] === 'end') onSessionEnd(x[1]);
+        else if (game && game.kind === 'online') game[x[0]](x[1]);
+      }
+    });
+  }
+  function startOnline(info) {
     mode = 'online';
     clearInterval(resultsTimer);
     $('pause').classList.add('hidden');
     $('settings').classList.add('hidden');
     $('msgmenu').classList.add('hidden');
     game = new window.OnlineGame(net, info);
+    keepTracks(info.track);
     // joining a paused season (or the host coming back): wait with everyone else
     if (room && (room.hostAway || room.resumeIn)) game.setPause(!!room.hostAway, Math.max(0, (room.resumeIn || 0) - (performance.now() - roomAt)));
     R.resetEffects();
@@ -1795,37 +1906,136 @@
   }
 
   // ------------------------------------------------------------- main loop
-  goHome();
   const params = new URLSearchParams(location.search);
-  if (params.get('room')) openOnline(params.get('room').toUpperCase().slice(0, 4));
 
-  if (params.get('debug') === '1') window.__tdgp = { onSessionEnd: onSessionEnd, net: function () { return net; }, game: function () { return game; }, R: R };
+  if (params.get('debug') === '1') window.__tdgp = { onSessionEnd: onSessionEnd, net: function () { return net; }, game: function () { return game; }, R: R, attract: function (mid) { startAttract(mid); }, sess: function () { return { sess: sess, beat: pace.beat, chip: gfxChip }; } };
 
   let last = performance.now(), acc = 0;
-  /* Smoothness watch: while you drive, if many frames take too long (under about 45 frames a second), the game
-     switches to lighter graphics by itself for the rest of the visit. */
-  const perf = { t: 0, slow: 0, since: 0, autoLite: false };
+
+  /* Steady pace. The screen shows a new picture at a fixed beat (60, 90, 120, 144 a second...). The times the browser
+     gives for the pictures wobble a little around that beat, and moving the cars on by the wobbly times makes them
+     shake. So the game learns the beat and moves everything on by whole beats; the small differences are kept aside
+     and given back a little at a time, so the game's clock never drifts away from the real one. */
+  const pace = { beat: 0, ring: new Float64Array(48), sorted: new Float64Array(48), n: 0, drift: 0 };
+  function learnBeat() {
+    const m = Math.min(pace.n, 48), a = pace.sorted.subarray(0, m);
+    a.set(pace.ring.subarray(0, m)); a.sort();
+    const mid = a[m >> 1];
+    let sum = 0, near = 0;
+    for (let i = 0; i < m; i++) if (Math.abs(a[i] - mid) < mid * 0.12) { sum += a[i]; near++; }
+    pace.beat = near >= m * 0.6 ? sum / near : 0;          // (no steady beat: the times are used as they are)
+  }
+  function steadyDt(raw) {
+    if (raw > 0.003 && raw < 0.06) { pace.ring[pace.n % 48] = raw; pace.n++; if (pace.n >= 24 && pace.n % 24 === 0) learnBeat(); }
+    const b = pace.beat;
+    if (!b) return raw;
+    const k = Math.round(raw / b);
+    if (k < 1 || k > 4 || Math.abs(raw - k * b) > b * 0.3) { pace.drift = 0; return raw; }     // off the beat: as it is
+    pace.drift += raw - k * b;
+    const back = F1.clamp(pace.drift * 0.05, -b * 0.02, b * 0.02);
+    pace.drift -= back;
+    return k * b + back;
+  }
+
+  /* Does the browser draw with the graphics chip? true, false (a software stand-in draws instead), or null when it
+     can't tell. Found out once (at a quiet moment: while a track gets ready, or a few seconds after the page opens). */
+  let gfxChip;
+  function graphicsChip() {
+    if (gfxChip !== undefined) return gfxChip;
+    gfxChip = null;
+    try {
+      const probe = function (o) { const c = document.createElement('canvas'); return c.getContext('webgl', o) || c.getContext('experimental-webgl', o); };
+      const done = function (gl) { const x = gl && gl.getExtension('WEBGL_lose_context'); if (x) x.loseContext(); };
+      const gl = probe(undefined);
+      if (gl) {
+        const ext = gl.getExtension('WEBGL_debug_renderer_info');
+        const name = String((ext && gl.getParameter(ext.UNMASKED_RENDERER_WEBGL)) || gl.getParameter(gl.RENDERER) || '');
+        if (/swiftshader|llvmpipe|softpipe|lavapipe|basic render|software/i.test(name)) gfxChip = false;
+        else { const hw = probe({ failIfMajorPerformanceCaveat: true }); gfxChip = !!hw; done(hw); }
+        done(gl);
+      }
+    } catch (e) { gfxChip = null; }
+    return gfxChip;
+  }
+  setTimeout(function () { (window.requestIdleCallback || setTimeout)(function () { graphicsChip(); }); }, 4000);
+
+  /* Smoothness watch, while you drive (not in menus or paused), on Auto graphics:
+     - phones and tablets: many late pictures for about 6 seconds → Low graphics for the rest of the visit;
+     - computers: only when the browser draws without the graphics chip and the game can't keep up, a slightly softer
+       picture (sharpness 2 → 1.5) for the rest of the visit. Never Low by itself; High is always the full picture.
+     After a session that wasn't smooth, a tip in the menu, once, when the cause is one you can change. */
+  const perf = { t: 0, slow: 0, since: 0, autoLite: false, autoSoft: false };
+  const sess = { t: 0, late: 0, work: 0, frames: 0, race: false };
   applyGraphics();
-  /* The Graphics setting: Light = lighter graphics always; Sharp = never; Auto = full, lighter by itself when needed. */
+  /* The Graphics setting: Low = lighter graphics always; High = never; Auto = full, lighter by itself when needed. */
   function applyGraphics() {
     const g = Settings.data.graphics;
     if (g === 'light') R.setLite(true);
-    else if (g === 'sharp') R.setLite(false);
-    else if (!perf.autoLite) R.setLite(false);
+    else if (g === 'sharp') { R.setLite(false); R.setSoft(false); }
+    else { if (!perf.autoLite) R.setLite(false); R.setSoft(perf.autoSoft); }
   }
-  function watchFrames(dt, driving) {
-    // (only on phones and tablets: a computer on Auto always keeps the full graphics)
-    if (R.lite || Settings.data.graphics !== 'auto' || !document.body.classList.contains('touch') || !driving || document.hidden) { perf.t = 0; perf.slow = 0; perf.since = 0; return; }
-    perf.since += dt;
+  function watchFrames(raw, driving, work) {
+    if (!driving || document.hidden) { perf.t = 0; perf.slow = 0; perf.since = 0; return; }
+    perf.since += raw;
     if (perf.since < 3) return;                      // the first moments of a session (loading) do not count
-    perf.t += dt;
-    if (dt > 0.022) perf.slow += dt;
+    // (for the tip after the session)
+    sess.t += raw; sess.frames++; sess.work += work;
+    if (raw > Math.max(0.022, (pace.beat || 1 / 60) * 1.5)) sess.late += raw;
+    if (game && game.type === 'race') sess.race = true;
+    const touch = document.body.classList.contains('touch');
+    if (Settings.data.graphics !== 'auto' || (touch ? R.lite : perf.autoSoft || graphicsChip() !== false)) { perf.t = 0; perf.slow = 0; return; }
+    perf.t += raw;
+    if (raw > 0.022) perf.slow += raw;
     if (perf.t < 6) return;                            // (about 6 seconds of steady trouble, not a brief stutter)
     if (perf.slow / perf.t > 0.45) {
-      R.setLite(true); perf.autoLite = true;
-      toast('Graphics switched to Low to keep the game smooth (Settings → Graphics)', 6000);
+      if (touch) {
+        R.setLite(true); perf.autoLite = true;
+        toast('Graphics switched to Low to keep the game smooth (Settings → Graphics)', 6000);
+      } else { perf.autoSoft = true; R.setSoft(true); }
     }
     perf.t = 0; perf.slow = 0;
+  }
+  /* Back in the menu after a session that wasn't smooth: a tip, once, if the cause is one you can change (the browser
+     not using the graphics chip, or battery saver holding the game to 30 pictures a second). */
+  function smoothTip() {
+    const t = sess.t, lateShare = t > 0 ? sess.late / t : 0, work = sess.frames ? sess.work / sess.frames : 0, race = sess.race;
+    sess.t = 0; sess.late = 0; sess.work = 0; sess.frames = 0; sess.race = false;
+    if (t < 20) return;
+    const b = pace.beat, capped = b > 0.031 && b < 0.036 && work < 0.006;     // a steady 30 a second, with time to spare
+    if (lateShare < 0.15 && !capped) return;
+    let seen = {};
+    try { seen = JSON.parse(window.localStorage.getItem('topdowngp.tips') || '{}') || {}; } catch (e) { seen = {}; }
+    const what = race ? 'Last race' : 'Last session';
+    let kind = null, text = '';
+    if (graphicsChip() === false) { kind = 'gpu'; text = what + ' wasn’t smooth: your browser isn’t using the graphics chip. Turn on graphics acceleration in its settings.'; }
+    else if (capped) { kind = 'saver'; text = what + ' wasn’t smooth: battery saver is holding the game to 30 frames a second. Plug in or switch it off for smoother racing.'; }
+    if (!kind || seen[kind]) return;
+    const say = function () {
+      seen[kind] = Date.now();
+      try { window.localStorage.setItem('topdowngp.tips', JSON.stringify(seen)); } catch (e) { /* ignore */ }
+      toast(text, 9000);
+    };
+    // (battery saver: not when the battery says it is charging)
+    if (kind === 'saver' && navigator.getBattery) navigator.getBattery().then(function (bt) { if (!bt.charging && mode === 'menu') say(); }, function () { /* unknown */ });
+    else say();
+  }
+
+  /* The frame counter (add ?fps to the address): pictures a second, the time the game takes for each, the screen's
+     beat, whether the graphics chip draws, and the freeze recorder (pictures more than a fifth of a second late while
+     you drive: how many, the longest, and whether the game's own work or the browser held it up). */
+  const FPS = /[?&]fps(=|&|$)/.test(location.search) ? { n: 0, work: 0, at: 0, fps: 0, ms: 0, freezes: 0, longest: 0, cause: '', lastWork: 0 } : null;
+  function countFrame(now, raw, work, driving) {
+    const f = FPS;
+    f.n++; f.work += work;
+    if (!f.at) f.at = now;
+    if (now - f.at >= 1000) { f.fps = Math.round(f.n * 1000 / (now - f.at)); f.ms = f.work / f.n * 1000; f.n = 0; f.work = 0; f.at = now; }
+    if (driving && raw > 0.2) {
+      f.freezes++; f.longest = Math.max(f.longest, raw);
+      f.cause = f.lastWork > raw * 0.5 ? 'the game' : 'the browser';
+    }
+    f.lastWork = work;
+    const hz = pace.beat ? Math.round(1 / pace.beat) : 0, chip = R.cpu ? 'graphics chip off (test)' : gfxChip === true ? 'graphics chip on' : gfxChip === false ? 'no graphics chip' : 'graphics chip ?';
+    R.fpsBox = { fps: f.fps, ms: f.ms, hz: hz, chip: chip, freezes: f.freezes, longest: f.longest, cause: f.cause };
   }
   /* Parked in your garage: a panel with your session so far and the way back out. */
   let garShown = null;
@@ -1901,18 +2111,27 @@
     if (e.code === 'Enter' && garShown !== null && !e.repeat && game) { game.goOut = true; e.preventDefault(); }
   });
   let menuOdd = false;
+  // (the page was hidden, or the computer asleep, since the last picture: that gap is not the game being slow)
+  let wasAway = false;
+  document.addEventListener('visibilitychange', function () { if (document.hidden) wasAway = true; });
   function frame(now) {
-    let dt = (now - last) / 1000;
+    const t0 = performance.now(), raw = (now - last) / 1000;
     last = now;
-    if (dt > 0.25) dt = 0.25;
-    acc += dt;
-    let steps = 0;
-    while (acc >= F1.DT && steps < 6) { game.step(); acc -= F1.DT; steps++; }
-    if (steps >= 6) acc = 0;
+    let dt = raw > 0.25 ? 0.25 : steadyDt(raw);
+    // paused (and the 3-2-1 after it): time stands still, and so does the in-between position the cars are drawn at,
+    // so at "go" the picture carries on from exactly where it stopped (no jump back). The 3-2-1 is counted before the
+    // game moves on, so the cars already move in the picture of "go" itself (no repeated picture).
+    if (game.tickResume) game.tickResume(dt);
+    if (!game.paused) {
+      acc += dt;
+      let steps = 0;
+      while (acc >= F1.DT && steps < 6) { game.step(); acc -= F1.DT; steps++; }
+      if (steps >= 6) acc = 0;
+    }
     // phones and tablets: the race behind the menus is drawn less, so the menus stay quick to scroll: every other frame
     // behind the home screen, and not at all behind the other menus (they cover it)
-    let draw = true;
-    if (game.kind === 'attract' && Input.touch.active) {
+    let draw = !(LC.on && !LC.ready);     // (a track getting ready behind the card: nothing to draw)
+    if (draw && game.kind === 'attract' && Input.touch.active) {
       const scr = document.querySelector('#overlay .screen.active');
       if (scr && scr.id !== 'home') draw = false;
       else { menuOdd = !menuOdd; draw = menuOdd; }
@@ -1921,11 +2140,17 @@
     // sound: only while a session is on screen (not in menus, pause or results)
     const audioOn = mode !== 'menu' && game.kind !== 'attract' && $('overlay').classList.contains('hidden') && $('pause').classList.contains('hidden') && !(game.resumeT > 0) && !game.frozen;
     GameAudio.setActive(audioOn);
-    watchFrames(dt, audioOn && game.kind !== 'attract');
     updateGarageUI();
     updateTyreUI();
     if (audioOn && game.audioState) { try { const st = game.audioState(); if (st) { GameAudio.update(st, dt); window.Haptics.kerb(st.own); } } catch (err) { console.error(err); } }
+    loadCardFrame(now);
+    const work = (performance.now() - t0) / 1000, driving = audioOn && game.kind !== 'attract' && !wasAway && raw < 5;
+    wasAway = false;
+    watchFrames(raw, driving, work);
+    if (FPS) countFrame(now, raw, work, driving);
     requestAnimationFrame(frame);
   }
+  goHome();
+  if (params.get('room')) openOnline(params.get('room').toUpperCase().slice(0, 4));
   requestAnimationFrame(frame);
 })();

@@ -58,9 +58,11 @@
 
   function lerpAngle(a, b, t) { return a + F1.wrapAngle(b - a) * t; }
 
-  function Renderer(canvas) {
+  function Renderer(canvas, opts) {
     this.cv = canvas;
-    this.ctx = canvas.getContext('2d');
+    // (opts.cpu, for testing: the canvas drawn without the graphics chip, as on a computer without graphics acceleration)
+    this.cpu = !!(opts && opts.cpu);
+    this.ctx = canvas.getContext('2d', this.cpu ? { willReadFrequently: true } : undefined);
     this.tracks = {};
     this.cam = { x: 0, y: 0, a: -Math.PI / 2, z: 8, ready: false, lx: 0, ly: 0 };
     this.skids = [];
@@ -83,8 +85,9 @@
   Renderer.prototype.resize = function () {
     // lighter graphics: fewer canvas pixels. On a computer one per screen pixel; on a phone (whose screen packs in two or
     // three times as many) one and a half, so the picture stays sharp, not blurry
+    // (soft: a computer on Auto graphics drawing without its graphics chip that can't keep up: 1.5 instead of 2)
     const phone = !!(window.matchMedia && window.matchMedia('(pointer: coarse)').matches);
-    this.dpr = Math.min(this.lite ? (phone ? 1.5 : 1) : 2, window.devicePixelRatio || 1);
+    this.dpr = Math.min(this.lite ? (phone ? 1.5 : 1) : this.soft ? 1.5 : 2, window.devicePixelRatio || 1);
     this.w = window.innerWidth;
     this.h = window.innerHeight;
     this.cv.width = Math.round(this.w * this.dpr);
@@ -93,10 +96,23 @@
     this.cv.style.height = this.h + 'px';
   };
 
+  /* Only the tracks in use keep their drawn shapes (ids: the ones to keep); one needed again is made again. */
+  Renderer.prototype.keepTracks = function (ids) {
+    for (const id in this.tracks) if (ids.indexOf(id) < 0) delete this.tracks[id];
+  };
+  Renderer.prototype.hasTrack = function (id) { return !!this.tracks[id]; };
+
   /* Lighter graphics: fewer pixels to draw and no full-screen night effects. */
   Renderer.prototype.setLite = function (on) {
     if (!!this.lite === !!on) return;
     this.lite = !!on;
+    this.resize();
+  };
+  /* A slightly softer picture (sharpness 1.5 at most, not 2): Auto graphics on a computer that draws without its
+     graphics chip and can't keep up. */
+  Renderer.prototype.setSoft = function (on) {
+    if (!!this.soft === !!on) return;
+    this.soft = !!on;
     this.resize();
   };
 
@@ -805,10 +821,17 @@
     ctx.fillStyle = T.street ? COL.runoffSt : COL.grassA;
     ctx.fill(grass);
     if (!T.street && !this.lite && !night) {
-      // mown stripes, 12 m wide, fixed to the ground (not at night: in the dark the two greens look the same)
-      const st = new Path2D(), x0 = Math.floor((vc[0] - vr) / 24) * 24;
-      for (let x = x0; x < vc[0] + vr; x += 24) st.rect(x, vc[1] - vr, 12, 2 * vr);
-      ctx.save(); ctx.clip(st);
+      // mown stripes, 12 m wide, fixed to the ground (not at night: in the dark the two greens look the same). The shape
+      // of the stripes covers whole 200 m squares around the view, so it is made again only when the view moves into
+      // another square (every few seconds), not for every picture.
+      const bx0 = Math.floor((vc[0] - vr) / 200) * 200, bx1 = Math.ceil((vc[0] + vr) / 200) * 200;
+      const by0 = Math.floor((vc[1] - vr) / 200) * 200, by1 = Math.ceil((vc[1] + vr) / 200) * 200;
+      const stKey = bx0 + ',' + bx1 + ',' + by0 + ',' + by1;
+      if (G.stripeKey !== stKey) {
+        G.stripeKey = stKey; G.stripes = new Path2D();
+        for (let x = Math.floor(bx0 / 24) * 24; x < bx1; x += 24) G.stripes.rect(x, by0, 12, by1 - by0);
+      }
+      ctx.save(); ctx.clip(G.stripes);
       ctx.fillStyle = COL.grassB; ctx.fill(grass);
       ctx.restore();
     }
@@ -956,7 +979,7 @@
     }
   };
 
-  /* Spray: the fine mist a car throws up hangs in the air where the car has been and fades within a second. It is
+  /* Spray: the fine mist a car throws up hangs in the air where the car has been and fades within half a second. It is
      drawn as a smooth veil along the car's path: soft, see-through shapes laid closely one after another (so no
      separate puffs show), two narrow ones off the rear wheels that merge right behind the car, widening and fading
      further back, with faint streaks the way the car is going. Thickest a few metres behind the car; longer and
@@ -983,11 +1006,19 @@
       return cv;
     };
     this.veil = { soft: mk(false), streak: mk(true) };
+    // the soft veil with its streaks on top, as one picture (one picture to draw for each piece of spray, not two)
+    const cw = Math.round(96 * 1.4), cb = document.createElement('canvas');
+    cb.width = cw; cb.height = 64;
+    const gb = cb.getContext('2d');
+    gb.drawImage(this.veil.soft, (cw - 96) / 2, 0, 96, 64);
+    gb.globalAlpha = 0.6; gb.drawImage(this.veil.streak, 0, 64 * 0.08, cw, 64 * 0.84);
+    this.veil.combo = cb;
     return this.veil;
   };
   Renderer.prototype.drawSpray = function (ctx, cars, wet, vc, vr, night) {
-    const now = performance.now() / 1000, LIFE = 0.85, TR = this.trails || (this.trails = {}), seen = {};
+    const now = performance.now() / 1000, LIFE = 0.4, TR = this.trails || (this.trails = {}), seen = {};
     const lite = this.lite, V = this.veilSprites(), step = lite ? 2.6 : 1.3;
+    const M = ctx.getTransform();                 // (each piece is placed from this directly: no saving and restoring)
     const tint = night ? 0.72 : 1;
     for (let i = 0; i < cars.length; i++) {
       const c = cars[i];
@@ -1021,12 +1052,12 @@
         while (q < pts.length - 1 && at + segL < dist) { at += segL; q++; segL = Math.hypot(pts[q][0] - pts[q - 1][0], pts[q][1] - pts[q - 1][1]); }
         const f = segL > 0 ? (dist - at) / segL : 0;
         const x = pts[q - 1][0] + (pts[q][0] - pts[q - 1][0]) * f, y = pts[q - 1][1] + (pts[q][1] - pts[q - 1][1]) * f;
-        const dir = Math.atan2(pts[q - 1][1] - pts[q][1], pts[q - 1][0] - pts[q][0]);
+        const dir = Math.atan2(pts[q - 1][1] - pts[q][1], pts[q - 1][0] - pts[q][0]), cs = Math.cos(dir), sn = Math.sin(dir);
         const u = dist / len;                                   // 0 right behind the car .. 1 the far end
         // thick just behind the car, then thinning out; wider further back
         const a = strength * Math.min(1, u * 6 + 0.25) * Math.pow(1 - u, 1.25) * (lite ? 0.48 : 0.32);
         const wid = 1.3 + 4.8 * Math.pow(u, 0.7) * (0.7 + 0.5 * k), lng = step * 2.6 + 1.5 * u;
-        ctx.save(); ctx.translate(x, y); ctx.rotate(dir);
+        ctx.setTransform(M.a * cs + M.c * sn, M.b * cs + M.d * sn, M.c * cs - M.a * sn, M.d * cs - M.b * sn, M.a * x + M.c * y + M.e, M.b * x + M.d * y + M.f);
         if (dist < 5 && !lite) {
           // first metres: two narrow trails straight off the rear wheels, coming together
           const sep = 0.8 * (1 - dist / 5);
@@ -1035,11 +1066,11 @@
           ctx.drawImage(V.soft, -lng / 2, sep - 0.5, lng, 1.0);
         }
         ctx.globalAlpha = a;
-        ctx.drawImage(V.soft, -lng / 2, -wid / 2, lng, wid);
-        if (!lite) { ctx.globalAlpha = a * 0.6; ctx.drawImage(V.streak, -lng * 0.7, -wid * 0.42, lng * 1.4, wid * 0.84); }
-        ctx.restore();
+        if (lite) ctx.drawImage(V.soft, -lng / 2, -wid / 2, lng, wid);
+        else ctx.drawImage(V.combo, -lng * 0.7, -wid / 2, lng * 1.4, wid);
       }
     }
+    ctx.setTransform(M);
     ctx.globalAlpha = 1;
     for (const id in TR) if (!seen[id]) delete TR[id];
   };
@@ -1297,7 +1328,7 @@
     for (let i = 0; i < pit.garages.length; i++) {
       const g = pit.garages[i];
       ctx.font = '900 40px ' + FONT;
-      const w40 = ctx.measureText(g.name.t).width / 40;
+      const w40 = textW(ctx, g.name.t) / 40;
       g.name.size = Math.min(2.4, g.name.room / Math.max(0.1, w40));
       worldText(ctx, g.name);
     }
@@ -1380,10 +1411,13 @@
     ctx.save();
     ctx.translate(c.x, c.y);
     ctx.rotate(c.a);
-    const tc = c.tyreC && F1.TYRES[c.tyreC] ? F1.TYRES[c.tyreC].col : null;
-    for (const sy of [-0.77, 0.77]) {
-      ctx.save(); ctx.translate(1.55, sy); ctx.rotate(delta * 1.6);
-      tyreShape(ctx, -0.35, -0.17, 0.7, 0.34, tc);
+    // the car pictures are drawn much smaller than they are made: shrunk the careful way, the fine lines on the tyres
+    // stay steady as the car moves instead of flickering in and out
+    ctx.imageSmoothingQuality = 'high';
+    const tc = c.tyreC && F1.TYRES[c.tyreC] ? F1.TYRES[c.tyreC].col : null, ty = tyreSprite(tc);
+    for (let w = 0; w < 2; w++) {
+      ctx.save(); ctx.translate(1.55, w ? 0.77 : -0.77); ctx.rotate(delta * 1.6);
+      ctx.drawImage(ty, -0.4, -0.225, 0.8, 0.45);
       ctx.restore();
     }
     const spr = carSprite(team, tc, drsOpen);
@@ -1410,6 +1444,19 @@
     g.scale(SPR_K, SPR_K); g.translate(CAR_X0, CAR_HW);
     drawCarLocal(g, team, 0, drsOpen, null, tc, true);
     sprites[key] = cv;
+    return cv;
+  }
+  // a front tyre as a picture (40 px a metre, like the car), drawn turned with the steering
+  const tyreSprites = {};
+  function tyreSprite(tc) {
+    const key = tc || '-';
+    let cv = tyreSprites[key];
+    if (cv) return cv;
+    cv = document.createElement('canvas'); cv.width = 32; cv.height = 18;
+    const g = cv.getContext('2d');
+    g.scale(SPR_K, SPR_K); g.translate(0.4, 0.225);
+    tyreShape(g, -0.35, -0.17, 0.7, 0.34, tc);
+    tyreSprites[key] = cv;
     return cv;
   }
   // the shadow: the car's outline, blurred (the same for every car)
@@ -1538,18 +1585,18 @@
     ctx.globalAlpha = m.alpha === undefined ? 1 : m.alpha;
     ctx.textBaseline = 'middle'; ctx.textAlign = 'left';
     ctx.font = '800 ' + fTag + 'px ' + FONT;
-    const tagW = ctx.measureText(tagTxt).width + (phone ? 10 : 12);
+    const tagW = textW(ctx, tagTxt) + (phone ? 10 : 12);
     let tFont = fT;
     ctx.font = '800 ' + tFont + 'px ' + FONT;
-    let titleW = ctx.measureText(m.text).width;
+    let titleW = textW(ctx, m.text);
     const head = padX + tagW + gap + (meterW ? meterW + gap : 0);
-    while (tFont > 10 && head + titleW + padX > maxW) { tFont--; ctx.font = '800 ' + tFont + 'px ' + FONT; titleW = ctx.measureText(m.text).width; }
+    while (tFont > 10 && head + titleW + padX > maxW) { tFont--; ctx.font = '800 ' + tFont + 'px ' + FONT; titleW = textW(ctx, m.text); }
     ctx.font = '600 ' + fS + 'px ' + FONT;
-    const sub = m.sub || '', subW = sub ? ctx.measureText(sub).width : 0;
+    const sub = m.sub || '', subW = sub ? textW(ctx, sub) : 0;
     const one = !sub || head + titleW + 14 + subW + padX <= maxW;
     let subs = [];
     if (sub && !one) subs = wrapText(ctx, sub, maxW - head - padX);
-    let w = one ? head + titleW + (sub ? 14 + subW : 0) + padX : head + Math.max(titleW, Math.max.apply(null, subs.map(function (t) { return ctx.measureText(t).width; }))) + padX;
+    let w = one ? head + titleW + (sub ? 14 + subW : 0) + padX : head + Math.max(titleW, Math.max.apply(null, subs.map(function (t) { return textW(ctx, t); }))) + padX;
     w = Math.min(w, maxW);
     const lh = phone ? 24 : 30, sh = phone ? 15 : 18;
     const h = one ? lh : lh + subs.length * sh - (phone ? 4 : 6);
@@ -1600,7 +1647,7 @@
     ctx.font = '700 ' + (small ? 9 : 11) + 'px "Titillium Web", system-ui, sans-serif';
     ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
     const txt = c.label || c.code;
-    const w = ctx.measureText(txt).width + (small ? 10 : 14), h = small ? 13 : 16;
+    const w = textW(ctx, txt) + (small ? 10 : 14), h = small ? 13 : 16;
     ctx.globalAlpha = c.ghost ? 0.6 : 0.92;
     ctx.fillStyle = 'rgba(12,12,16,0.82)';
     roundRect(ctx, x - w / 2, y - h / 2, w, h, 3); ctx.fill();
@@ -1686,6 +1733,23 @@
     ctx.closePath();
   }
   const FONT = '"Titillium Web", system-ui, sans-serif';
+  /* The width of a piece of text: the dashboard, timing tower and messages measure the same words in the same fonts
+     for every picture, so each is measured once and remembered (forgotten again when a font finishes loading). */
+  const textWidths = new Map();
+  function textW(ctx, t) {
+    const k = ctx.font + '|' + t;
+    let w = textWidths.get(k);
+    if (w === undefined) {
+      if (textWidths.size > 3000) textWidths.clear();
+      w = ctx.measureText(t).width;
+      textWidths.set(k, w);
+    }
+    return w;
+  }
+  if (document.fonts) {
+    document.fonts.addEventListener('loadingdone', function () { textWidths.clear(); });
+    if (document.fonts.ready) document.fonts.ready.then(function () { textWidths.clear(); });
+  }
 
   /* hud = { title, lapText, tower:[{pos,code,color,info,me,out,done,purple}], lights, lightsOn, speed, gear, drs, cur, last, best,
              posText, msgs:[{text,sub,color}], wrongWay, timeLeft, hint, cars (minimap dots), centre } */
@@ -1719,13 +1783,13 @@
       ctx.fillStyle = '#e10600'; ctx.fillRect(x0, y0 + rh * 1.6 - 2, tw, 2);
       ctx.fillStyle = '#fff'; ctx.font = '800 ' + Math.round(rh * 0.62) + 'px ' + FONT; ctx.textAlign = 'left';
       ctx.fillText(hud.title || '', x0 + 10, y0 + rh * 0.8);
-      const titleW = ctx.measureText(hud.title || '').width;
+      const titleW = textW(ctx, hud.title || '');
       let fs = Math.round(rh * 0.62);
       const right = hud.towerRight || '';
       ctx.font = '800 ' + fs + 'px ' + FONT;
-      while (fs > 8 && ctx.measureText(right).width > tw - 28 - titleW) { fs--; ctx.font = '800 ' + fs + 'px ' + FONT; }
+      while (fs > 8 && textW(ctx, right) > tw - 28 - titleW) { fs--; ctx.font = '800 ' + fs + 'px ' + FONT; }
       ctx.textAlign = 'right'; ctx.fillStyle = '#cfd3d8';
-      if (ctx.measureText(right).width <= tw - 24 - titleW) ctx.fillText(right, x0 + tw - 10, y0 + rh * 0.8);     // (left out when there is no room for it)
+      if (textW(ctx, right) <= tw - 24 - titleW) ctx.fillText(right, x0 + tw - 10, y0 + rh * 0.8);     // (left out when there is no room for it)
       let y = y0 + rh * 1.6 + 3;
       for (let i = 0; i < rows.length; i++) {
         const r = rows[i];
@@ -1765,7 +1829,7 @@
         ctx.font = '600 ' + Math.round(rh * 0.56) + 'px ' + FONT;
         ctx.fillStyle = r.me ? '#111' : r.tag === 'pit' ? '#6ea2ff' : r.tag === 'gar' ? '#8f96a0' : (r.purple ? '#c77dff' : (r.out ? '#777' : '#d7dbe0'));
         if (r.tag) ctx.font = '800 ' + Math.round(rh * 0.5) + 'px ' + FONT;
-        const room = x0 + tw - 8 - r.infoX, iw = ctx.measureText(r.info || '').width;
+        const room = x0 + tw - 8 - r.infoX, iw = textW(ctx, r.info || '');
         if (iw > room && room > 10) { ctx.save(); ctx.translate(x0 + tw - 8, y + rh / 2); ctx.scale(room / iw, 1); ctx.fillText(r.info || '', 0, 0); ctx.restore(); }
         else ctx.fillText(r.info || '', x0 + tw - 8, y + rh / 2);
         y += rh;
@@ -1884,9 +1948,41 @@
           ctx.stroke(); ctx.lineCap = 'butt';
         }
         ctx.font = '800 ' + (compact ? 10 : 11) + 'px ' + FONT; ctx.textAlign = 'left'; ctx.fillStyle = '#cfe6ff';
-        const txt = ctx.measureText(wxs.text).width <= uw - 34 ? wxs.text : wxs.short;
+        const txt = textW(ctx, wxs.text) <= uw - 34 ? wxs.text : wxs.short;
         ctx.fillText(txt, ux + 27, fy + wh / 2 + 0.5);
         fy += wh + 8;
+      }
+      // the frame counter (add ?fps to the address): pictures a second, the game's time for each, the screen, the
+      // graphics chip, and the freeze recorder
+      const fb = this.fpsBox;
+      if (fb) {
+        const k = phone ? 0.85 : 1, lh = Math.round(15 * k), bh = Math.round(7 * k + 24 * k + lh * (fb.freezes ? 3 : 2) + 6 * k);
+        ctx.save();
+        ctx.fillStyle = 'rgba(10,10,14,0.72)';
+        roundRect(ctx, ux, fy, uw, bh, 8); ctx.fill();
+        const good = fb.hz ? fb.fps >= fb.hz * 0.9 : fb.fps >= 55, fair = fb.hz ? fb.fps >= fb.hz * 0.6 : fb.fps >= 36;
+        const x = ux + 10 * k, r = ux + uw - 10 * k;
+        let y = fy + 7 * k + 19 * k;
+        ctx.textBaseline = 'alphabetic'; ctx.textAlign = 'left';
+        ctx.font = '800 ' + Math.round(22 * k) + 'px ' + FONT; ctx.fillStyle = good ? '#3ddc84' : fair ? '#ffd600' : '#ff5a4f';
+        const num = String(fb.fps || 0), nw = textW(ctx, num);
+        ctx.fillText(num, x, y);
+        ctx.font = '700 ' + Math.round(12 * k) + 'px ' + FONT; ctx.fillStyle = '#9aa1a8';
+        ctx.fillText('FPS', x + nw + 6 * k, y);
+        ctx.textAlign = 'right'; ctx.fillStyle = '#cfd3d8';
+        ctx.fillText(fb.ms.toFixed(1) + ' ms', r, y);
+        ctx.textAlign = 'left';
+        y += lh + 1;
+        ctx.font = '400 ' + (11.5 * k).toFixed(1) + 'px ' + FONT; ctx.fillStyle = '#9aa1a8';
+        let line = (fb.hz ? fb.hz + ' Hz screen · ' : '') + fb.chip;
+        while (line.length > 8 && textW(ctx, line) > r - x) line = line.slice(0, -2);
+        ctx.fillText(line, x, y);
+        y += lh;
+        ctx.font = '400 ' + Math.round(12 * k) + 'px ' + FONT;
+        ctx.fillText(fb.freezes ? 'Freezes ' + fb.freezes + ' · longest ' + fb.longest.toFixed(2) + ' s' : 'No freezes', x, y);
+        if (fb.freezes) { y += lh; ctx.fillStyle = '#ffb020'; ctx.fillText('Last freeze: ' + fb.cause, x, y); }
+        ctx.restore();
+        fy += bh + 8;
       }
     }
 
@@ -1934,14 +2030,14 @@
           if (phone) { fT = m.big ? 22 : 16; fS = 12; }
           const room = mroom - (sign ? (phone ? 80 : 100) : (phone ? 30 : 40));
           ctx.font = wT + fT + 'px ' + FONT;
-          while (fT > 11 && ctx.measureText(m.text).width > room) { fT--; ctx.font = wT + fT + 'px ' + FONT; }
+          while (fT > 11 && textW(ctx, m.text) > room) { fT--; ctx.font = wT + fT + 'px ' + FONT; }
           if (m.sub) { ctx.font = wS + fS + 'px ' + FONT; subs = wrapText(ctx, m.sub, room); }
         }
         ctx.font = '600 ' + fS + 'px ' + FONT;
         let subW = 0;
-        for (let k = 0; k < subs.length; k++) subW = Math.max(subW, ctx.measureText(subs[k]).width);
+        for (let k = 0; k < subs.length; k++) subW = Math.max(subW, textW(ctx, subs[k]));
         ctx.font = '800 ' + (mfit ? fT : m.big ? 30 : 20) + 'px ' + FONT;
-        const w = Math.max(ctx.measureText(m.text).width, subW) + (phone ? 30 : 40);
+        const w = Math.max(textW(ctx, m.text), subW) + (phone ? 30 : 40);
         const hT = phone ? fT + 14 : m.big ? 46 : 34, hS = phone ? 15 : 20;
         const h = hT + subs.length * hS;
         const ty = my2 + hT / 2 + 1, sy = my2 + hT + hS / 2 - 4;
@@ -1965,7 +2061,7 @@
           for (let k = 0; k < subs.length; k++) ctx.fillText(subs[k], mcx + off, sy + k * hS);
           if (tagH) {
             ctx.font = '900 ' + (phone ? 9 : 11) + 'px ' + FONT;
-            const tw = ctx.measureText('RACE CONTROL').width + (phone ? 14 : 18), tx0 = sx + (phone ? 10 : 14), ty0 = my2 - tagH + 4;
+            const tw = textW(ctx, 'RACE CONTROL') + (phone ? 14 : 18), tx0 = sx + (phone ? 10 : 14), ty0 = my2 - tagH + 4;
             ctx.fillStyle = pen ? '#ffffff' : '#111111';
             roundRect(ctx, tx0, ty0, tw, tagH, 4); ctx.fill();
             ctx.fillStyle = pen ? '#d40a00' : '#ffd400'; ctx.textAlign = 'center';
@@ -2018,7 +2114,7 @@
       // gap to the ghost, just above the dashboard
       if (hud.delta) {
         ctx.font = '900 26px ' + FONT;
-        const dw = ctx.measureText(hud.delta.text).width + 92;
+        const dw = textW(ctx, hud.delta.text) + 92;
         ctx.fillStyle = 'rgba(10,10,14,0.88)';
         roundRect(ctx, dcx - dw / 2, by - 50, dw, 40, 8); ctx.fill();
         ctx.fillStyle = hud.delta.color; ctx.fillRect(dcx - dw / 2, by - 50, 4, 40);
@@ -2056,7 +2152,7 @@
         ctx.font = '800 11px ' + FONT; ctx.textAlign = 'center';
         ctx.fillStyle = st === 'open' ? '#04210c' : st === 'avail' ? '#7dff9b' : '#7b7f88';
         let dtxt = st === 'open' ? 'DRS OPEN' : st === 'avail' ? (hud.drsHint || 'DRS AVAILABLE') : 'DRS';
-        if (ctx.measureText(dtxt).width > dw - 10) dtxt = 'DRS AVAILABLE';
+        if (textW(ctx, dtxt) > dw - 10) dtxt = 'DRS AVAILABLE';
         ctx.fillText(dtxt, dx + dw / 2, dy + 9.5);
       }
       // position + lap
@@ -2065,13 +2161,13 @@
       ctx.fillText(hud.posText || '', cx2, by + 28);
       // live gaps (races): the car ahead above, the car behind below, right of your position
       if (hud.gaps) {
-        const posW = ctx.measureText(hud.posText || '').width;
+        const posW = textW(ctx, hud.posText || '');
         const gr = dc ? bx + bw - 14 : bx + 366, room = gr - (cx2 + posW + 10);
         const lines = [hud.gaps.a, hud.gaps.b].filter(function (g) { return !!g; });
         for (let i = 0; i < lines.length; i++) {
           let f = dc ? 12 : 13;
           ctx.font = '800 ' + f + 'px ' + FONT;
-          while (f > 9 && ctx.measureText(lines[i].text).width > room) { f--; ctx.font = '800 ' + f + 'px ' + FONT; }
+          while (f > 9 && textW(ctx, lines[i].text) > room) { f--; ctx.font = '800 ' + f + 'px ' + FONT; }
           ctx.textAlign = 'right'; ctx.fillStyle = lines[i].color;
           ctx.fillText(lines[i].text, gr, by + (dc ? 25 : 20) + i * (dc ? 15 : 17) + (lines.length === 1 ? (dc ? 7 : 8) : 0));
         }
@@ -2136,7 +2232,7 @@
     ctx.font = '800 ' + f + 'px ' + FONT;
     const name = named ? ty.name.toUpperCase() : '';
     const left = t.w === null ? null : Math.max(0, Math.round((1 - t.w) * 100));
-    const nameW = name ? ctx.measureText(name).width + 8 * k : 0, barW = left === null ? 0 : 34 * k, pctW = left === null ? 0 : ctx.measureText('100%').width + 6 * k;
+    const nameW = name ? textW(ctx, name) + 8 * k : 0, barW = left === null ? 0 : 34 * k, pctW = left === null ? 0 : textW(ctx, '100%') + 6 * k;
     const w = 26 * k + nameW + (left === null ? 2 * k : barW + 6 * k + pctW), x = l, y = b - h;
     ctx.fillStyle = 'rgba(10,10,14,0.88)';
     roundRect(ctx, x, y, w, h, 6 * k); ctx.fill();
@@ -2156,7 +2252,7 @@
   Renderer.prototype.drawTow = function (r, b, k) {
     const ctx = this.ctx, h = Math.round(22 * k), f = Math.round(11 * k);
     ctx.font = '800 ' + f + 'px ' + FONT;
-    const tw = ctx.measureText('SLIPSTREAM').width, w = tw + 34 * k, x = r - w, y = b - h;
+    const tw = textW(ctx, 'SLIPSTREAM'), w = tw + 34 * k, x = r - w, y = b - h;
     ctx.fillStyle = 'rgba(10,10,14,0.88)';
     roundRect(ctx, x, y, w, h, 6 * k); ctx.fill();
     ctx.strokeStyle = '#4fc3ff'; ctx.lineWidth = 1.5; ctx.stroke();
@@ -2179,7 +2275,7 @@
     // gap to the ghost, just above
     if (hud.delta) {
       ctx.font = '900 18px ' + FONT;
-      const dw = ctx.measureText(hud.delta.text).width + 70, dx = TL.dashCx - dw / 2, dy = by - 32;
+      const dw = textW(ctx, hud.delta.text) + 70, dx = TL.dashCx - dw / 2, dy = by - 32;
       ctx.fillStyle = 'rgba(10,10,14,0.88)';
       roundRect(ctx, dx, dy, dw, 27, 6); ctx.fill();
       ctx.fillStyle = hud.delta.color; ctx.fillRect(dx, dy, 4, 27);
@@ -2220,28 +2316,28 @@
     // bottom line: lap, (best lap when there is room), current lap time
     ctx.font = '700 11px ' + FONT; ctx.textAlign = 'left'; ctx.fillStyle = '#cfd3d8';
     ctx.fillText(hud.lapText || '', bx + 12, by + 46);
-    const lapW = ctx.measureText(hud.lapText || '').width;
+    const lapW = textW(ctx, hud.lapText || '');
     ctx.textAlign = 'right'; ctx.font = '700 12px ' + FONT; ctx.fillStyle = '#fff';
     const cur = hud.cur || '--:--.---';
     ctx.fillText(cur, bx + bw - 12, by + 46);
     const best = hud.best ? 'BEST ' + hud.best : hud.pb ? 'PB ' + hud.pb : '';
     if (hud.gaps && (hud.gaps.a || hud.gaps.b)) {
       // races: the live gaps in the middle of the bottom line (ahead · behind)
-      const l = bx + 12 + lapW + 10, r = bx + bw - 12 - ctx.measureText(cur).width - 10;
+      const l = bx + 12 + lapW + 10, r = bx + bw - 12 - textW(ctx, cur) - 10;
       const parts = [hud.gaps.a, hud.gaps.b].filter(function (g) { return !!g; });
       let f = 11;
-      const width = function () { ctx.font = '800 ' + f + 'px ' + FONT; let w = 0; for (let i = 0; i < parts.length; i++) w += ctx.measureText(parts[i].text).width; return w + (parts.length > 1 ? ctx.measureText('  ·  ').width : 0); };
+      const width = function () { ctx.font = '800 ' + f + 'px ' + FONT; let w = 0; for (let i = 0; i < parts.length; i++) w += textW(ctx, parts[i].text); return w + (parts.length > 1 ? textW(ctx, '  ·  ') : 0); };
       while (f > 8 && width() > r - l) f--;
       let x = (l + r) / 2 - width() / 2;
       ctx.textAlign = 'left';
       for (let i = 0; i < parts.length; i++) {
-        if (i) { ctx.fillStyle = '#6b7079'; ctx.fillText('  ·  ', x, by + 46); x += ctx.measureText('  ·  ').width; }
-        ctx.fillStyle = parts[i].color; ctx.fillText(parts[i].text, x, by + 46); x += ctx.measureText(parts[i].text).width;
+        if (i) { ctx.fillStyle = '#6b7079'; ctx.fillText('  ·  ', x, by + 46); x += textW(ctx, '  ·  '); }
+        ctx.fillStyle = parts[i].color; ctx.fillText(parts[i].text, x, by + 46); x += textW(ctx, parts[i].text);
       }
     } else if (best) {
       ctx.font = '700 11px ' + FONT;
       const l = bx + 12 + lapW + 12, r = bx + bw - 12 - 62 - 12;
-      if (r - l >= ctx.measureText(best).width) {
+      if (r - l >= textW(ctx, best)) {
         ctx.textAlign = 'center'; ctx.fillStyle = hud.best && hud.bestPurple ? '#c77dff' : hud.best ? '#cfd3d8' : '#9ff0b4';
         ctx.fillText(best, (l + r) / 2, by + 46);
       }
@@ -2272,7 +2368,7 @@
       let cur = '';
       for (let i = 0; i < words.length; i++) {
         const t = cur ? cur + ' ' + words[i] : words[i];
-        if (cur && ctx.measureText(t).width > w) { lines.push(cur); cur = words[i]; } else cur = t;
+        if (cur && textW(ctx, t) > w) { lines.push(cur); cur = words[i]; } else cur = t;
       }
       if (cur) lines.push(cur);
       return lines;

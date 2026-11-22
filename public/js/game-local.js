@@ -159,6 +159,57 @@
     }
   };
 
+  /* The race behind the menus, joined somewhere mid-race: the cars at racing speed in a pack at a random point of the
+     lap, in a random order, some side by side (a pass under way). */
+  LocalGame.prototype.placeMidRace = function () {
+    const S = this.S, T = this.T, L = T.length, prof = F1.speedProfile(T, 'hard'), Q = { idx: 0, s: 0, d: 0, dist: 0 };
+    const cars = S.cars.slice();
+    for (let i = cars.length - 1; i > 0; i--) { const j = Math.floor(Math.random() * (i + 1)); const t = cars[i]; cars[i] = cars[j]; cars[j] = t; }
+    let s = Math.random() * L, dist = 0, prevD = null;
+    for (let k = 0; k < cars.length; k++) {
+      const c = cars[k];
+      let side = false;
+      if (k) {
+        side = Math.random() < 0.3;                                    // alongside the car ahead (a pass under way)
+        const gap = side ? 2 + Math.random() * 3 : 9 + Math.random() * 24;
+        s -= gap; dist += gap;
+      }
+      let sw = F1.wrapS(s, L), i = F1.idxAt(T, sw);
+      const room = Math.max(0.5, T.hwE[i] - 1.4);
+      let d = T.rlOff[i] + (Math.random() - 0.5) * 1.2;
+      if (side && prevD !== null) d = prevD > T.rlOff[i] ? prevD - 3.3 : prevD + 3.3;
+      if (side && Math.abs(d) > room) {                               // (no room alongside here: drop in behind)
+        side = false; s -= 9; dist += 9;
+        sw = F1.wrapS(s, L); i = F1.idxAt(T, sw); d = T.rlOff[i];
+      }
+      const room2 = Math.max(0.5, T.hwE[i] - 1.4);
+      d = Math.max(-room2, Math.min(room2, d));
+      const p = F1.trackPoint(T, sw, d), a = T.hd[i], v = prof[i] * (0.92 + Math.random() * 0.05) * (side ? 1.02 : 1);
+      c.x = p.x; c.y = p.y; c.a = a; c.vx = Math.cos(a) * v; c.vy = Math.sin(a) * v;
+      c.px = c.x; c.py = c.y; c.pa = c.a;
+      F1.queryTrack(T, c.x, c.y, -1, Q);
+      c.seg = Q.idx; c.s = Q.s; c.d = Q.d; c.dist = Q.dist; c.prevS = c.s; c.raceDist = 100000 - dist;
+      if (c.ai) { c.ai.latT = c.d; c.ai.bias = c.d - T.rlOff[c.seg]; }
+      prevD = d;
+    }
+  };
+  /* The race behind the menus follows a car in the thick of it: on the grid, one from the middle of the field;
+     mid-race, the car closest behind another (a fight for position). */
+  LocalGame.prototype.pickAttractCar = function (onGrid) {
+    const cars = this.S.cars.filter(function (c) { return !c.out; }).sort(function (a, b) { return b.raceDist - a.raceDist; });
+    if (!cars.length) return;
+    if (onGrid) { this.attractId = cars[Math.min(cars.length - 1, 3 + Math.floor(Math.random() * 4))].id; return; }
+    // the car closest behind another one (measured along the track, so it works anywhere on the lap)
+    const L = this.T.length;
+    let best = cars[0], gap = Infinity;
+    for (const c of cars) for (const o of cars) {
+      if (o === c) continue;
+      let d = o.s - c.s; d -= L * Math.round(d / L);
+      if (d > 0 && d < gap) { gap = d; best = c; }
+    }
+    this.attractId = best.id;
+  };
+
   LocalGame.prototype.view = function (c, alpha) {
     let v = this.views[c.id];
     if (!v) {
@@ -178,21 +229,25 @@
 
   LocalGame.prototype.render = function (R, alpha, dt) {
     const S = this.S, T = this.T;
-    this.tickResume(dt);
     const cars = [], garage = [];
     for (let i = 0; i < S.cars.length; i++) {
       const c = S.cars[i];
       if (c.out) continue;
-      const v = this.view(c, this.paused ? 1 : alpha);
+      const v = this.view(c, alpha);
       v.garage = !!c.gar;                    // in the garage or rolling in / out: drawn under the garage roof
       if (v.garage) garage.push(v); else cars.push(v);
     }
     let focus = this.me && !this.me.out ? this.views[this.myId] : null;
+    // (the race behind the menus: the car picked to follow; if it drops out, another one in a fight for position)
+    if (!focus && this.attractId !== undefined) {
+      if (!S.byId[this.attractId] || S.byId[this.attractId].out) this.pickAttractCar(false);
+      if (S.byId[this.attractId] && !S.byId[this.attractId].out) focus = this.views[this.attractId];
+    }
     if (!focus && cars.length) focus = cars[0];
     // the ghost runs from the moment you start a timed lap
     const g = this.ghostLap();
     if (g && this.me.lapStart !== null && !this.me.out && !this.me.inPit) {
-      const t = S.time - (this.paused ? 0 : (1 - alpha) * F1.DT) - this.me.lapStart;
+      const t = S.time - (1 - alpha) * F1.DT - this.me.lapStart;
       const gv = this.ghostView || (this.ghostView = { id: 'ghost', team: F1.teamOfDriver(g.d || this.me.driverId), code: 'GHOST', label: 'GHOST',
         ghost: true, replay: true, me: false, delta: 0, drsOpen: false, surf: 0 });
       if (window.ghostAt(g, t, gv)) cars.unshift(gv);
@@ -200,7 +255,16 @@
     const frame = { track: T, cars: cars, garage: garage, labels: window.Settings.data.labels,
       lights: S.phase === 'countdown' ? S.lights : 0, pitRed: S.phase === 'countdown' && this.type === 'race',
       weather: S.weatherOn ? { rain: S.rain, wet: S.wet, ld: S.lineDry } : null };
-    R.updateCamera(focus, dt, this.kind === 'attract' ? true : window.Settings.data.camera === 'rotate', this.kind === 'attract' ? 'normal' : window.Settings.data.zoom);
+    // behind the menus the picture turns with the track, not with the car (a car pulling out of its grid slot or changing
+    // lanes does not swing the whole screen one way and back)
+    let camFocus = focus;
+    if (this.kind === 'attract' && focus && S.byId[focus.id]) {
+      const cf = this.camFocus || (this.camFocus = {});
+      cf.x = focus.x; cf.y = focus.y; cf.vx = focus.vx; cf.vy = focus.vy;
+      cf.a = T.hd[F1.idxAt(T, S.byId[focus.id].s + 12)];
+      camFocus = cf;
+    }
+    R.updateCamera(camFocus, dt, this.kind === 'attract' ? true : window.Settings.data.camera === 'rotate', this.kind === 'attract' ? 'normal' : window.Settings.data.zoom);
     for (let i = 0; i < this.fx.length; i++) {
       const f = this.fx[i];
       R.sparks(f[0], f[1], f[2]);

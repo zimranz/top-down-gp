@@ -25,6 +25,7 @@
   const steers = {};             // slider: fingers on the left half: touch id -> { x0, tL, tR, u } (the one slid furthest steers)
   const arrows = {};             // arrow buttons: fingers on them: touch id -> { dir: -1 | 1, t: when it got there }
   const pedals = {};             // fingers on the right half: touch id -> { x, y, gas }
+  let keepHeld = false;          // hidden only for the pause menu: fingers still resting on the controls stay held
   let drsShown = '', stuckShown = false, labelGone = false;
 
   const api = {
@@ -110,7 +111,7 @@
     const port = on && api.L.H > api.L.W && api.L.W < 600;
     root.classList.toggle('hidden', !on || port);
     $('rotate').classList.toggle('hidden', !port);
-    if (!on || port) release();
+    if (port || (!on && !keepHeld)) release();
     if (api.L) {
       const L = api.L, half = L.vis + KNOB / 2;
       if (L.slide !== (root.classList.contains('slide'))) release();
@@ -223,7 +224,9 @@
   }
   function each(e, fn) {
     if (e.cancelable) e.preventDefault();        // no scrolling, zooming or text selection while driving
-    if (!api.L || root.classList.contains('hidden')) return;
+    if (!api.L) return;
+    // hidden (the pause menu is open): a finger kept on a pedal or the steering stays held, but one that lifts is let go
+    if (root.classList.contains('hidden')) { if (fn === end) for (let i = 0; i < e.changedTouches.length; i++) end(e.changedTouches[i]); return; }
     for (let i = 0; i < e.changedTouches.length; i++) fn(e.changedTouches[i]);
   }
   function flash(el) { el.classList.add('tap'); setTimeout(function () { el.classList.remove('tap'); }, 160); }
@@ -239,6 +242,12 @@
     root.addEventListener('touchmove', function (e) { each(e, move); }, { passive: false });
     root.addEventListener('touchend', function (e) { each(e, end); }, { passive: false });
     root.addEventListener('touchcancel', function (e) { each(e, end); }, { passive: false });
+    const lift = function (e) {
+      if (!root.classList.contains('hidden')) return;
+      for (let i = 0; i < e.changedTouches.length; i++) end(e.changedTouches[i]);
+    };
+    window.addEventListener('touchend', lift, { capture: true, passive: true });
+    window.addEventListener('touchcancel', lift, { capture: true, passive: true });
     // a mouse on the two small buttons (touch-screen laptops)
     els.pause.addEventListener('click', function () { if (cb.pause) cb.pause(); });
     els.reset.addEventListener('click', function () { Input.resetEdge = true; flash(els.reset); });
@@ -278,7 +287,7 @@
 
   /* on = a session is on screen and being driven (not a menu, not paused); busy = that, or waiting in an online room
      (the screen stays awake, so the phone does not drop out of the room between sessions) */
-  api.show = function (on, busy) { wanted = !!on; refresh(); keepAwake((wanted || !!busy) && T.active); };
+  api.show = function (on, busy, keep) { wanted = !!on; keepHeld = !on && !!keep; refresh(); keepAwake((wanted || !!busy) && T.active); };
   api.refresh = refresh;
   /* Called with every HUD frame: the DRS button shows whether DRS can be used, the reset button pulses when stuck. */
   api.hud = function (h) {

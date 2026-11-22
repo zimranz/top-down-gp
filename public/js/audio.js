@@ -69,12 +69,18 @@
   // ------------------------------------------------------------- the sound system
   const Audio = {
     ac: null, ready: false, active: false, demoing: false,
-    vol: { master: 0.8, engine: 0.8, effects: 0.8, muted: false, style: 'onboard' },
+    vol: { master: 0.8, engine: 0.68, effects: 0.8, muted: false, style: 'onboard', engineV: 2 },
     st: null,      // per-session state (edges, timers)
 
     load: function () {
       const d = window.Settings.data.audio;
-      if (d) Object.assign(this.vol, d);
+      if (d) {
+        Object.assign(this.vol, d);
+        // (13.1: the engines are 15% quieter by default. Sound settings saved before then with the engines left at the
+        // old default, 80, get the new one, 68; a level of your own choosing is kept.)
+        if (d.engineV !== 2 && Math.abs(Number(d.engine) - 0.8) < 0.001) this.vol.engine = 0.68;
+      }
+      this.vol.engineV = 2;
       this.vol.muted = this.vol.muted === true;
       if (this.vol.style !== 'tv') this.vol.style = 'onboard';
     },
@@ -111,6 +117,7 @@
       const len = ac.sampleRate * 2, buf = ac.createBuffer(1, len, ac.sampleRate), ch = buf.getChannelData(0);
       for (let i = 0; i < len; i++) ch[i] = Math.random() * 2 - 1;
       this.noise = buf;
+      setTimeout(function () { Audio.rainPrep(); }, 3000);         // (the rain sound, made ahead of time: see rainPrep)
       this.ownTV = new EngineVoice(this, this.engGate);
       this.others = [];
       for (let i = 0; i < 4; i++) this.others.push({ v: new EngineVoice(this, this.engGate), id: null });
@@ -265,30 +272,71 @@
     },
 
     // ---------------------------------------------------------- rain and spray
-    /* Made the first time it rains in a session: a stereo loop of rain (a soft wash with droplets in it), and
-       spray hiss for your car and for the 4 nearest cars (each panned and pitched like their engines). */
-    wxBuild: function () {
-      const ac = this.ac, sr = ac.sampleRate, len = Math.floor(sr * 4.6);
-      const buf = ac.createBuffer(2, len, sr);
+    /* The rain itself: a stereo loop, 4.6 s long (a soft wash with droplets in it). Made once, a few seconds after the
+       sound starts, a little at a time (made all at once just as the rain began, it held the whole game up for a
+       moment: picture and engine sound), and kept for the rest of the visit. */
+    rainPrep: function () {
+      if (this.rainBuf || this.rainWork || !this.ready) return;
+      const ac = this.ac, sr = ac.sampleRate, len = Math.floor(sr * 4.6), buf = ac.createBuffer(2, len, sr);
+      const steps = [], PIECE = Math.floor(sr * 0.2);
       for (let chn = 0; chn < 2; chn++) {
-        const d = buf.getChannelData(chn);
-        let b0 = 0, b1 = 0, b2 = 0, sum = 0;
-        for (let i = 0; i < len; i++) {              // the wash: soft (pink) noise
-          const w = Math.random() * 2 - 1;
-          b0 = 0.99765 * b0 + w * 0.099046; b1 = 0.963 * b1 + w * 0.2965164; b2 = 0.57 * b2 + w * 1.0526913;
-          d[i] = (b0 + b1 + b2 + w * 0.1848) * 0.5;
-        }
+        const d = buf.getChannelData(chn), st = { b0: 0, b1: 0, b2: 0, sum: 0, g: 1 };
+        for (let a = 0; a < len; a += PIECE) steps.push(function () {              // the wash: soft (pink) noise
+          const e = Math.min(len, a + PIECE);
+          let b0 = st.b0, b1 = st.b1, b2 = st.b2;
+          for (let i = a; i < e; i++) {
+            const w = Math.random() * 2 - 1;
+            b0 = 0.99765 * b0 + w * 0.099046; b1 = 0.963 * b1 + w * 0.2965164; b2 = 0.57 * b2 + w * 1.0526913;
+            d[i] = (b0 + b1 + b2 + w * 0.1848) * 0.5;
+          }
+          st.b0 = b0; st.b1 = b1; st.b2 = b2;
+        });
         const drops = Math.floor(len / sr * 320);    // droplets: short ticks, mostly small, now and then a bigger one
-        for (let k = 0; k < drops; k++) {
-          const at = Math.floor(Math.random() * len), a = 0.6 + 3.2 * Math.pow(Math.random(), 3), dec = sr * (0.0015 + Math.random() * 0.005);
-          for (let j = 0; j < dec * 5 && at + j < len; j++) d[at + j] += a * (Math.random() * 2 - 1) * Math.exp(-j / dec);
-        }
-        for (let i = 0; i < len; i++) sum += d[i] * d[i];
-        const g = 0.25 / Math.sqrt(sum / len);       // same loudness every time
-        for (let i = 0; i < len; i++) d[i] *= g;
-        const fade = Math.floor(sr * 0.02);          // no click where the loop joins
-        for (let i = 0; i < fade; i++) { const t = i / fade; d[len - fade + i] = d[len - fade + i] * (1 - t) + d[i] * t; }
+        for (let k0 = 0; k0 < drops; k0 += 150) steps.push(function () {
+          for (let k = k0; k < Math.min(drops, k0 + 150); k++) {
+            const at = Math.floor(Math.random() * len), a = 0.6 + 3.2 * Math.pow(Math.random(), 3), dec = sr * (0.0015 + Math.random() * 0.005);
+            for (let j = 0; j < dec * 5 && at + j < len; j++) d[at + j] += a * (Math.random() * 2 - 1) * Math.exp(-j / dec);
+          }
+        });
+        for (let a = 0; a < len; a += PIECE * 3) steps.push(function () {
+          const e = Math.min(len, a + PIECE * 3);
+          let sum = 0;
+          for (let i = a; i < e; i++) sum += d[i] * d[i];
+          st.sum += sum;
+        });
+        steps.push(function () { st.g = 0.25 / Math.sqrt(st.sum / len); });       // same loudness every time
+        for (let a = 0; a < len; a += PIECE * 3) steps.push(function () {
+          const e = Math.min(len, a + PIECE * 3);
+          for (let i = a; i < e; i++) d[i] *= st.g;
+        });
+        steps.push(function () {                                                  // no click where the loop joins
+          const fade = Math.floor(sr * 0.02);
+          for (let i = 0; i < fade; i++) { const t = i / fade; d[len - fade + i] = d[len - fade + i] * (1 - t) + d[i] * t; }
+        });
       }
+      const self = this, work = this.rainWork = { steps: steps, i: 0, buf: buf };
+      const tick = function () {
+        if (self.rainWork !== work) return;
+        const t0 = performance.now();
+        while (work.i < steps.length && performance.now() - t0 < 4) steps[work.i++]();     // (about 4 ms at a time)
+        if (work.i < steps.length) setTimeout(tick, 25);
+        else { self.rainBuf = buf; self.rainWork = null; }
+      };
+      setTimeout(tick, 0);
+    },
+    /* The rain is needed now: whatever is left of it is made at once (normally nothing is). */
+    rainReady: function () {
+      if (this.rainBuf) return this.rainBuf;
+      if (!this.rainWork) this.rainPrep();
+      const w = this.rainWork;
+      while (w.i < w.steps.length) w.steps[w.i++]();
+      this.rainBuf = w.buf; this.rainWork = null;
+      return this.rainBuf;
+    },
+    /* The sounds of a wet session, set up the first time it rains in it: the rain loop, and spray hiss for your car
+       and for the 4 nearest cars (each panned and pitched like their engines). */
+    wxBuild: function () {
+      const ac = this.ac, buf = this.rainReady();
       const W = { dry: 0 };
       W.rainSrc = ac.createBufferSource(); W.rainSrc.buffer = buf; W.rainSrc.loop = true;
       W.rainHP = ac.createBiquadFilter(); W.rainHP.type = 'highpass'; W.rainHP.frequency.value = 380; W.rainHP.Q.value = 0.5;
@@ -471,18 +519,66 @@
     },
     /* The other cars on the grid hold their revs while the lights come on (a different rhythm for each car). */
     gridRev: function (id, t) { return 0.36 + 0.24 * (0.5 + 0.5 * Math.sin(t * (2.1 + (id % 5) * 0.41) + id * 1.7)); },
-    /* Your engineer on the radio: a crackle of static, the two-tone radio beep, a little hiss under the message. */
+    /* The engines dip for a moment under a radio call or a race control alert (as on TV), so it can be heard.
+       depth: how far down (0..1), hold: for how long (s); then they come back over 0.4 s. */
+    duck: function (depth, hold) {
+      if (!this.ready) return;
+      const g = this.engBus.gain, t = this.ac.currentTime, base = this.vol.engine;
+      g.cancelScheduledValues(t); g.setValueAtTime(g.value, t);
+      g.linearRampToValueAtTime(base * depth, t + 0.05);
+      g.setValueAtTime(base * depth, t + hold);
+      g.linearRampToValueAtTime(base, t + hold + 0.4);
+    },
+    // a short burst of filtered noise (radio static, clicks)
+    burst: function (t0, type, freq, q, vol, attack, decay) {
+      const ac = this.ac, src = ac.createBufferSource(); src.buffer = this.noise;
+      const f = ac.createBiquadFilter(); f.type = type; f.frequency.value = freq; f.Q.value = q;
+      const g = ac.createGain(); src.connect(f); f.connect(g); g.connect(this.fxBus);
+      this.env(g, t0, vol, attack, decay);
+      src.start(t0, Math.random() * 1.5); src.stop(t0 + attack + decay + 0.05);
+    },
+    // a tone through a small speaker (only a narrow band of it gets through), for radio chirps and alerts
+    tone: function (t0, freq, dur, vol, type, bp, q) {
+      const ac = this.ac, o = ac.createOscillator(); o.type = type; o.frequency.setValueAtTime(freq, t0);
+      const f = ac.createBiquadFilter(); f.type = 'bandpass'; f.frequency.value = bp; f.Q.value = q;
+      const g = ac.createGain(); o.connect(f); f.connect(g); g.connect(this.fxBus);
+      g.gain.setValueAtTime(0.0001, t0); g.gain.exponentialRampToValueAtTime(vol, t0 + 0.006);
+      g.gain.setValueAtTime(vol, t0 + Math.max(0.007, dur - 0.025)); g.gain.exponentialRampToValueAtTime(0.0001, t0 + dur);
+      o.start(t0); o.stop(t0 + dur + 0.03);
+    },
+    /* Your engineer on the radio: the click of the key going down, a crackle as the channel opens, the two-tone chirp
+       with static under it, and the click of the channel closing. About half a second; the engines dip under it. */
     radio: function () {
       if (!this.ready || !this.active) return;
-      this.noiseHit('bandpass', 1900, 0.9, 0.42, 0.09);
-      this.noiseHit('bandpass', 2700, 1.6, 0.3, 0.05, 0.06);
-      this.noiseHit('bandpass', 1300, 1.2, 0.28, 0.07, 0.1);
-      this.beep(1320, 0.09, 0.55, 'square', 4200, 0.17);
-      this.beep(990, 0.13, 0.55, 'square', 4200, 0.28);
-      this.noiseHit('bandpass', 2100, 0.8, 0.1, 0.6, 0.42);
+      this.duck(0.42, 0.6);
+      const t0 = this.ac.currentTime + 0.01;
+      this.burst(t0, 'highpass', 2500, 0.7, 0.55, 0.001, 0.012);                 // click: the key goes down
+      this.burst(t0 + 0.004, 'bandpass', 2300, 0.8, 0.42, 0.006, 0.17);          // crackle as the channel opens
+      this.burst(t0 + 0.02, 'bandpass', 1700, 0.6, 0.07, 0.03, 0.55);            // static under the call
+      this.tone(t0 + 0.09, 1480, 0.07, 0.42, 'square', 1500, 1.1);               // the chirp: high ...
+      this.tone(t0 + 0.18, 1110, 0.11, 0.42, 'square', 1150, 1.1);               // ... then low
+      this.burst(t0 + 0.56, 'bandpass', 2600, 0.9, 0.3, 0.002, 0.05);            // click: the channel closes
     },
-    warnBeep: function () { this.beep(880, 0.09, 0.3, 'square', 3000); this.beep(880, 0.09, 0.3, 'square', 3000, 0.14); },
-    penaltyBuzz: function () { this.beep(196, 0.32, 0.36, 'sawtooth', 900); this.beep(147, 0.42, 0.34, 'sawtooth', 900, 0.3); },
+    /* Race control, a warning: an electronic alert like the timing screens', a clean high tone pulsed three times. */
+    rcWarn: function () {
+      if (!this.ready || !this.active) return;
+      this.duck(0.55, 0.45);
+      const t0 = this.ac.currentTime + 0.01;
+      for (let i = 0; i < 3; i++) {
+        this.tone(t0 + i * 0.13, 1245, 0.085, 0.34, 'square', 1250, 2.2);
+        this.tone(t0 + i * 0.13, 1867, 0.085, 0.1, 'sine', 1870, 2.5);
+      }
+    },
+    /* Race control, a penalty: the same alert, lower and longer, two long pulses. */
+    rcPenalty: function () {
+      if (!this.ready || !this.active) return;
+      this.duck(0.5, 0.85);
+      const t0 = this.ac.currentTime + 0.01;
+      for (let i = 0; i < 2; i++) {
+        this.tone(t0 + i * 0.44, 880, 0.32, 0.36, 'square', 885, 2.2);
+        this.tone(t0 + i * 0.44, 1320, 0.32, 0.1, 'sine', 1320, 2.5);
+      }
+    },
     go: function () { this.beep(880, 0.25, 0.3, 'square', 3000); },
     countdown: function () { this.beep(560, 0.16, 0.3, 'square', 2200); },
     chime: function (notes, vol, spacing) {
@@ -507,9 +603,9 @@
       else if (e.k === 'lap') {
         if (e.id === myId && e.record) this.personalBest();
         if (e.fastest) this.fastestLap(e.id === myId);
-      } else if (e.k === 'tl' && e.id === myId) { if (e.pen) this.penaltyBuzz(); else this.warnBeep(); }
-      else if (e.k === 'jump' && e.id === myId) this.penaltyBuzz();
-      else if (e.k === 'noStop' && e.id === myId) this.penaltyBuzz();
+      } else if (e.k === 'tl' && e.id === myId) { if (e.pen) this.rcPenalty(); else this.rcWarn(); }
+      else if (e.k === 'jump' && e.id === myId) this.rcPenalty();
+      else if (e.k === 'noStop' && e.id === myId) this.rcPenalty();
       else if (e.k === 'finish' && e.id === myId) this.chequered();
       else if (e.k === 'chequered' && myId === null) this.chequered();
     }

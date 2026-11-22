@@ -11,7 +11,7 @@
         const raw = window.localStorage.getItem('topdowngp.settings');
         if (raw) Object.assign(this.data, JSON.parse(raw));
       } catch (e) { /* storage unavailable: keep defaults */ }
-      this.data.steering = F1.clamp(Math.round(Number(this.data.steering) || 5), 1, 12);
+      this.data.steering = F1.clamp(Math.round(Number(this.data.steering) || 5), 1, 15);
       if (['close', 'normal', 'far'].indexOf(this.data.zoom) < 0) this.data.zoom = 'normal';
       if (typeof this.data.ghost !== 'boolean') this.data.ghost = true;
       if (this.data.units !== 'mph') this.data.units = 'kmh';
@@ -24,7 +24,8 @@
     save: function () {
       try { window.localStorage.setItem('topdowngp.settings', JSON.stringify(this.data)); } catch (e) { /* ignore */ }
     },
-    // how fast the steering input ramps up (per second) and how much lock it reaches
+    // how fast the steering input ramps up (per second) and how much lock it reaches (sensitivity 1-15; 13-15 carry on
+    // the same steps as 1-12, so each one is a little quicker again)
     steerRate: function () { return 2.4 + (this.data.steering - 1) * 0.7; },
     steerGain: function () { return 0.74 + (this.data.steering - 1) * 0.085; },
     // phones (arrow buttons): the same feel as the keys, from the touch sensitivity 1-10 (5 = the keys' default)

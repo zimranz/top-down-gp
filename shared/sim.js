@@ -1470,6 +1470,7 @@
     this.cars.forEach(function (c) { c.tg = F1.tyreGrip(c.tyre.c, 0, self.wetAt(c)); });
     if (opts.startMode === 'pit' && T.pit) this.placeForPitStart();
     else if (opts.startMode === 'flying') this.placeFlying();
+    else if (this.type === 'quali') this.placeForQuali();
     this.updateOrder();
   }
 
@@ -1525,6 +1526,24 @@
   };
 
   /* Time trial: a flying start, already at speed 320 m before the line, so the first lap is timed. */
+  /* Qualifying: everyone lines up two by two, like the grid, with the front row at the start of the last third of
+     sector 3 (8/9 of the lap). After the 3-2-1 there is a run-up through the last corners, so the first timed lap
+     starts at (nearly) full speed: each car's clock only starts at the line, so a place further back costs nothing.
+     (Cars can't touch in qualifying.) */
+  Session.prototype.placeForQuali = function () {
+    const T = this.track, L = T.length;
+    for (let k = 0; k < this.cars.length; k++) {
+      const c = this.cars[k], side = (k % 2 === 0 ? 1 : -1) * T.poleSide;
+      const p = F1.trackPoint(T, F1.wrapS(L * 8 / 9 - 8 * k, L), side * 3.0);
+      c.x = p.x; c.y = p.y; c.a = p.h; c.vx = 0; c.vy = 0;
+      c.px = c.x; c.py = c.y; c.pa = c.a;
+      F1.queryTrack(T, c.x, c.y, -1, Q);
+      c.seg = Q.idx; c.s = Q.s; c.d = Q.d; c.dist = Q.dist; c.prevS = c.s;
+      c.raceDist = c.s - L;
+      if (c.ai) { c.ai.latT = c.d; c.ai.gridLane = c.d; c.ai.bias = c.d - T.rlOff[c.seg]; }
+    }
+  };
+
   Session.prototype.placeFlying = function () {
     const T = this.track, L = T.length, prof = F1.speedProfile(T, 'hard');
     const idx = F1.idxAt(T, F1.wrapS(L - 320, L));

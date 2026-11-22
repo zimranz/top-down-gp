@@ -825,6 +825,7 @@
     // narrow sections have walls instead of kerbs; no gravel traps under / on a bridge
     for (let i = 0; i < N; i++) if (T.hwE[i] < hw - 0.3) { T.kerb[i] = 0; T.gravel[i] = 0; }
     if (T.bridge) for (let i = 0; i < N; i++) if (F1.levelAt(T, i * ds) !== 0) T.gravel[i] = 0;
+    dropTinyKerbs(T);
     computeWalls(T, hw + def.runoff, def, vertexS);
     findDrsZones(T);
     computePit(T, def.pitLane, def.pitSide);
@@ -874,12 +875,41 @@
       }
       T.cornerList.push({ s: wrapS((s0 + s1) / 2, T.length), turn: turnDeg * c.sign });
     });
+    // gravel beds on the same side less than 60 m apart become one bed (no thin strips of grass between them)
+    for (let bit = 1; bit <= 2; bit++) {
+      let first = -1;
+      for (let i = 0; i < N; i++) if ((T.gravel[i] & bit) && !(T.gravel[(i + 1) % N] & bit)) { first = i; break; }
+      if (first < 0) continue;
+      let gap = 0;
+      for (let n = 1; n <= N; n++) {
+        const i = (first + n) % N;
+        if (T.gravel[i] & bit) {
+          if (gap > 0 && gap * ds <= 60) for (let k = 1; k <= gap; k++) T.gravel[(i - k + N) % N] |= bit;
+          gap = 0;
+        } else gap++;
+      }
+    }
     // join kerbs that stop for only a few metres between two corners
     for (let i = 0; i < N; i++) {
       if (!T.kerb[i] || T.kerb[(i + 1) % N]) continue;
       let g = 1;
       while (g <= 8 && !T.kerb[(i + 1 + g) % N]) g++;
       if (g <= 8) for (let k = 1; k <= g; k++) T.kerb[(i + k) % N] = 3;
+    }
+  }
+
+  /* A kerb piece shorter than 10 m (what is left where a narrow section cut a kerb short) is taken away. */
+  function dropTinyKerbs(T) {
+    const N = T.n, K = T.kerb;
+    let k0 = 0;
+    while (k0 < N && !K[k0] === !K[(k0 - 1 + N) % N]) k0++;
+    if (k0 >= N) return;                                   // kerb all the way round, or none at all
+    for (let n = 0; n < N;) {
+      const on = !!K[(k0 + n) % N];
+      let len = 1;
+      while (n + len < N && !!K[(k0 + n + len) % N] === on) len++;
+      if (on && len * T.ds < 10) for (let k = 0; k < len; k++) K[(k0 + n + k) % N] = 0;
+      n += len;
     }
   }
 
@@ -1243,6 +1273,9 @@
     if (!cache[id]) cache[id] = F1.buildTrack(F1.TRACK_DEFS[id]);
     return cache[id];
   };
+  F1.trackBuilt = function (id) { return !!cache[id]; };
+  /* (The browser) forget every built track except the ids in keep: one needed again is built again. */
+  F1.forgetTracks = function (keep) { for (const id in cache) if (keep.indexOf(id) < 0) delete cache[id]; };
   /* Just the centreline and the facts the menus show, for a track's picture: much quicker than the whole track,
      which is built when a session starts. (Uses the whole track if it is built already.) */
   const outlines = {};
