@@ -20,7 +20,11 @@
     GameAudio.click(kind);
   }, true);
   document.addEventListener('change', function (e) { if (e.target.matches && e.target.matches('select, input[type=checkbox]')) GameAudio.click('tap'); }, true);
-  const R = new Renderer($('game'), { cpu: /[?&]cpu=1(&|$)/.test(location.search) });
+  // (?tiles in the address: the ground from stored tiles and a stored timing tower and dashboard, a test version for now.
+  // The tiles are used when the graphics chip draws the page; ?tiles=always: also without it, ?tiles=cpu: the tiles
+  // themselves painted by the processor, to compare)
+  const tilesQ = location.search.match(/[?&]tiles(?:=(\w+))?(?:&|$)/);
+  const R = new Renderer($('game'), { cpu: /[?&]cpu=1(&|$)/.test(location.search), tiles: tilesQ ? tilesQ[1] || 'auto' : false });
 
   let game = null;
   let mode = 'menu';          // 'menu' | 'practice' | 'tt' | 'gp' | 'online'
@@ -1923,14 +1927,19 @@
     const mid = a[m >> 1];
     let sum = 0, near = 0;
     for (let i = 0; i < m; i++) if (Math.abs(a[i] - mid) < mid * 0.12) { sum += a[i]; near++; }
-    pace.beat = near >= m * 0.6 ? sum / near : 0;          // (no steady beat: the times are used as they are)
+    const b = near >= m * 0.6 ? sum / near : 0;
+    // only a screen's beat (48 to 240 pictures a second, or a steady 30 held by battery saver): when the game can't keep
+    // up with the screen its pace is uneven, and that is used as it is (fitted to a "beat" it would speed up and slow
+    // down)                                                            (no steady beat: the times are used as they are)
+    pace.beat = (b >= 0.004 && b <= 0.021) || (b >= 0.031 && b <= 0.036) ? b : 0;
   }
   function steadyDt(raw) {
     if (raw > 0.003 && raw < 0.06) { pace.ring[pace.n % 48] = raw; pace.n++; if (pace.n >= 24 && pace.n % 24 === 0) learnBeat(); }
     const b = pace.beat;
-    if (!b) return raw;
+    // off the beat (or none): the time as it is, plus what was held back so far (no time is ever lost or gained)
+    if (!b) { const d = pace.drift; pace.drift = 0; return Math.max(0, raw + d); }
     const k = Math.round(raw / b);
-    if (k < 1 || k > 4 || Math.abs(raw - k * b) > b * 0.3) { pace.drift = 0; return raw; }     // off the beat: as it is
+    if (k < 1 || k > 4 || Math.abs(raw - k * b) > b * 0.3) { const d = pace.drift; pace.drift = 0; return Math.max(0, raw + d); }
     pace.drift += raw - k * b;
     const back = F1.clamp(pace.drift * 0.05, -b * 0.02, b * 0.02);
     pace.drift -= back;
@@ -1955,6 +1964,7 @@
         done(gl);
       }
     } catch (e) { gfxChip = null; }
+    R.accel = gfxChip;               // (the stored tiles are used only when the graphics chip draws)
     return gfxChip;
   }
   setTimeout(function () { (window.requestIdleCallback || setTimeout)(function () { graphicsChip(); }); }, 4000);
@@ -2023,7 +2033,39 @@
   /* The frame counter (add ?fps to the address): pictures a second, the time the game takes for each, the screen's
      beat, whether the graphics chip draws, and the freeze recorder (pictures more than a fifth of a second late while
      you drive: how many, the longest, and whether the game's own work or the browser held it up). */
-  const FPS = /[?&]fps(=|&|$)/.test(location.search) ? { n: 0, work: 0, at: 0, fps: 0, ms: 0, freezes: 0, longest: 0, cause: '', lastWork: 0 } : null;
+  const FPS = /[?&]fps(=|&|$)/.test(location.search) ? { n: 0, work: 0, at: 0, fps: 0, ms: 0, freezes: 0, longest: 0, cause: '', lastWork: 0, wait: [] } : null;
+  /* What held a freeze up. The game's own work (working out the race and the drawing commands for the picture) is
+     timed here. For the rest, Chrome keeps its own record of long pictures on the page ("long animation frames"), with
+     how long scripts ran and how long the browser then took to lay out and draw the picture: if the page was busy
+     drawing, it was the drawing; busy with other scripts (another part of the page, an add-on): other work on the page;
+     not busy at all: the page was waiting for the graphics side (the graphics chip, the screen) or another program. */
+  const loaf = [];
+  if (FPS && window.PerformanceObserver && (PerformanceObserver.supportedEntryTypes || []).indexOf('long-animation-frame') >= 0) {
+    try {
+      new PerformanceObserver(function (list) {
+        list.getEntries().forEach(function (e) {
+          let sc = 0;
+          (e.scripts || []).forEach(function (x) { sc += x.duration || 0; });
+          const t1 = e.startTime + e.duration;
+          // (the drawing: from when the browser starts laying out the picture, after the scripts that draw it, to the end)
+          const ds = e.styleAndLayoutStart || e.renderStart || t1;
+          loaf.push({ t0: e.startTime, t1: t1, script: sc, draw: Math.max(0, t1 - ds) });
+        });
+        if (loaf.length > 40) loaf.splice(0, loaf.length - 40);
+      }).observe({ type: 'long-animation-frame' });
+      FPS.loaf = true;
+    } catch (e) { /* not available */ }
+  }
+  function freezeCause(t0, t1, work) {
+    let busy = 0, script = 0, draw = 0;
+    for (let i = 0; i < loaf.length; i++) {
+      const L = loaf[i], o = Math.max(0, Math.min(t1, L.t1) - Math.max(t0, L.t0));
+      if (!o) continue;
+      busy += o; script += L.script; draw += L.draw;
+    }
+    if (busy < (t1 - t0) * 0.5) return 'waiting for graphics';
+    return draw >= script - work ? 'drawing the picture' : 'other work on the page';
+  }
   function countFrame(now, raw, work, driving) {
     const f = FPS;
     f.n++; f.work += work;
@@ -2031,11 +2073,14 @@
     if (now - f.at >= 1000) { f.fps = Math.round(f.n * 1000 / (now - f.at)); f.ms = f.work / f.n * 1000; f.n = 0; f.work = 0; f.at = now; }
     if (driving && raw > 0.2) {
       f.freezes++; f.longest = Math.max(f.longest, raw);
-      f.cause = f.lastWork > raw * 0.5 ? 'the game' : 'the browser';
+      if (f.lastWork > raw * 0.5) f.cause = 'the game\u2019s own work';
+      else if (f.loaf) { f.cause = '...'; f.wait.push([now - raw * 1000, now, f.lastWork * 1000]); }     // (Chrome's record comes a moment later)
+      else f.cause = 'drawing the picture';
     }
+    if (f.wait.length && now - f.wait[0][1] > 400) { const w = f.wait.shift(); f.cause = freezeCause(w[0], w[1], w[2]); }
     f.lastWork = work;
     const hz = pace.beat ? Math.round(1 / pace.beat) : 0, chip = R.cpu ? 'graphics chip off (test)' : gfxChip === true ? 'graphics chip on' : gfxChip === false ? 'no graphics chip' : 'graphics chip ?';
-    R.fpsBox = { fps: f.fps, ms: f.ms, hz: hz, chip: chip, freezes: f.freezes, longest: f.longest, cause: f.cause };
+    R.fpsBox = { fps: f.fps, ms: f.ms, hz: hz, chip: chip, freezes: f.freezes, longest: f.longest, cause: f.cause, tiles: R.tileWhy };
   }
   /* Parked in your garage: a panel with your session so far and the way back out. */
   let garShown = null;

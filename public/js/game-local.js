@@ -261,7 +261,12 @@
     if (this.kind === 'attract' && focus && S.byId[focus.id]) {
       const cf = this.camFocus || (this.camFocus = {});
       cf.x = focus.x; cf.y = focus.y; cf.vx = focus.vx; cf.vy = focus.vy;
-      cf.a = T.hd[F1.idxAt(T, S.byId[focus.id].s + 12)];
+      // (the track's direction a little ahead of the car, taken from where the car is in this very picture and
+      // blended between the track's points: it turns smoothly, not in small steps from one point to the next)
+      const sc = S.byId[focus.id], L = T.length;
+      let ds = sc.s - (sc.prevS === undefined ? sc.s : sc.prevS);
+      if (ds > L / 2) ds -= L; else if (ds < -L / 2) ds += L;
+      cf.a = F1.trackPoint(T, sc.s - ds * (1 - alpha) + 12, 0).h;
       camFocus = cf;
     }
     R.updateCamera(camFocus, dt, this.kind === 'attract' ? true : window.Settings.data.camera === 'rotate', this.kind === 'attract' ? 'normal' : window.Settings.data.zoom);
