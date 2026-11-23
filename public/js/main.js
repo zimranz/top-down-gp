@@ -20,11 +20,8 @@
     GameAudio.click(kind);
   }, true);
   document.addEventListener('change', function (e) { if (e.target.matches && e.target.matches('select, input[type=checkbox]')) GameAudio.click('tap'); }, true);
-  // (?tiles in the address: the ground from stored tiles and a stored timing tower and dashboard, a test version for now.
-  // The tiles are used when the graphics chip draws the page; ?tiles=always: also without it, ?tiles=cpu: the tiles
-  // themselves painted by the processor, to compare)
-  const tilesQ = location.search.match(/[?&]tiles(?:=(\w+))?(?:&|$)/);
-  const R = new Renderer($('game'), { cpu: /[?&]cpu=1(&|$)/.test(location.search), tiles: tilesQ ? tilesQ[1] || 'auto' : false });
+  // (the ground is drawn from stored tiles when the graphics chip draws the page, see render.js)
+  const R = new Renderer($('game'), { cpu: /[?&]cpu=1(&|$)/.test(location.search), tiles: 'auto' });
 
   let game = null;
   let mode = 'menu';          // 'menu' | 'practice' | 'tt' | 'gp' | 'online'
@@ -451,7 +448,8 @@
     const list = window.TTBoard.list(track);
     $('tt-board-title').textContent = 'Your best laps — ' + F1.TRACK_DEFS[track].name;
     if (!list.length) {
-      const tr = el('tr'), td = el('td', 'empty', 'No laps yet — set the first time on this track');
+      const pb = window.PB.get(track);
+      const tr = el('tr'), td = el('td', 'empty', pb ? 'No time trial laps yet — your best lap here in other sessions is ' + F1.fmtLap(pb.t) : 'No laps yet — set the first time on this track');
       td.colSpan = 5; tr.appendChild(td); body.appendChild(tr);
       return;
     }
@@ -471,12 +469,14 @@
   }
   function openTT() {
     buildTrackCards($('tt-tracks'), ttOpts.track, function (id) { ttOpts.track = id; showTTBoard(id); }, false, true);
-    // the cards show your best time trial lap on each track
+    // the cards show your best time trial lap on each track, or if you have none there yet, your best lap there in any
+    // other session (practice, qualifying, a race)
     $('tt-tracks').querySelectorAll('.track-card').forEach(function (card) {
       if (card.dataset.id === 'random') return;
-      const l = window.TTBoard.list(card.dataset.id), pb = card.querySelector('.tpb');
-      pb.textContent = l.length ? 'Best ' + F1.fmtLap(l[0].t) : 'No time yet';
-      pb.classList.toggle('none', !l.length);
+      const l = window.TTBoard.list(card.dataset.id), best = window.PB.get(card.dataset.id), pb = card.querySelector('.tpb');
+      pb.textContent = l.length ? 'Best ' + F1.fmtLap(l[0].t) : best ? 'PB ' + F1.fmtLap(best.t) : 'No time yet';
+      pb.title = !l.length && best ? 'Your best lap here in a practice, qualifying or race (no time trial lap yet)' : '';
+      pb.classList.toggle('none', !l.length && !best);
     });
     buildDrivers($('tt-drivers'), { selected: ttOpts.driverId, onPick: function (id) { ttOpts.driverId = id; } });
     showTTBoard(ttOpts.track);
@@ -1340,6 +1340,7 @@
     // (not on a phone: the on-screen keyboard would jump up and cover the screen)
     if (!Input.touch.active) setTimeout(function () { ($('online-name').value ? $('online-code') : $('online-name')).focus(); }, 50);
     ensureNet();
+    showFinder(finder.open);
   }
   function playerName() {
     const n = $('online-name').value.trim() || 'Player';
@@ -1368,6 +1369,67 @@
   }
   $('online-join').addEventListener('click', joinCode);
   $('online-code').addEventListener('keydown', function (e) { if (e.key === 'Enter') joinCode(); });
+
+  /* Find a room: the rooms on the server, open ones first (Join), private ones locked (they are joined with the code
+     from the host). While the list is open it is brought up to date every 3 seconds. */
+  const finder = { open: false, timer: null, retry: null, last: null };
+  const ROOM_STATE = { lobby: 'In the lobby', results: 'In the lobby', stageResults: 'Between sessions', seasonBreak: 'Between races',
+    p1: 'Practice 1 on', p2: 'Practice 2 on', p3: 'Practice 3 on', quali: 'Qualifying on', race: 'Race on', away: 'Paused: the host is away' };
+  function roomWhat(r) {
+    const parts = [];
+    if (r.champ) parts.push('Championship' + (r.races ? (r.round ? ', round ' + r.round + ' of ' + r.races : ', ' + r.races + ' races') : ''));
+    const T = r.track && F1.TRACK_DEFS[r.track];
+    if (r.track === 'random') parts.push('Surprise track'); else if (T) parts.push(T.name);
+    parts.push(ROOM_STATE[r.state] || 'In the lobby');
+    parts.push(r.players + '/' + r.max + ' players');
+    return parts.join(' · ');
+  }
+  const LOCK = '<svg viewBox="0 0 24 24" width="18" height="18" aria-hidden="true" class="rlock"><path d="M6 11h12v10H6z" fill="none" stroke="currentColor" stroke-width="2" stroke-linejoin="round"/><path d="M8.5 11V7.5a3.5 3.5 0 0 1 7 0V11" fill="none" stroke="currentColor" stroke-width="2"/></svg>';
+  const UNLOCK = '<svg viewBox="0 0 24 24" width="18" height="18" aria-hidden="true" class="rlock"><path d="M6 11h12v10H6z" fill="none" stroke="currentColor" stroke-width="2" stroke-linejoin="round"/><path d="M8.5 11V7.5a3.5 3.5 0 0 1 6.8-1.2" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"/></svg>';
+  function renderRooms(list) {
+    finder.last = list;
+    const nOpen = list.filter(function (r) { return r.open; }).length, nPriv = list.length - nOpen;
+    $('online-find-n').textContent = list.length ? (nOpen ? nOpen + ' open' : '') + (nOpen && nPriv ? ' · ' : '') + (nPriv ? nPriv + ' private' : '') : '';
+    if (!finder.open) return;
+    const box = $('online-rooms');
+    box.innerHTML = '';
+    if (!list.length) { box.appendChild(el('div', 'room-empty', 'No rooms right now: create one and send your friends the link')); return; }
+    list.forEach(function (r) {
+      const row = el('div', 'room-row' + (r.open ? '' : ' locked'));
+      row.insertAdjacentHTML('beforeend', r.open ? UNLOCK : LOCK);
+      const info = el('div', 'rinfo');
+      info.append(el('b', null, r.host + "'s room"), el('span', null, roomWhat(r)));
+      row.appendChild(info);
+      if (r.open) {
+        const full = r.players >= r.max, b = el('button', 'btn small', full ? 'Full' : 'Join');
+        b.type = 'button';
+        b.disabled = full;
+        b.addEventListener('click', function () { $('online-code').value = r.code; joinCode(); });
+        row.appendChild(b);
+      } else row.appendChild(el('span', 'rcode', 'Code only'));
+      box.appendChild(row);
+    });
+  }
+  function findRooms() {
+    if (!$('online').classList.contains('active')) { clearInterval(finder.timer); finder.timer = null; return; }
+    ensureNet().socket.emit('listRooms', function (res) {
+      if (res && res.ok) renderRooms(res.rooms || []);
+      else if (finder.open && !finder.retry) finder.retry = setTimeout(function () { finder.retry = null; findRooms(); }, 600);   // (asked too soon)
+    });
+  }
+  function showFinder(on) {
+    finder.open = on;
+    $('online-rooms').classList.toggle('hidden', !on);
+    $('online-find').setAttribute('aria-expanded', on ? 'true' : 'false');
+    clearInterval(finder.timer); finder.timer = null;
+    if (on) {
+      if (finder.last) renderRooms(finder.last);       // (the list from a moment ago, at once)
+      else if (!$('online-rooms').children.length) $('online-rooms').appendChild(el('div', 'room-empty', 'Looking for rooms…'));
+      finder.timer = setInterval(findRooms, 3000);
+    }
+    findRooms();
+  }
+  $('online-find').addEventListener('click', function () { showFinder(!finder.open); });
 
   function leaveRoom() {
     if (net) net.socket.emit('leaveRoom');
@@ -1450,6 +1512,9 @@
     else window.prompt('Copy this link:', link);
   });
   $('lobby-start').addEventListener('click', function () { if (net) net.socket.emit('start'); });
+  $('lobby-open').querySelectorAll('button').forEach(function (b) {
+    b.addEventListener('click', function () { if (net && room && room.hostId === net.id()) net.socket.emit('roomOpen', b.dataset.v === '1'); });
+  });
   $('lobby-ready').addEventListener('click', function () {
     if (!net || !room) return;
     const meP = room.players.find(function (p) { return p.id === net.id(); });
@@ -1518,6 +1583,8 @@
     sel.value = String(value);
   }
 
+  /* "Ana", "Ana and Ben", "Ana, Ben and Cal" */
+  function listNames(a) { return a.length < 2 ? a.join('') : a.slice(0, -1).join(', ') + ' and ' + a[a.length - 1]; }
   let lastDriverKey = '';
   function renderLobby(r) {
     const me = net.id();
@@ -1540,6 +1607,8 @@
       if (bub && bub.until > performance.now()) li.appendChild(el('span', 'bubble', bub.text));
       list.appendChild(li);
     });
+    $('lobby-open').querySelectorAll('button').forEach(function (b) { b.classList.toggle('on', (b.dataset.v === '1') === !!r.open); b.disabled = !isHost; });
+    $('lobby-open-note').textContent = r.open ? 'Anyone can join from Find a room' : 'Friends join with the code ' + r.code + (isHost ? '' : ' (the host decides)');
     const meP = r.players.find(function (p) { return p.id === me; });
     $('lobby-ready').classList.toggle('on', !!(meP && meP.ready));
     $('lobby-ready').textContent = meP && meP.ready ? '✓ Ready' : 'Ready';
@@ -1589,8 +1658,12 @@
     const first = ['p1', 'p2', 'p3'].find(function (k) { return s[k] > 0; }) || (s.qualiLaps > 0 ? 'quali' : 'race');
     $('lobby-start').textContent = champ ? (cal.length >= 2 ? 'Start season (' + cal.length + ' races)' : 'Pick at least 2 tracks')
       : first === 'race' ? 'Start race' : 'Start ' + STAGE_NAME[first];
-    $('lobby-start').disabled = champ && cal.length < 2;
+    // the session starts when everyone (the host too) has pressed Ready
+    const notReady = r.players.filter(function (p) { return !p.ready; }).map(function (p) { return p.id === me ? 'you' : p.name; });
+    if (notReady.length && !(champ && cal.length < 2)) $('lobby-start').appendChild(el('small', null, 'Waiting for ' + listNames(notReady) + ' to press Ready'));
+    $('lobby-start').disabled = (champ && cal.length < 2) || notReady.length > 0;
     $('lobby-waiting').style.display = isHost ? 'none' : '';
+    $('lobby-waiting').textContent = notReady.length ? 'Waiting for ' + listNames(notReady) + ' to press Ready' : 'Waiting for the host to start…';
     const mine = r.players.find(function (p) { return p.id === me; });
     const takenBy = {};
     r.players.forEach(function (p) { if (p.driverId && p.id !== me) takenBy[p.driverId] = p.name; });
@@ -1967,7 +2040,8 @@
     R.accel = gfxChip;               // (the stored tiles are used only when the graphics chip draws)
     return gfxChip;
   }
-  setTimeout(function () { (window.requestIdleCallback || setTimeout)(function () { graphicsChip(); }); }, 4000);
+  // (found out as the page opens, before the race behind the menus is first drawn: the stored tiles are used from the
+  // start when the graphics chip draws)
 
   /* Smoothness watch, while you drive (not in menus or paused), on Auto graphics:
      - phones and tablets: many late pictures for about 6 seconds → Low graphics for the rest of the visit;
@@ -2189,12 +2263,14 @@
     updateTyreUI();
     if (audioOn && game.audioState) { try { const st = game.audioState(); if (st) { GameAudio.update(st, dt); window.Haptics.kerb(st.own); } } catch (err) { console.error(err); } }
     loadCardFrame(now);
+    R.tileRush = LC.on && !LC.t;       // (behind the loading card: the stored tiles around the start are painted quickly)
     const work = (performance.now() - t0) / 1000, driving = audioOn && game.kind !== 'attract' && !wasAway && raw < 5;
     wasAway = false;
     watchFrames(raw, driving, work);
     if (FPS) countFrame(now, raw, work, driving);
     requestAnimationFrame(frame);
   }
+  graphicsChip();
   goHome();
   if (params.get('room')) openOnline(params.get('room').toUpperCase().slice(0, 4));
   requestAnimationFrame(frame);

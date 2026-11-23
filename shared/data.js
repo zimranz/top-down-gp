@@ -4,7 +4,7 @@
   const F1 = (root.F1 = root.F1 || {});
 
   // Game version: goes up by one with every update
-  F1.VERSION = '13.2';
+  F1.VERSION = '14.0';
 
   // Quick messages for online rooms (ready-made, no typing). The server only passes on their number.
   F1.QUICK_MSGS = [

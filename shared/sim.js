@@ -145,7 +145,7 @@
   function wallCollide(c, T) {
     pitWallCollide(c, T);
     const wallHere = F1.wallAt(T, c.seg, c.d);
-    if (c.dist < Math.min(wallHere, T.wall[c.seg]) - 3.2) return;
+    if (c.dist < Math.min(wallHere, T.wallN[c.seg], T.wallP[c.seg]) - 3.2) return;
     const ca = Math.cos(c.a), sa = Math.sin(c.a);
     for (let k = 0; k < 4; k++) {
       const fx = k < 2 ? 1 : -1, fy = (k & 1) ? 1 : -1;
@@ -1006,6 +1006,8 @@
         if (mkType === 'kerb' && mkRel > mk.apexRel - 35 && mkRel < mk.apexRel + 12) { want = mk.turn * (T.hw + 0.7); edge = T.hw + 1.3; }
         if (mkType === 'lockup' || mkType === 'dive') edge = T.hw + 4;
         if (hwE < T.hw - 0.05) edge = Math.min(edge, hwE - 0.4);     // between walls: a mistake stays off them
+        // (where another part of the track is close, the barrier can be just past the kerb: a mistake stays off it)
+        edge = Math.min(edge, Math.min(T.wallN[i], T.wallP[i]) - 2);
       }
     }
 
@@ -1544,11 +1546,54 @@
     }
   };
 
+  /* Where the time trial's flying start is: 320 m before the line, on the straight leading to it. Where the last corner
+     is closer to the line than that, the car starts at the beginning of the straight instead (just out of that corner,
+     at the speed it would have there), not in the corner itself. { s, idx, v (speed, m/s), d (metres before the line) } */
+  F1.flyingStart = function (T) {
+    if (T._fly) return T._fly;
+    const L = T.length, N = T.n, ds = T.ds, prof = F1.speedProfile(T, 'hard');
+    // the speed all round the lap, flat out between the corners (the profile is only how fast each point can be taken)
+    const vr = new Float64Array(N);
+    let w = 20, vmax = 0;
+    for (let lap = 0; lap < 2; lap++) {
+      for (let i = 0; i < N; i++) {
+        const acc = Math.min(P.POWER / (CAR.MASS * Math.max(w, 4)), P.TRACT0) - (P.DRAG * w * w * T.airDrag) / CAR.MASS - P.ROLL;
+        w = Math.min(prof[i], Math.sqrt(Math.max(1, w * w + 2 * acc * ds)));
+        vr[i] = w;
+        if (w > vmax) vmax = w;
+      }
+    }
+    const back = function (k) { return ((N - k) % N + N) % N; };        // the point k steps before the line
+    // the last corner before the line: the nearest point before it where the speed is the lowest for 40 m either way
+    // (a bend taken flat out does not count; nor does the braking for the first corner, which can start before the line)
+    const W = Math.round(40 / ds);
+    let apex = -1;
+    for (let k = 1; k < N * 0.9 && apex < 0; k++) {
+      const v = vr[back(k)];
+      if (v >= 0.95 * vmax) continue;
+      let low = true;
+      for (let e = -W; e <= W && low; e++) if (vr[back(k + e)] < v - 0.01) low = false;
+      if (low) apex = k;
+    }
+    // the start: 320 m before the line if the track runs (nearly) straight from there for 30 m; otherwise the beginning
+    // of the straight: the first point after the last corner (or the bend there) from which it does
+    const K320 = Math.round(320 / ds), S = Math.round(30 / ds);
+    const straightAt = function (k) {
+      for (let e = 0; e <= S; e++) if (Math.abs(T.curv[back(k - e)]) > 1 / 300) return false;
+      return true;
+    };
+    let k0 = -1;
+    for (let k = apex >= 0 && apex < K320 ? apex : K320; k >= S && k0 < 0; k--) if (straightAt(k)) k0 = k;
+    let idx, v, d;
+    if (k0 < 0 || k0 === K320) { d = 320; idx = F1.idxAt(T, F1.wrapS(L - 320, L)); v = prof[idx] * 0.85; }
+    else { d = k0 * ds; idx = back(k0); v = Math.min(prof[idx] * 0.85, vr[idx]); }
+    T._fly = { s: F1.wrapS(L - d, L), idx: idx, v: v, d: d, apex: apex * ds };
+    return T._fly;
+  };
   Session.prototype.placeFlying = function () {
-    const T = this.track, L = T.length, prof = F1.speedProfile(T, 'hard');
-    const idx = F1.idxAt(T, F1.wrapS(L - 320, L));
+    const T = this.track, fs = F1.flyingStart(T), idx = fs.idx;
     for (let i = 0; i < this.cars.length; i++) {
-      const c = this.cars[i], v = prof[idx] * 0.85;
+      const c = this.cars[i], v = fs.v;
       c.x = T.rlX[idx]; c.y = T.rlY[idx]; c.a = T.hd[idx];
       c.vx = Math.cos(c.a) * v; c.vy = Math.sin(c.a) * v;
       c.px = c.x; c.py = c.y; c.pa = c.a;

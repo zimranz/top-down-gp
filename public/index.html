@@ -258,6 +258,8 @@
           <button class="btn" id="online-join">Join</button>
         </div>
         <div class="error" id="online-error"></div>
+        <button type="button" class="btn find-btn" id="online-find" aria-expanded="false"><span>Find a room</span><span class="find-n" id="online-find-n"></span><span class="chev" aria-hidden="true">▾</span></button>
+        <div class="room-list hidden" id="online-rooms"></div>
         <div class="season-box hidden" id="online-season">
           <div><b id="os-title">Your online championship</b><span id="os-sub"></span></div>
           <div class="row">
@@ -283,6 +285,10 @@
           <div class="lobby-actions">
             <button type="button" class="btn small" id="lobby-ready">Ready</button>
             <button type="button" class="btn small msg-open" id="lobby-msg"><svg viewBox="0 0 24 24" width="16" height="16" aria-hidden="true"><path d="M4 5h16v11H9l-5 4z" fill="none" stroke="currentColor" stroke-width="2" stroke-linejoin="round"/></svg> Messages</button>
+          </div>
+          <div class="room-access">
+            <div class="seg" id="lobby-open"><button type="button" data-v="0">Private: code only</button><button type="button" data-v="1">Open: anyone</button></div>
+            <div class="ra-note" id="lobby-open-note"></div>
           </div>
           <h3>Session settings <span class="muted" id="lobby-hostnote"></span></h3>
           <div class="settings-grid" id="lobby-settings">

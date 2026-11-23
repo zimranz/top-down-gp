@@ -24,11 +24,9 @@ canvas#game { position: fixed; inset: 0; display: block; }
 .logo span { color: var(--red); }
 .tag { margin-top: 10px; color: #d5d9de; font-weight: 600; letter-spacing: 1px; text-transform: uppercase; font-size: 14px; }
 .menu { display: flex; flex-direction: column; gap: 12px; width: min(360px, 90vw); }
-/* phones and tablets: no frosted glass (blurring the moving race behind it every frame is heavy for a phone) */
-body.touch #home .menu { -webkit-backdrop-filter: none; backdrop-filter: none; background: rgba(10, 10, 14, 0.8); }
-/* home menu: a darker, frosted panel so the race behind does not fight with the buttons (still see-through) */
-#home .menu { width: min(394px, 92vw); padding: 17px; border-radius: 16px; background: rgba(10, 10, 14, 0.62);
-  -webkit-backdrop-filter: blur(7px) saturate(0.8); backdrop-filter: blur(7px) saturate(0.8);
+/* home menu: a dark panel so the race behind does not fight with the buttons (still a little see-through). Plain, not
+   frosted glass: blurring the moving race behind it every picture is heavy work for the graphics chip. */
+#home .menu { width: min(394px, 92vw); padding: 17px; border-radius: 16px; background: rgba(10, 10, 14, 0.82);
   border: 1px solid rgba(255, 255, 255, 0.09); box-shadow: 0 14px 44px rgba(0, 0, 0, 0.4); }
 #home .menu .btn { background: rgba(255, 255, 255, 0.075); border-color: rgba(255, 255, 255, 0.14);
   transition: background .15s, border-color .15s, box-shadow .15s, transform .05s; }
@@ -134,6 +132,9 @@ select option { color: #111; }
 .settings-grid .span2 { grid-column: 1 / -1; }
 /* the lobby's start button stays in view at the bottom of the column, even on short screens */
 #lobby-start { position: sticky; bottom: 0; z-index: 2; box-shadow: 0 -14px 18px rgba(12, 12, 16, 0.92); }
+/* (not everyone Ready yet: a solid grey button, with who it is waiting for) */
+#lobby-start:disabled { opacity: 1; background: #34353b; border-color: #34353b; color: #c9ccd1; }
+#lobby-start small { display: block; font-size: 13px; font-weight: 600; margin-top: 2px; color: #aeb2b8; }
 /* online championship: the calendar (click tracks in race order) */
 .lobby-cal { display: flex; flex-direction: column; gap: 6px; }
 .lobby-cal.hidden, #set-track-wrap.hidden { display: none; }
@@ -147,6 +148,27 @@ select option { color: #111; }
 .cal-chip:disabled { cursor: default; }
 .cal-chip b { background: var(--red); color: #fff; border-radius: 4px; font-size: 11px; min-width: 17px; padding: 0 4px; text-align: center; }
 /* your online season (online screen) */
+/* Find a room (online screen), and who can join (lobby) */
+.find-btn { display: flex; align-items: center; justify-content: center; gap: 8px; }
+.find-btn .find-n { color: var(--muted); font-weight: 600; font-size: 13px; }
+.find-btn .find-n:empty { display: none; }
+.find-btn .chev { font-size: 12px; transition: transform 0.15s; }
+.find-btn[aria-expanded="true"] .chev { transform: rotate(180deg); }
+.room-list { display: flex; flex-direction: column; gap: 6px; max-height: 264px; overflow-y: auto; }
+.room-list.hidden { display: none; }
+.room-row { display: flex; align-items: center; gap: 10px; background: rgba(255,255,255,0.05); border-radius: 8px; padding: 8px 10px; }
+.room-row .rlock { flex: none; color: #19c94a; }
+.room-row.locked .rlock { color: var(--muted); }
+.room-row .rinfo { flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 1px; }
+.room-row .rinfo b { font-size: 15px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.room-row .rinfo span { font-size: 13px; color: var(--muted); }
+.room-row .rcode { font-size: 12px; color: var(--muted); font-weight: 700; white-space: nowrap; }
+.room-empty { color: var(--muted); font-size: 14px; text-align: center; padding: 8px; }
+.room-access { display: flex; flex-direction: column; gap: 4px; margin: 4px 0 6px; }
+.room-access .seg button { font-size: 13px; padding: 7px 4px; }
+.room-access .seg button:disabled { cursor: default; }
+.room-access .seg button:disabled:not(.on) { opacity: 0.5; }
+.ra-note { font-size: 12.5px; color: var(--muted); text-align: center; }
 .season-box { display: flex; flex-direction: column; gap: 10px; border: 1px solid rgba(255,214,0,0.45); background: rgba(255,214,0,0.07);
   border-radius: 10px; padding: 12px 14px; }
 .season-box.hidden { display: none; }

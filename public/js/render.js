@@ -63,11 +63,9 @@
     // (opts.cpu, for testing: the canvas drawn without the graphics chip, as on a computer without graphics acceleration)
     this.cpu = !!(opts && opts.cpu);
     // (opts.tiles: the ground from stored tiles, see Tiles below, and a stored timing tower and dashboard. 'auto': the
-    // tiles only when the graphics chip draws the page (this.accel, from the game); 'always': also without it; 'cpu':
-    // the tiles painted by the processor instead of the graphics chip, to compare)
+    // tiles when the graphics chip draws the page (this.accel, from the game); 'always' (tests): also without it)
     this.tilesOn = !!(opts && opts.tiles);
     this.tileMode = opts && opts.tiles;
-    this.tilesGpu = this.tileMode !== 'cpu';
     this.ctx = canvas.getContext('2d', this.cpu ? { willReadFrequently: true } : undefined);
     this.tracks = {};
     this.cam = { x: 0, y: 0, a: -Math.PI / 2, z: 8, ready: false, lx: 0, ly: 0 };
@@ -108,9 +106,10 @@
   /* Only the tracks in use keep their drawn shapes (ids: the ones to keep); one needed again is made again. */
   Renderer.prototype.keepTracks = function (ids) {
     for (const id in this.tracks) {
-      if (ids.indexOf(id) >= 0) continue;
-      if (this.tracks[id].tiles) this.tracks[id].tiles.drop();          // (their memory let go at once)
-      delete this.tracks[id];
+      const G = this.tracks[id];
+      // (the stored tiles only for the track in use now, ids[0]: their memory let go at once)
+      if (G.tiles && id !== ids[0]) { G.tiles.drop(); G.tiles = null; }
+      if (ids.indexOf(id) < 0) delete this.tracks[id];
     }
   };
   Renderer.prototype.hasTrack = function (id) { return !!this.tracks[id]; };
@@ -294,22 +293,25 @@
     G.pal = PAL;
     const CH = 40;
     function off(i, d) { return [X[i] + NX[i] * d, Y[i] + NY[i] * d]; }
-    // how far the run-off reaches from the centre line at each sample: the run-off is a line as wide as the barrier
-    // distance (rounded to a metre) with round ends, so next to a wider part it reaches a bit further
-    const edgeAt = new Float32Array(N);
-    {
-      const RW = new Float32Array(N);
-      for (let i = 0; i < N; i++) RW[i] = Math.round(T.wall[i]);
+    // how far the run-off reaches from the centre line at each sample, on each side: the run-off is a line as wide as
+    // the barrier distance (rounded to a metre) with round ends, so next to a wider part it reaches a bit further (but
+    // never past the halfway line to another part of the track that comes close: see sideWalls in tracks.js)
+    const edgeOf = function (W, Lim) {
+      const RW = new Float32Array(N), E = new Float32Array(N), J = Math.ceil(T.maxWall / T.ds) + 1;
+      for (let i = 0; i < N; i++) RW[i] = Math.round(W[i]);
       for (let i = 0; i < N; i++) {
         let e = RW[i];
-        const J = Math.ceil(T.maxWall / T.ds) + 1;
         for (let j = -J; j <= J; j++) {
           const w = RW[(i + j + N) % N], d = Math.abs(j) * T.ds;
           if (w > e && d < w) e = Math.max(e, Math.sqrt(w * w - d * d));
         }
-        edgeAt[i] = e;
+        E[i] = Math.min(e, Math.max(W[i], Lim[i]));
       }
-    }
+      return E;
+    };
+    const edgeN = edgeOf(T.wallN, T.limN), edgeP = edgeOf(T.wallP, T.limP);
+    const edgeAt = function (i, side) { return side < 0 ? edgeN[i] : edgeP[i]; };
+    const wallS = function (i, side) { return side < 0 ? T.wallN[i] : T.wallP[i]; };
     for (let c0 = 0; c0 < N; c0 += CH) {
       const c1 = Math.min(N, c0 + CH);
       const ch = { center: new Path2D(), edges: new Path2D(), kerbR: new Path2D(), kerbAll: new Path2D(), gravel: new Path2D(),
@@ -329,7 +331,7 @@
         ch.lamps = [];
         for (let k = c0; k < c1; k++) {
           if (k % 22) continue;
-          const i = k % N, side = (k / 22) % 2 ? 1 : -1, d = side * (T.wall[i] + 2.2);
+          const i = k % N, side = (k / 22) % 2 ? 1 : -1, d = side * (wallS(i, side) + 2.2);
           ch.lamps.push([X[i] + NX[i] * d, Y[i] + NY[i] * d]);
         }
       }
@@ -339,7 +341,7 @@
       ch.armcoLine = new Path2D(); ch.barrierLine = new Path2D();
       for (const side of [-1, 1]) {
         for (let k = c0; k <= c1; k++) {
-          const i = k % N, w = edgeAt[i], a = off(i, side * (w + 0.9)), b = off(i, side * (w + 0.3));
+          const i = k % N, w = edgeAt(i, side), a = off(i, side * (w + 0.9)), b = off(i, side * (w + 0.3));
           if (k === c0) { ch.armcoLine.moveTo(a[0], a[1]); ch.barrierLine.moveTo(b[0], b[1]); }
           else { ch.armcoLine.lineTo(a[0], a[1]); ch.barrierLine.lineTo(b[0], b[1]); }
         }
@@ -350,7 +352,7 @@
       ch.grass = new Path2D();
       const edgeOff = function (i, side) {
         const k = T.curv[i], inner = k !== 0 && Math.sign(k) === -side;
-        return inner ? Math.min(edgeAt[i], 0.9 / Math.abs(k)) : edgeAt[i];
+        return inner ? Math.min(edgeAt(i, side), 0.9 / Math.abs(k)) : edgeAt(i, side);
       };
       for (let k = c0; k <= c1; k++) { const i = k % N, a = off(i, edgeOff(i, 1)); if (k === c0) ch.grass.moveTo(a[0], a[1]); else ch.grass.lineTo(a[0], a[1]); }
       for (let k = c1; k >= c0; k--) { const i = k % N, a = off(i, -edgeOff(i, -1)); ch.grass.lineTo(a[0], a[1]); }
@@ -387,7 +389,7 @@
         for (const side of [-1, 1]) {
           const bit = side < 0 ? 1 : 2;
           if ((T.gravel[i] & bit) && (T.gravel[j] & bit)) {
-            const w1 = T.wall[i] - 1.2, w2 = T.wall[j] - 1.2;
+            const w1 = wallS(i, side) - 1.2, w2 = wallS(j, side) - 1.2;
             // starts just under the track edge (the kerbs are drawn on top), so no grass shows next to the kerbs or the track
             const g0 = hw - 0.25;
             const a = off(i, side * g0), b = off(j, side * g0), c = off(j, side * w2), d = off(i, side * w1);
@@ -484,8 +486,8 @@
       G.deco.push({ pts: pts, color: color, stripe: stripe });
     }
     const standSide = T.pit ? -T.pit.side : -T.poleSide;
-    const wallS = T.wall[0];
-    for (let s = -300; s < 200; s += 64) block(s, s + 56, standSide * (wallS + 5), standSide * (wallS + 19), '#2d4f8c', '#e8e8e8');
+    const wall0 = (standSide > 0 ? T.wallP : T.wallN)[0];
+    for (let s = -300; s < 200; s += 64) block(s, s + 56, standSide * (wall0 + 5), standSide * (wall0 + 19), '#2d4f8c', '#e8e8e8');
 
     // pit lane, garages, paddock; start-light gantry over the grid
     if (T.pit) G.pit = buildPit(T);
@@ -758,6 +760,19 @@
     return [c.x + rx * cs - ry * sn, c.y + rx * sn + ry * cs];
   };
 
+  /* The track sections in view merged into one shape per layer, drawn in one go (drawing them section by section
+     leaves hairline seams where the sections meet). Kept from frame to frame until the set of sections in view changes:
+     less work and less garbage each frame. Returns a function: layer name -> shape. */
+  Renderer.prototype.mergeFn = function (G, vis) {
+    const visKey = this.visKey(vis);
+    if (G.mergeKey !== visKey) { G.mergeKey = visKey; G.merged = {}; }
+    const merged = G.merged;
+    return function (key) {
+      let p = merged[key];
+      if (!p) { p = new Path2D(); for (const ch of vis) p.addPath(ch[key]); merged[key] = p; }
+      return p;
+    };
+  };
   /* Which track sections are in view, as a short text (to know when shapes made from them must be made again). */
   Renderer.prototype.visKey = function (vis) {
     let k = '';
@@ -793,10 +808,9 @@
     let tileWhy = null;
     if (this.tilesOn) {
       if (this.tilesBroken) tileWhy = 'off: went wrong';
-      else if (wet > 0.02) tileWhy = 'off: wet track';
       else if (this.tileMode !== 'always' && (this.cpu || this.accel !== true)) tileWhy = this.cpu || this.accel === false ? 'off: no graphics chip' : 'checking graphics chip';
     }
-    const tiled = this.tilesOn && !tileWhy && this.drawTiles(ctx, G, T);
+    const tiled = this.tilesOn && !tileWhy && this.drawTiles(ctx, G, T, wet, rain);
     this.tileFrame = tiled;
     this.tileWhy = !this.tilesOn ? null : tiled ? 'on' : tileWhy || 'getting ready';
     if (tiled) {
@@ -807,6 +821,19 @@
         if (frame.garage && frame.garage.length) this.drawGaragePatch(ctx, G.pit, frame.garage, vc, vr);
         ctx.restore();
       }
+      // drying: the dry line on the wet tarmac, with the kerbs, white lines, walls, start line and grid boxes over it,
+      // as they always were (they are in the tiles too, but the dry line goes under them). Only in the strip the dry
+      // line can cover: elsewhere the see-through lines, drawn twice, would come out stronger.
+      if (wet > 0.03 && ld > 0.05) {
+        ctx.save();
+        ctx.clip(this.dryBand(T, vis));
+        this.drawDryLine(ctx, T, vis, COL, Math.min(1, wet * 4), ld);
+        ctx.lineJoin = 'round'; ctx.lineCap = 'round';
+        this.paintOnTrack(ctx, G, T, vis, this.mergeFn(G, vis), function (x, y, r) { return Math.hypot(x - vc[0], y - vc[1]) < r + vr; });
+        ctx.restore();
+      }
+      // heavy rain: standing water near the edges
+      if (wet > 0.55 && !this.lite) this.drawPuddles(ctx, vis, Math.min(1, (wet - 0.55) / 0.35), rain, night, dt, vc, vr);
     } else {
       // trees and city blocks: the shapes for the visible 100 m squares are put together only when that set of
       // squares changes (every few seconds), not every frame
@@ -814,17 +841,7 @@
       const ty0 = Math.floor((vc[1] - vr) / 100), ty1 = Math.floor((vc[1] + vr) / 100);
       const sceneKey = tx0 + ',' + tx1 + ',' + ty0 + ',' + ty1;
       if (G.sceneKey !== sceneKey) { G.scene = buildScene(G, tx0, tx1, ty0, ty1, night); G.sceneKey = sceneKey; }
-      // the visible track sections are merged into one shape per layer and drawn in one go:
-      // drawing them section by section leaves hairline seams where the sections meet
-      // (kept from frame to frame until the set of visible sections changes: less work and less garbage each frame)
-      const visKey = this.visKey(vis);
-      if (G.mergeKey !== visKey) { G.mergeKey = visKey; G.merged = {}; }
-      const merged = G.merged;
-      const merge = function (key) {
-        let p = merged[key];
-        if (!p) { p = new Path2D(); for (const ch of vis) p.addPath(ch[key]); merged[key] = p; }
-        return p;
-      };
+      const merge = this.mergeFn(G, vis);
       // mown stripes, 12 m wide, fixed to the ground. The shape of the stripes covers whole 200 m squares around the
       // view, so it is made again only when the view moves into another square (every few seconds), not for every picture.
       const stripes = function () {
@@ -944,7 +961,7 @@
     if (wet > 0.02) {
       ctx.save(); ctx.setTransform(1, 0, 0, 1, 0, 0);
       ctx.fillStyle = T.street ? 'rgba(6,10,18,' + (0.26 * wet).toFixed(3) + ')' : 'rgba(2,24,10,' + (0.3 * wet).toFixed(3) + ')';
-      ctx.fillRect(0, 0, this.cv.width, this.cv.height);
+      ctx.fillRect(0, 0, ctx.canvas.width, ctx.canvas.height);
       ctx.restore();
     }
     if (G.pit && o.cull(G.pit.cx, G.pit.cy, G.pit.r)) {
@@ -960,10 +977,20 @@
     // drying: the tyres squeeze the water away, so it starts as two patchy tracks where the wheels run, which
     // widen and join into one dry line as more cars go round
     if (wet > 0.03 && o.ld > 0.05) this.drawDryLine(ctx, T, vis, COL, Math.min(1, wet * 4), o.ld);
+    this.paintOnTrack(ctx, G, T, vis, merge, o.cull);
+
+    // heavy rain: standing water near the edges (not in the tiles: it comes and goes)
+    if (!o.tile && wet > 0.55 && !this.lite) this.drawPuddles(ctx, vis, Math.min(1, (wet - 0.55) / 0.35), o.rain, night, o.dt, o.vc, o.vr);
+  };
+
+  /* What lies on the tarmac: the banking, the kerbs, the white lines, the walls of the narrow sections, the start
+     line, the grid boxes and the DRS lines. */
+  Renderer.prototype.paintOnTrack = function (ctx, G, T, vis, merge, cull) {
+    const COL = G.pal;
     // banked corners: lighter towards the high side
     for (let v = 0; v < G.banks.length; v++) {
       const bk = G.banks[v];
-      if (!o.cull(bk.cx, bk.cy, bk.r)) continue;
+      if (!cull(bk.cx, bk.cy, bk.r)) continue;
       ctx.lineCap = 'butt';
       ctx.strokeStyle = 'rgba(255,255,255,0.02)'; ctx.lineWidth = T.hw * 0.96; ctx.stroke(bk.b1);
       ctx.strokeStyle = 'rgba(255,255,255,0.022)'; ctx.lineWidth = T.hw * 0.4; ctx.stroke(bk.b2);
@@ -985,9 +1012,29 @@
     ctx.strokeStyle = 'rgba(255,255,255,0.85)'; ctx.lineWidth = 0.22; ctx.stroke(G.marks);
     ctx.strokeStyle = 'rgba(255,255,255,0.9)'; ctx.lineWidth = 0.5; ctx.stroke(G.drsLines);
     ctx.setLineDash([1.2, 1.2]); ctx.lineWidth = 0.3; ctx.strokeStyle = 'rgba(255,255,255,0.6)'; ctx.stroke(G.drsDet); ctx.setLineDash([]);
-
-    // heavy rain: standing water near the edges
-    if (wet > 0.55 && !this.lite) this.drawPuddles(ctx, vis, Math.min(1, (wet - 0.55) / 0.35), o.rain, night, o.dt, o.vc, o.vr);
+  };
+  /* The strip of tarmac the dry line can cover (3 m either side of the racing line), for the sections in view. */
+  Renderer.prototype.dryBand = function (T, vis) {
+    const key = T.id + '|' + this.visKey(vis);
+    if (this.dryBandC && this.dryBandC.key === key) return this.dryBandC.p;
+    const p = new Path2D(), N = T.n;
+    for (const ch of vis) {
+      if (!ch.dryBand) {
+        const b = new Path2D(), L = [], Rt = [];
+        for (let k = ch.c0; k <= ch.c1; k++) {
+          const i = k % N, nx = -Math.sin(T.hd[i]), ny = Math.cos(T.hd[i]);
+          L.push(T.rlX[i] - nx * 3, T.rlY[i] - ny * 3); Rt.push(T.rlX[i] + nx * 3, T.rlY[i] + ny * 3);
+        }
+        b.moveTo(L[0], L[1]);
+        for (let q = 2; q < L.length; q += 2) b.lineTo(L[q], L[q + 1]);
+        for (let q = Rt.length - 2; q >= 0; q -= 2) b.lineTo(Rt[q], Rt[q + 1]);
+        b.closePath();
+        ch.dryBand = b;
+      }
+      p.addPath(ch.dryBand);
+    }
+    this.dryBandC = { key: key, p: p };
+    return p;
   };
 
   /* Over the ground: the cars (and a bridge between the ones under it and the rest), spray, sparks and smoke, the
@@ -1056,85 +1103,102 @@
   };
 
   // ------------------------------------------------------------- stored tiles
-  /* Stored tiles (for now only with ?tiles in the address). Everything on the ground that never moves (grass, gravel,
-     trees and buildings, the track and everything painted on it, the pit lane and its buildings) is painted once into
-     square pictures fixed to the ground ("tiles", 512 pixels across). Each picture then just lays down the few dozen
-     tiles in view, turned and sized with the camera, instead of drawing several hundred shapes: the graphics chip has
-     far less to do.
-     Each tile is painted a little sharper than the screen shows it with the car standing still. The camera zooms out at
-     speed, and a picture shrunk to less than about 70 % of its size starts to shimmer, so the tile is then also kept at
-     71 % (and 50 %) of the pixels across, made from the sharp one (quick). Tiles are painted ahead of the camera, a few
-     milliseconds' worth each frame; ones not used for a while are let go when they take too much memory. Neighbouring
-     tiles overlap by a pixel or two (they are painted a little bigger than their square), so no seams show. */
-  // (memory: up to 192 MB of tiles on a computer, 64 MB on a phone or tablet)
+  /* Stored tiles: how the ground is drawn when the graphics chip draws the page. Everything on the ground that never
+     moves (grass, gravel, trees and buildings, the track and everything painted on it, the pit lane and its buildings)
+     is painted once into square pictures fixed to the ground ("tiles", 512 pixels across). Each picture then just lays
+     down the few dozen tiles in view, turned and sized with the camera, instead of drawing several hundred shapes: the
+     graphics chip has far less to do. On a wet track a second, soaked picture of each tile is laid over the dry one, as
+     much as the track is wet.
+     Each tile is painted about as sharp as the screen shows it with the car standing still; the camera zooms out at
+     speed, to about 70 %, and the same tiles serve all the way. (Shrunk further, a picture starts to shimmer: the tile
+     is then also kept at 71 % or 50 % of the pixels across, made from the sharp one.) Tiles are painted ahead of the
+     camera, one a picture, as far as it can see zoomed right out; ones not used for a while are let go when they take
+     too much memory. Neighbouring tiles overlap by a pixel or two (they are laid down a little bigger than their
+     square), so no seams show. */
+  // (memory: up to 192 MB of tiles on a computer, 64 MB on a phone or tablet, or more if the screen needs it; never more
+  // than 1 GB, or 320 MB on a phone or tablet, where the browser allows only so much for pictures)
   const TILE_PX = [512, 362, 256], TILE_PAD = 8;
-  const TILE_MB = window.matchMedia && window.matchMedia('(pointer: coarse)').matches ? 64 : 192;
+  const COARSE = !!(window.matchMedia && window.matchMedia('(pointer: coarse)').matches);
+  const TILE_MB = COARSE ? 64 : 192, TILE_CAP_MB = COARSE ? 320 : 1024;
   let tileEpoch = 0;                // (a web font finished loading: tiles with names on them are painted again)
   if (document.fonts) {
     document.fonts.addEventListener('loadingdone', function () { tileEpoch++; });
     if (document.fonts.ready) document.fonts.ready.then(function () { tileEpoch++; });
   }
 
-  function Tiles(R, G, T, K, key, gpu) {
-    this.R = R; this.G = G; this.T = T; this.key = key; this.gpu = gpu;
+  function Tiles(R, G, T, K, key) {
+    this.R = R; this.G = G; this.T = T; this.key = key;
     this.K = K; this.TS = TILE_PX[0] / K;            // pixels a metre in the sharp tiles; a tile's size in metres
     this.map = new Map();
     this.bytes = 0; this.n = 0; this.lvl = -1; this.epoch = tileEpoch;
     this.pool = [[], [], []];                        // canvases let go, to use again
     this.vis = [];
+    this.wetMode = false; this.dryFor = 0;
     this.stat = { painted: 0, made: 0, paintMs: 0, missed: 0, frames: 0, tiled: 0 };
   }
+  /* A tile keeps up to six pictures: the dry ground and the wet ground (v = 0, 1), each sharp and, if needed, at 71 %
+     and 50 % of the pixels (l = 0, 1, 2). c[v * 3 + l]; u: the picture each was last used in. */
   Tiles.prototype.get = function (ix, iy, make) {
     const k = (ix + 32768) * 65536 + (iy + 32768);
     let t = this.map.get(k);
-    if (!t && make) { t = { ix: ix, iy: iy, k: k, c: [null, null, null], u: [0, 0, 0] }; this.map.set(k, t); }
+    if (!t && make) { t = { ix: ix, iy: iy, k: k, c: [null, null, null, null, null, null], u: [0, 0, 0, 0, 0, 0] }; this.map.set(k, t); }
     return t;
   };
   Tiles.prototype.canvas = function (l) {
     const cv = this.pool[l].pop() || document.createElement('canvas');
     if (!cv.width || cv.width !== TILE_PX[l] + 2 * TILE_PAD) cv.width = cv.height = TILE_PX[l] + 2 * TILE_PAD;
-    // (drawn by the computer's processor, not the graphics chip: painting them does not hold up the pictures on screen)
-    const g = cv.getContext('2d', this.gpu ? undefined : { willReadFrequently: true });
+    const g = cv.getContext('2d');
     g.setTransform(1, 0, 0, 1, 0, 0);
     g.globalAlpha = 1; g.globalCompositeOperation = 'source-over';
     return cv;
   };
-  /* The sharp copy of tile t, painted. */
-  Tiles.prototype.paint = function (t) {
+  /* The sharp picture of tile t, painted: the dry ground (v 0), or the ground soaked (v 1: the grass, gravel and
+     buildings darker under the rain's tint, the tarmac at its darkest). */
+  Tiles.prototype.paint = function (t, v) {
     const t0 = performance.now(), TS = this.TS, K = this.K, cv = this.canvas(0), g = cv.getContext('2d');
     const x0 = t.ix * TS, y0 = t.iy * TS, m = TILE_PAD / K;
     g.save();
     g.setTransform(K, 0, 0, K, TILE_PAD - x0 * K, TILE_PAD - y0 * K);
-    this.R.paintTile(g, this.G, this.T, x0 - m, y0 - m, x0 + TS + m, y0 + TS + m);
+    this.R.paintTile(g, this.G, this.T, x0 - m, y0 - m, x0 + TS + m, y0 + TS + m, v === 1);
     g.restore();
-    t.c[0] = cv; t.u[0] = this.n;
+    t.c[v * 3] = cv; t.u[v * 3] = this.n;
     this.bytes += cv.width * cv.height * 4;
     this.stat.painted++; this.stat.paintMs += performance.now() - t0;
   };
-  /* A smaller copy (level l) of tile t, made from its sharp one. false: there is no sharp one. */
-  Tiles.prototype.derive = function (t, l) {
-    const src = t.c[0];
+  /* A smaller picture (level l) of tile t, made from its sharp one. false: there is no sharp one. */
+  Tiles.prototype.derive = function (t, l, v) {
+    const src = t.c[v * 3];
     if (!src) return false;
     const f = TILE_PX[l] / TILE_PX[0], cv = this.canvas(l), g = cv.getContext('2d');
     g.clearRect(0, 0, cv.width, cv.height);
     g.imageSmoothingEnabled = true; g.imageSmoothingQuality = 'high';
-    // the same ground: the sharp copy's corner lands TILE_PAD * (1 - f) pixels in
+    // the same ground: the sharp picture's corner lands TILE_PAD * (1 - f) pixels in
     const o = TILE_PAD * (1 - f);
     g.drawImage(src, o, o, src.width * f, src.height * f);
-    t.c[l] = cv; t.u[l] = this.n;
+    t.c[v * 3 + l] = cv; t.u[v * 3 + l] = this.n;
     this.bytes += cv.width * cv.height * 4;
     this.stat.made++;
     return true;
   };
-  Tiles.prototype.free = function (t, l) {
-    const cv = t.c[l];
-    t.c[l] = null;
+  /* Make sure tile t has its picture (level l, dry or wet). quick: only if it can be made from a sharp one. */
+  Tiles.prototype.ready = function (t, l, v, quick) {
+    if (t.c[v * 3 + l]) return true;
+    if (l > 0 && this.derive(t, l, v)) return true;
+    if (quick) return false;
+    this.paint(t, v);
+    if (l > 0) this.derive(t, l, v);
+    return true;
+  };
+  Tiles.prototype.free = function (t, i) {
+    const cv = t.c[i];
+    t.c[i] = null;
     this.bytes -= cv.width * cv.height * 4;
-    if (this.pool[l].length < 8) this.pool[l].push(cv); else cv.width = cv.height = 0;
-    if (!t.c[0] && !t.c[1] && !t.c[2]) this.map.delete(t.k);
+    if (this.pool[i % 3].length < 8) this.pool[i % 3].push(cv); else cv.width = cv.height = 0;
+    for (let q = 0; q < 6; q++) if (t.c[q]) return;
+    this.map.delete(t.k);
   };
   Tiles.prototype.drop = function () {
-    this.map.forEach(function (t) { for (let l = 0; l < 3; l++) if (t.c[l]) t.c[l].width = t.c[l].height = 0; });
+    this.map.forEach(function (t) { for (let q = 0; q < 6; q++) if (t.c[q]) t.c[q].width = t.c[q].height = 0; });
     this.map.clear(); this.bytes = 0;
     this.pool.forEach(function (p) { p.forEach(function (cv) { cv.width = cv.height = 0; }); p.length = 0; });
   };
@@ -1150,19 +1214,24 @@
     return x1 > -2 && x0 < R.w + 2 && y1 > -2 && y0 < R.h + 2;
   };
   /* Lay down the tiles in view. false: some are not painted yet (this picture is drawn the old way, and more tiles are
-     painted for the next one). */
-  Tiles.prototype.draw = function (ctx) {
+     painted for the next one). wet, rain: the weather. On a wet track the wet pictures are laid over the dry ones, as
+     much as the track is wet (wet 0..1): exactly the old picture's darker tint and tarmac. While rain is coming or the
+     track is wet, the wet pictures are painted ahead too; when it has been dry for a while they are let go. */
+  Tiles.prototype.draw = function (ctx, wet, rain) {
     const R = this.R, cam = R.cam, s = cam.z * R.dpr, TS = this.TS, t0 = performance.now();
     if (this.epoch !== tileEpoch) { this.drop(); this.epoch = tileEpoch; }
     const n = ++this.n;
     this.stat.frames++;
+    const wa = wet > 0.02 ? Math.min(1, wet) : 0, needDry = wa < 0.999, needWet = wa > 0;
+    if (wa > 0 || rain > 0.01 || wet > 0.005) { this.wetMode = true; this.dryFor = 0; }
+    else if (this.wetMode && ++this.dryFor > 600) { this.wetMode = false; this.dropWet(); }
     // how sharp: the copy whose pixels come closest to the screen's, without enlarging it much
     // (and not switching back and forth: a little room either way)
     const ratio = function (l) { return s * TS / TILE_PX[l]; };
     let l = this.lvl;
-    if (l < 0) { l = 0; while (l < 2 && ratio(l) < 0.7) l++; }
-    while (l > 0 && ratio(l) > 1.04) l--;
-    while (l < 2 && ratio(l) < 0.68) l++;
+    if (l < 0) l = 0;
+    while (l > 0 && ratio(l) > 1.1) l--;
+    while (l < 2 && ratio(l) < 0.66) l++;
     this.lvl = l;
     // the tiles in view
     let x0 = Infinity, x1 = -Infinity, y0 = Infinity, y1 = -Infinity;
@@ -1176,19 +1245,29 @@
       for (let iy = Math.floor(y0 / TS); iy <= Math.floor(y1 / TS); iy++) if (this.onScreen(ix, iy)) vis.push(this.get(ix, iy, true));
     }
     // the ones still to paint (or to make smaller): a few at once if need be, otherwise this picture is drawn the old way
+    // (and in the first picture, or if the camera has jumped somewhere else, all of them now: one longer picture rather
+    // than several slow ones)
+    const vc = R.toWorld(R.w / 2, R.h / 2), jumped = !this.lastC || Math.hypot(vc[0] - this.lastC[0], vc[1] - this.lastC[1]) > this.reach();
+    this.lastC = vc;
+    const lacks = function (t) { return (needDry && !t.c[l]) || (needWet && !t.c[3 + l]); };
     let missing = 0;
-    for (let i = 0; i < vis.length; i++) if (!vis[i].c[l] && !(l > 0 && this.derive(vis[i], l))) missing++;
+    for (let i = 0; i < vis.length; i++) {
+      const t = vis[i];
+      if (needDry) this.ready(t, l, 0, true);
+      if (needWet) this.ready(t, l, 1, true);
+      if (lacks(t)) missing++;
+    }
     if (missing) {
-      // (painted by the graphics chip, a tile takes the page very little time but the chip some: a few at a time;
-      // painted by the processor: as many as fit in 14 ms)
-      const cap = missing <= 4 ? Infinity : 14, most = this.gpu && missing > 6 ? 6 : Infinity;
+      // (a tile takes the page very little time to paint but the graphics chip some: six at a time at most, within
+      // 14 ms)
+      const cap = missing <= 4 || jumped ? Infinity : 14, most = missing > 6 && !jumped ? 6 : Infinity;
       let done = 0;
       for (let i = 0; i < vis.length && missing; i++) {
         const t = vis[i];
-        if (t.c[l]) continue;
+        if (!lacks(t)) continue;
         if (performance.now() - t0 > cap || done++ >= most) break;
-        if (!t.c[0]) this.paint(t);
-        if (l > 0) this.derive(t, l);
+        if (needDry) this.ready(t, l, 0, false);
+        if (needWet) this.ready(t, l, 1, false);
         missing--;
       }
       if (missing) { this.stat.missed++; return false; }
@@ -1197,25 +1276,30 @@
     ctx.save();
     ctx.imageSmoothingEnabled = true; ctx.imageSmoothingQuality = 'low';
     const P = TILE_PX[l], K = P / TS, e = 1.5 / s, sx = TILE_PAD - e * K, sw = P + 2 * e * K;
-    for (let i = 0; i < vis.length; i++) {
-      const t = vis[i];
-      ctx.drawImage(t.c[l], sx, sx, sw, sw, t.ix * TS - e, t.iy * TS - e, TS + 2 * e, TS + 2 * e);
-      t.u[l] = n;
+    for (let v = needDry ? 0 : 1; v <= (needWet ? 1 : 0); v++) {
+      ctx.globalAlpha = v ? wa : 1;
+      for (let i = 0; i < vis.length; i++) {
+        const t = vis[i];
+        ctx.drawImage(t.c[v * 3 + l], sx, sx, sw, sw, t.ix * TS - e, t.iy * TS - e, TS + 2 * e, TS + 2 * e);
+        t.u[v * 3 + l] = n;
+      }
     }
     ctx.restore();
     this.stat.tiled++;
-    // paint ahead, for a few milliseconds
-    this.ahead(l, t0);
-    if (this.bytes > TILE_MB * 1048576) this.evict();
+    // paint ahead
+    this.ahead(l);
+    if (this.bytes > this.limit()) this.evict();
     return true;
   };
   /* Paint the tiles the camera will need soon: around where it will be in half a second, as far as the screen reaches
-     in any direction (it may turn), nearest first, until this picture's few milliseconds are used up. */
-  Tiles.prototype.ahead = function (l, t0) {
-    const R = this.R, cam = R.cam, TS = this.TS, v = R.camV || [0, 0];
-    const budget = F1.clamp((R.frameMs || 16) * 0.15, 3, 8);
-    if (performance.now() - t0 > budget) return;
-    const vc = R.toWorld(R.w / 2, R.h / 2), vr = Math.hypot(R.w, R.h) / 2 / cam.z;
+     in any direction (it may turn) with the camera zoomed right out (it zooms out as the car speeds up, out of a
+     corner), nearest first: one each picture (two while the wet ones are being made too). A tile takes the page very
+     little time to paint but gives the graphics chip a little work: one at a time keeps that even. */
+  Tiles.prototype.ahead = function (l) {
+    const R = this.R, TS = this.TS, v = R.camV || [0, 0], t0 = performance.now(), wetToo = this.wetMode;
+    // (behind the loading card: as many as fit in 30 ms each picture, so the race starts with them all ready)
+    const rush = !!R.tileRush, budget = rush ? 30 : F1.clamp((R.frameMs || 16) * 0.15, 3, 8), most = rush ? Infinity : wetToo ? 2 : 1;
+    const vc = R.toWorld(R.w / 2, R.h / 2), vr = this.reach();
     const px = vc[0] + v[0] * 0.5, py = vc[1] + v[1] * 0.5, rr = (vr + TS * 0.75) * (vr + TS * 0.75);
     const want = [];
     for (let ix = Math.floor((px - vr) / TS); ix <= Math.floor((px + vr) / TS); ix++) {
@@ -1223,39 +1307,60 @@
         const dx = (ix + 0.5) * TS - px, dy = (iy + 0.5) * TS - py, d = dx * dx + dy * dy;
         if (d > rr) continue;
         const t = this.get(ix, iy, false);
-        if (!t || !t.c[l]) want.push([d, ix, iy]);
+        if (!t || !t.c[l] || (wetToo && !t.c[3 + l])) want.push([d, ix, iy]);
       }
     }
     if (!want.length) return;
     want.sort(function (a, b) { return a[0] - b[0]; });
+    let done = 0;
     for (let i = 0; i < want.length; i++) {
-      if (performance.now() - t0 > budget || (this.gpu && i >= 2)) break;
+      if (performance.now() - t0 > budget || done >= most) break;
       const t = this.get(want[i][1], want[i][2], true);
-      if (!t.c[0]) this.paint(t);
-      if (l > 0 && !t.c[l]) this.derive(t, l);
+      if (!t.c[l]) { this.ready(t, l, 0, false); done++; }
+      if (wetToo && !t.c[3 + l] && done < most) { this.ready(t, l, 1, false); done++; }
     }
   };
-  /* Too much memory: let go of the copies used longest ago (never ones in this picture). */
+  /* Too much memory: let go of the pictures used longest ago (never ones in this picture). */
   Tiles.prototype.evict = function () {
     const n = this.n, all = [];
-    this.map.forEach(function (t) { for (let l = 0; l < 3; l++) if (t.c[l] && t.u[l] < n) all.push([t.u[l], l, t]); });
+    this.map.forEach(function (t) { for (let q = 0; q < 6; q++) if (t.c[q] && t.u[q] < n) all.push([t.u[q], q, t]); });
     all.sort(function (a, b) { return a[0] - b[0]; });
-    for (let i = 0; i < all.length && this.bytes > TILE_MB * 1048576 * 0.8; i++) this.free(all[i][2], all[i][1]);
+    for (let i = 0; i < all.length && this.bytes > this.limit() * 0.8; i++) this.free(all[i][2], all[i][1]);
+  };
+  /* Dry for a while: the wet pictures are let go. */
+  Tiles.prototype.dropWet = function () {
+    const self = this, list = [];
+    this.map.forEach(function (t) { for (let q = 3; q < 6; q++) if (t.c[q]) list.push([t, q]); });
+    for (let i = 0; i < list.length; i++) self.free(list[i][0], list[i][1]);
+  };
+  /* How far from the middle of the screen the camera can see, in metres, when zoomed right out (at top speed). */
+  Tiles.prototype.reach = function () {
+    const R = this.R;
+    return Math.hypot(R.w, R.h) / 2 / (0.7 * (R.camBase || R.cam.z));
+  };
+  /* The memory the tiles may use: 192 MB (64 on a phone), or more if the screen needs it (about twice the tiles
+     around the camera when zoomed right out, so the ones painted ahead are never let go before they are used); twice
+     that while the wet pictures are kept too. At most 1 GB (320 MB on a phone or tablet). */
+  Tiles.prototype.limit = function () {
+    const r = this.reach() + this.TS * 0.75, n = Math.PI * r * r / (this.TS * this.TS) * 1.3;
+    return Math.min(TILE_CAP_MB * 1048576, Math.max(TILE_MB * 1048576, 2 * n * Math.pow(TILE_PX[0] + 2 * TILE_PAD, 2) * 4) * (this.wetMode ? 2 : 1));
   };
 
   /* Lay down the ground from the stored tiles (made the first time they are needed). false: not ready this time. */
-  Renderer.prototype.drawTiles = function (ctx, G, T) {
-    // sharp tiles: a little more than the screen's pixels a metre with the camera at rest (in steps of 1.41 times, so
-    // a slightly different window size uses the same tiles)
+  Renderer.prototype.drawTiles = function (ctx, G, T, wet, rain) {
+    // how sharp: about the screen's own pixels a metre with the camera at rest (from 97 % to 106 % of them, in steps of
+    // 9 %, so a slightly different window size uses the same tiles). The camera zooms out to 70 % at speed, and the
+    // tiles are shown from 100 % down to about 68 % of their size: one copy covers it all, so they never have to switch
+    // to smaller copies while driving (which would mean making many at once).
     const smax = (this.camBase || this.cam.z) * this.dpr;
-    const K = Math.pow(2, Math.ceil(2 * Math.log2(smax / 1.04) - 1e-9) / 2);
+    const K = Math.pow(2, Math.floor(8 * Math.log2(smax / 0.97) + 1e-9) / 8);
     const key = K + (this.lite ? 'L' : '');
     if (!G.tiles || G.tiles.key !== key) {
       if (G.tiles) G.tiles.drop();
-      G.tiles = new Tiles(this, G, T, K, key, this.tilesGpu);
+      G.tiles = new Tiles(this, G, T, K, key);
     }
     try {
-      return G.tiles.draw(ctx);
+      return G.tiles.draw(ctx, wet || 0, rain || 0);
     } catch (err) {
       // (something went wrong: back to drawing the old way)
       console.error(err);
@@ -1265,7 +1370,7 @@
   };
   /* One tile's square of ground (x0..x1, y0..y1 in metres), painted into g (already turned into metres): the same
      things in the same order as on the screen, the ones that reach into the square. */
-  Renderer.prototype.paintTile = function (g, G, T, x0, y0, x1, y1) {
+  Renderer.prototype.paintTile = function (g, G, T, x0, y0, x1, y1, wet) {
     g.fillStyle = T.street ? G.pal.city : G.pal.forest;
     g.fillRect(x0, y0, x1 - x0, y1 - y0);
     g.lineJoin = 'round'; g.lineCap = 'round';     // (as on the screen: the grandstands' corners are rounded)
@@ -1286,12 +1391,12 @@
       for (let x = Math.floor(x0 / 24) * 24; x < x1; x += 24) p.rect(x, y0, 12, y1 - y0);
       return p;
     };
-    this.paintGround(g, G, T, { SC: SC, vis: vis, merge: merge, stripes: stripes, cull: cull, tile: true, wet: 0, ld: 0, rain: 0, dt: 0 });
+    this.paintGround(g, G, T, { SC: SC, vis: vis, merge: merge, stripes: stripes, cull: cull, tile: true, wet: wet ? 1 : 0, ld: 0, rain: 0, dt: 0 });
   };
   Renderer.prototype.tileStats = function (T) {
     const G = T ? this.tracks[T.id] : null, TL = G && G.tiles;
     if (!TL) return null;
-    return { K: TL.K, TS: TL.TS, lvl: TL.lvl, tiles: TL.map.size, vis: TL.vis.length, mb: TL.bytes / 1048576, stat: TL.stat };
+    return { K: TL.K, TS: TL.TS, lvl: TL.lvl, tiles: TL.map.size, vis: TL.vis.length, mb: TL.bytes / 1048576, wet: TL.wetMode, stat: TL.stat };
   };
 
   /* Spray: the fine mist a car throws up hangs in the air where the car has been and fades within half a second. It is
@@ -2599,7 +2704,7 @@
         ctx.font = '400 ' + Math.round(12 * k) + 'px ' + FONT;
         ctx.fillText(fb.freezes ? 'Freezes ' + fb.freezes + ' · longest ' + fb.longest.toFixed(2) + ' s' : 'No freezes', x, y);
         if (fb.freezes) { y += lh; ctx.fillStyle = '#ffb020'; ctx.fillText('Last: ' + fb.cause, x, y); }
-        // (?tiles: whether the stored tiles are in use)
+        // (whether the stored tiles are in use)
         if (fb.tiles) { y += lh; ctx.fillStyle = fb.tiles === 'on' ? '#3ddc84' : '#9aa1a8'; ctx.fillText('Stored tiles ' + fb.tiles, x, y); }
         ctx.restore();
         fy += bh + 8;
@@ -2815,7 +2920,7 @@
 
   /* Phones: a slim dashboard that fits between the two thumbs. (DRS is shown on its own button.) */
   Renderer.prototype.drawSlimDash = function (hud, TL) {
-    const ctx = this.ctx, W = this.w, H = this.h;
+    const ctx = this.ctx, H = this.h;
     const bw = TL.dashW, bh = 56, bx = TL.dashX, by = H - bh - 8;
     // gap to the ghost, just above
     if (hud.delta) {
@@ -2831,6 +2936,18 @@
     }
     if (hud.tow) this.drawTow(bx + bw, by - 6, 0.86);
     if (hud.tyre) this.drawTyrePill(bx, by - 6, 0.86, hud.tyre, false);
+    if (this.tilesOn) {
+      // (stored: the box and what changes only now and then kept as a picture, the numbers written over it)
+      const sec = hud.sectors || [], gaps = !!(hud.gaps && (hud.gaps.a || hud.gaps.b));
+      const key = [bw, hud.unit, hud.pit ? Math.floor(performance.now() / 400) % 2 : '-', sec[0], sec[1], sec[2], hud.posText, hud.lapText,
+        gaps ? 'g' : (hud.best || '') + '|' + (hud.pb || '') + (hud.bestPurple ? 'p' : '')].join(',');
+      this.stored('slim', key, bx, by, bw, bh, function (g) { slimPanel(g, hud, bx, by, bw, bh); });
+    } else slimPanel(ctx, hud, bx, by, bw, bh);
+    slimLive(ctx, hud, bx, by, bw, bh);
+  };
+  /* Phones: the slim dashboard's box and what changes only now and then (sectors, unit or pit limiter, position, lap,
+     the best lap when there is room) ... */
+  function slimPanel(ctx, hud, bx, by, bw, bh) {
     ctx.fillStyle = 'rgba(10,10,14,0.88)';
     roundRect(ctx, bx, by, bw, bh, 10); ctx.fill();
     // the three sectors: thin bars along the top edge
@@ -2841,11 +2958,6 @@
         roundRect(ctx, bx + 12 + i * (sw + 4), by + 5, sw, 4, 2); ctx.fill();
       }
     }
-    // gear, speed
-    ctx.textAlign = 'center'; ctx.font = '800 24px ' + FONT; ctx.fillStyle = '#ffd600';
-    ctx.fillText(String(hud.gear), bx + 22, by + 28);
-    ctx.textAlign = 'right'; ctx.font = '800 30px ' + FONT; ctx.fillStyle = '#fff';
-    ctx.fillText(String(hud.speed), bx + 96, by + 28);
     ctx.textAlign = 'left';
     if (hud.pit) {
       ctx.font = '800 10px ' + FONT; ctx.fillStyle = Math.floor(performance.now() / 400) % 2 ? '#6ea2ff' : '#2f7bff';
@@ -2858,14 +2970,31 @@
     // position
     ctx.textAlign = 'right'; ctx.font = '800 21px ' + FONT; ctx.fillStyle = '#fff';
     ctx.fillText(hud.posText || '', bx + bw - 12, by + 27);
-    // bottom line: lap, (best lap when there is room), current lap time
+    // bottom line: lap, and the best lap when there is room (races: the live gaps instead, with the numbers)
     ctx.font = '700 11px ' + FONT; ctx.textAlign = 'left'; ctx.fillStyle = '#cfd3d8';
     ctx.fillText(hud.lapText || '', bx + 12, by + 46);
+    const lapW = textW(ctx, hud.lapText || '');
+    const best = hud.best ? 'BEST ' + hud.best : hud.pb ? 'PB ' + hud.pb : '';
+    if (!(hud.gaps && (hud.gaps.a || hud.gaps.b)) && best) {
+      ctx.font = '700 11px ' + FONT;
+      const l = bx + 12 + lapW + 12, r = bx + bw - 12 - 62 - 12;
+      if (r - l >= textW(ctx, best)) {
+        ctx.textAlign = 'center'; ctx.fillStyle = hud.best && hud.bestPurple ? '#c77dff' : hud.best ? '#cfd3d8' : '#9ff0b4';
+        ctx.fillText(best, (l + r) / 2, by + 46);
+      }
+    }
+  }
+  /* ... and what changes all the time: gear, speed, the current lap time, the live gaps. */
+  function slimLive(ctx, hud, bx, by, bw, bh) {
+    ctx.textAlign = 'center'; ctx.font = '800 24px ' + FONT; ctx.fillStyle = '#ffd600';
+    ctx.fillText(String(hud.gear), bx + 22, by + 28);
+    ctx.textAlign = 'right'; ctx.font = '800 30px ' + FONT; ctx.fillStyle = '#fff';
+    ctx.fillText(String(hud.speed), bx + 96, by + 28);
+    ctx.font = '700 11px ' + FONT;
     const lapW = textW(ctx, hud.lapText || '');
     ctx.textAlign = 'right'; ctx.font = '700 12px ' + FONT; ctx.fillStyle = '#fff';
     const cur = hud.cur || '--:--.---';
     ctx.fillText(cur, bx + bw - 12, by + 46);
-    const best = hud.best ? 'BEST ' + hud.best : hud.pb ? 'PB ' + hud.pb : '';
     if (hud.gaps && (hud.gaps.a || hud.gaps.b)) {
       // races: the live gaps in the middle of the bottom line (ahead · behind)
       const l = bx + 12 + lapW + 10, r = bx + bw - 12 - textW(ctx, cur) - 10;
@@ -2879,15 +3008,9 @@
         if (i) { ctx.fillStyle = '#6b7079'; ctx.fillText('  ·  ', x, by + 46); x += textW(ctx, '  ·  '); }
         ctx.fillStyle = parts[i].color; ctx.fillText(parts[i].text, x, by + 46); x += textW(ctx, parts[i].text);
       }
-    } else if (best) {
-      ctx.font = '700 11px ' + FONT;
-      const l = bx + 12 + lapW + 12, r = bx + bw - 12 - 62 - 12;
-      if (r - l >= textW(ctx, best)) {
-        ctx.textAlign = 'center'; ctx.fillStyle = hud.best && hud.bestPurple ? '#c77dff' : hud.best ? '#cfd3d8' : '#9ff0b4';
-        ctx.fillText(best, (l + r) / 2, by + 46);
-      }
     }
-  };
+    ctx.textAlign = 'left';
+  }
 
   /* A tyre: a ring in the compound's colour (soft red, medium yellow, hard white, intermediate green, wet blue) with
      its letter in the middle when there is room. onLight: drawn on a light background (your row in the tower). */

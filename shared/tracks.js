@@ -827,6 +827,7 @@
     if (T.bridge) for (let i = 0; i < N; i++) if (F1.levelAt(T, i * ds) !== 0) T.gravel[i] = 0;
     dropTinyKerbs(T);
     computeWalls(T, hw + def.runoff, def, vertexS);
+    sideWalls(T);
     findDrsZones(T);
     computePit(T, def.pitLane, def.pitSide);
     // pole position goes on the inside of the first proper corner
@@ -959,6 +960,77 @@
     T.maxWall = maxWall;
   }
 
+  /* The barrier on each side of the track (the walls the cars hit, and the ones drawn). Where another part of the
+     circuit comes close (side by side, across a hairpin or a set of esses, on the inside of a tight bend, or meeting at
+     an angle), the run-off on that side stops short of the halfway line between the two parts: their barriers meet
+     back to back there, and neither part's grass or gravel covers the other's barrier. A patch of ground belongs to
+     the part of the track it is nearest to, measured out along each point's own sideways line.
+     T.wallN / T.wallP: the barrier distance on the side of negative / positive offsets (never more than T.wall);
+     T.limN / T.limP: how far the run-off may reach there at most (for drawing). */
+  function sideWalls(T) {
+    const N = T.n, X = T.x, Y = T.y, NX = T.nx, NY = T.ny, ds = T.ds, hw = T.hw;
+    const cell = 24, grid = new Map(), key = function (cx, cy) { return cx * 100003 + cy; };
+    for (let j = 0; j < N; j++) {
+      const k = key(Math.floor(X[j] / cell), Math.floor(Y[j] / cell));
+      let l = grid.get(k);
+      if (!l) grid.set(k, l = []);
+      l.push(j);
+    }
+    // (at the bridge the two roads cross at different heights: neither takes the other's ground)
+    const lvl = new Int8Array(N);
+    if (T.bridge) for (let j = 0; j < N; j++) lvl[j] = F1.levelAt(T, j * ds);
+    // is the ground d metres out from point i, on side s, nearer to another part of the track than to this one?
+    const taken = function (i, s, d) {
+      const px = X[i] + NX[i] * s * d, py = Y[i] + NY[i] * s * d, lim = d - 0.5, lim2 = lim * lim;
+      if (lim <= 0) return false;
+      const c0 = Math.floor((px - lim) / cell), c1 = Math.floor((px + lim) / cell);
+      const r0 = Math.floor((py - lim) / cell), r1 = Math.floor((py + lim) / cell);
+      for (let a = c0; a <= c1; a++) for (let b = r0; b <= r1; b++) {
+        const l = grid.get(key(a, b));
+        if (!l) continue;
+        for (let q = 0; q < l.length; q++) {
+          const j = l[q], dx = X[j] - px, dy = Y[j] - py;
+          if (dx * dx + dy * dy >= lim2) continue;
+          if (lvl[i] && lvl[j] && lvl[i] !== lvl[j]) continue;
+          return true;
+        }
+      }
+      return false;
+    };
+    const minW = hw + 1.6, far = T.maxWall + 1.3;          // (just clear of the kerbs; the barrier is ~1.2 m deep)
+    for (const s of [-1, 1]) {
+      const W = new Float32Array(N), Lim = new Float32Array(N);
+      for (let i = 0; i < N; i++) {
+        // out from the track's edge, two metres at a time; at the first step on someone else's ground, find the line
+        let stop = far;
+        for (let d = hw + 1; d < far + 2; d += 2) {
+          if (!taken(i, s, Math.min(d, far))) continue;
+          let lo = d - 2, hi = Math.min(d, far);
+          for (let it = 0; it < 7; it++) { const m = (lo + hi) / 2; if (taken(i, s, m)) hi = m; else lo = m; }
+          stop = lo;
+          break;
+        }
+        Lim[i] = stop - 1.3;
+        // the inside of a tight bend: the barrier stays short of the bend's centre, where the grass stops (beyond it,
+        // the barrier would fold over itself)
+        const k = T.curv[i];
+        if (k !== 0 && Math.sign(k) === -s) Lim[i] = Math.min(Lim[i], 0.9 / Math.abs(k) - 1.0);
+        W[i] = Math.min(T.wall[i], Math.max(minW, Lim[i]));
+      }
+      // smooth, as the walls are (so the barrier does not zig-zag)
+      const tmp = new Float32Array(N);
+      for (let it = 0; it < 3; it++) {
+        for (let i = 0; i < N; i++) {
+          let m = W[i];
+          for (let k = -12; k <= 12; k++) m = Math.min(m, W[(i + k + N) % N] + Math.abs(k) * 0.8);
+          tmp[i] = m;
+        }
+        W.set(tmp);
+      }
+      if (s < 0) { T.wallN = W; T.limN = Lim; } else { T.wallP = W; T.limP = Lim; }
+    }
+  }
+
   /* DRS zones on the two longest straights. Detection point 180 m before each zone. */
   function findDrsZones(T) {
     const N = T.n, ds = T.ds, K = T.curv, L = T.length;
@@ -1053,14 +1125,14 @@
       // working lane: full width in front of the garages, tapering in and out over 15 m
       T.pitWork[i] = P.work * Math.max(0, Math.min(1, (rel - (relG0 - 15)) / 15, ((relG1 + 15) - rel) / 15));
       // barrier on the pit side: the garage fronts along the garages, otherwise at least clear of the pit road
-      T.wallPit[i] = rel >= relG0 - 1 && rel <= relG1 + 1 ? P.garFront : Math.max(T.wall[i], off + P.half + T.pitWork[i] + 3);
+      T.wallPit[i] = rel >= relG0 - 1 && rel <= relG1 + 1 ? P.garFront : Math.max((P.side > 0 ? T.wallP : T.wallN)[i], off + P.half + T.pitWork[i] + 3);
     }
   }
 
   /* Barrier distance at sample idx on the side of signed offset d. */
   F1.wallAt = function (T, idx, d) {
     if (T.pit && T.wallPit[idx] > 0 && (d > 0 ? 1 : -1) === T.pit.side) return T.wallPit[idx];
-    return T.wall[idx];
+    return d > 0 ? T.wallP[idx] : T.wallN[idx];
   };
 
   /* Where a player starts in practice: in their team's pit box, facing down the pit lane. */

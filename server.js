@@ -90,6 +90,7 @@ function newRoom(code, hostId) {
       p1: 0, p2: 0, p3: 0, qualiLaps: 2, reverseGrid: false, raceLaps: 5, aiCount: 21, aiLevel: 'medium',
       drafting: true, tyreWear: true, weather: true },      // race conditions (the host's switches)
     state: 'lobby',
+    open: false,                     // open: listed with its code under Find a room, anyone can join; else the code only
     session: null,
     carOf: new Map(), ownerOf: new Map(), inputQ: new Map(), lastIn: new Map(), ack: new Map(), lastSeq: new Map(),
     qualiOrder: null, weekendAI: null, stages: null, stageIdx: 0, stage: null, timer: null, lastResults: null,
@@ -108,6 +109,7 @@ function roomPayload(room) {
     code: room.code,
     hostId: room.hostId,
     state: room.state,
+    open: !!room.open,
     settings: room.settings,
     maxHumans: MAX_HUMANS,
     hostAway: room.hostAway,
@@ -672,6 +674,31 @@ function leaveRoom(socket) {
   broadcastSeason(room);
 }
 
+/* The rooms on the server, for Find a room: open rooms first (with their code, to join), then private ones (no code:
+   they are joined with the code from the host). */
+function roomList() {
+  const out = [];
+  rooms.forEach(function (room) {
+    if (!room.players.size) return;
+    const host = room.players.get(room.hostId), se = room.season, st = room.settings;
+    const champ = !!se || st.mode === 'champ';
+    out.push({
+      code: room.open ? room.code : null,
+      open: !!room.open,
+      host: host ? host.name : room.awayName || 'Host',
+      champ: champ,
+      track: room.session ? room.session.track.id : se ? (se.done ? null : se.calendar[se.rounds.length]) : champ ? null : st.track,
+      races: se ? se.calendar.length : champ ? (st.calendar || []).length : 0,
+      round: se ? Math.min(se.calendar.length, se.rounds.length + 1) : 0,
+      players: room.players.size,
+      max: MAX_HUMANS,
+      state: room.hostAway ? 'away' : room.session ? room.stage || room.state : room.state
+    });
+  });
+  out.sort(function (a, b) { return (b.open - a.open) || (b.players - a.players) || (a.host < b.host ? -1 : 1); });
+  return out.slice(0, 40);
+}
+
 function roomOfHost(socket) {
   const room = rooms.get(socket.data.room);
   return room && room.hostId === socket.id ? room : null;
@@ -764,6 +791,22 @@ io.on('connection', function (socket) {
 
   socket.on('leaveRoom', function () { leaveRoom(socket); });
 
+  // Find a room: the rooms on the server (at most four times a second per player)
+  socket.on('listRooms', function (ack) {
+    if (typeof ack !== 'function') return;
+    const now = Date.now();
+    if (now - (socket.data.listAt || 0) < 250) return ack({ ok: false });
+    socket.data.listAt = now;
+    ack({ ok: true, rooms: roomList() });
+  });
+  // the host opens the room to anyone (listed under Find a room) or makes it private again (the code only)
+  socket.on('roomOpen', function (v) {
+    const room = roomOfHost(socket);
+    if (!room || room.open === (v === true)) return;
+    room.open = v === true;
+    broadcastRoom(room);
+  });
+
   socket.on('pickDriver', function (driverId) {
     const room = rooms.get(socket.data.room);
     if (!room) return;
@@ -810,6 +853,8 @@ io.on('connection', function (socket) {
   socket.on('start', function () {
     const room = roomOfHost(socket);
     if (!room || room.season || (room.state !== 'lobby' && room.state !== 'results')) return;
+    // everyone in the room (the host too) has pressed Ready
+    for (const p of room.players.values()) if (!p.ready) return;
     room.qualiOrder = null;
     room.weekendAI = null;
     room.lastResults = null;
