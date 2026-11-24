@@ -49,31 +49,32 @@
       <div class="panel-head">
         <button class="btn ghost" data-go="home">← Back</button>
         <h2>Practice</h2>
-        <button class="btn red" id="practice-start">Start practice</button>
+        <button class="btn red start-head" id="practice-start">Start practice</button>
       </div>
-      <div class="cols">
-        <div class="col narrow">
-          <h3>Track</h3>
-          <div class="tracks" id="practice-tracks"></div>
-          <h3>AI cars on track</h3>
-          <div class="row"><input type="range" id="practice-ai" min="0" max="21" value="10"><span class="val" id="practice-ai-val">10</span></div>
-          <h3>AI difficulty</h3>
-          <div class="seg levels" id="practice-level">
-            <button data-v="easy">Easy</button><button data-v="medium" class="on">Medium</button><button data-v="hard">Hard</button><button data-v="extrahard">Extra hard</button><button data-v="expert">Expert</button>
+      <div class="setup">
+        <div class="setup-picks">
+          <div class="set-box"><h3>Track</h3><div class="pick" id="practice-trackpick" role="button" tabindex="0"></div></div>
+          <div class="set-box"><h3>Your driver</h3><div class="pick drv" id="practice-driverpick" role="button" tabindex="0"></div></div>
+        </div>
+        <div class="setup-opts">
+          <div class="set-box set-2">
+            <div><h3>AI cars on track</h3><div class="row"><input type="range" id="practice-ai" min="0" max="21" value="10"><span class="val" id="practice-ai-val">10</span></div></div>
+            <div><h3>AI difficulty</h3><div class="seg levels" id="practice-level">
+                <button data-v="easy">Easy</button><button data-v="medium" class="on">Medium</button><button data-v="hard">Hard</button><button data-v="extrahard">Extra hard</button><button data-v="expert">Expert</button>
+              </div></div>
           </div>
-          <h3>Collisions</h3>
-          <label class="check"><input type="checkbox" id="practice-coll" checked> Cars can hit each other</label>
-          <h3>Conditions</h3>
-          <div class="cond-box">
-            <label class="check" title="Right behind another car on a straight there is less air to push through: you go faster"><input type="checkbox" id="practice-draft"> Drafting <span class="muted-inline">(slipstream on the straights)</span></label>
-            <label class="check" title="Tyres wear out as you drive; in a race at least one pit stop is compulsory"><input type="checkbox" id="practice-tyres"> Tyre wear <span class="muted-inline">(and pit stops)</span></label>
-            <label class="check" title="Rain can come and go during a session, as it would at that track"><input type="checkbox" id="practice-weather"> Weather <span class="muted-inline">(off = always dry)</span></label>
+          <div class="set-box">
+            <h3>Collisions</h3>
+            <label class="check"><input type="checkbox" id="practice-coll" checked> Cars can hit each other</label>
+            <h3>Conditions</h3>
+            <div class="cond-box">
+                <label class="check" title="Right behind another car on a straight there is less air to push through: you go faster"><input type="checkbox" id="practice-draft"> Drafting <span class="muted-inline">(slipstream on the straights)</span></label>
+                <label class="check" title="Tyres wear out as you drive; in a race at least one pit stop is compulsory"><input type="checkbox" id="practice-tyres"> Tyre wear <span class="muted-inline">(and pit stops)</span></label>
+                <label class="check" title="Rain can come and go during a session, as it would at that track"><input type="checkbox" id="practice-weather"> Weather <span class="muted-inline">(off = always dry)</span></label>
+              </div>
           </div>
         </div>
-        <div class="col wide">
-          <h3>Choose your driver</h3>
-          <div class="drivers" id="practice-drivers"></div>
-        </div>
+        <div class="start-bar"><button type="button" class="btn red big" data-start="practice-start">Start practice</button></div>
       </div>
     </section>
 
@@ -82,23 +83,24 @@
       <div class="panel-head">
         <button class="btn ghost" data-go="home">← Back</button>
         <h2>Time Trial</h2>
-        <button class="btn red" id="tt-start">Start time trial</button>
+        <button class="btn red start-head" id="tt-start">Start time trial</button>
       </div>
-      <div class="cols">
-        <div class="col narrow">
-          <h3>Track</h3>
-          <div class="tracks" id="tt-tracks"></div>
+      <div class="setup">
+        <div class="setup-picks">
+          <div class="set-box"><h3>Track</h3><div class="pick" id="tt-trackpick" role="button" tabindex="0"></div></div>
+          <div class="set-box"><h3>Your car</h3><div class="pick drv" id="tt-driverpick" role="button" tabindex="0"></div></div>
         </div>
-        <div class="col wide">
-          <h3 id="tt-board-title">Your best laps</h3>
-          <table class="results tt-board">
-            <thead><tr><th>#</th><th class="r">Lap time</th><th class="r">Gap</th><th>Car</th><th class="r">Date</th></tr></thead>
-            <tbody id="tt-board"></tbody>
-          </table>
-          <p class="tt-note">Just you and your ghost. You start at speed, so every lap is timed; your ghost replays your best lap and the gap to it shows above the dashboard. Your 10 best laps on each track are kept here.</p>
-          <h3>Choose your car</h3>
-          <div class="drivers" id="tt-drivers"></div>
+        <div class="setup-opts">
+          <div class="set-box">
+            <h3 id="tt-board-title">Your best laps</h3>
+            <table class="results tt-board">
+              <thead><tr><th>#</th><th class="r">Lap time</th><th class="r">Gap</th><th>Car</th><th class="r">Date</th></tr></thead>
+              <tbody id="tt-board"></tbody>
+            </table>
+            <p class="tt-note">Just you and your ghost. You start at speed, so every lap is timed; your ghost replays your best lap and the gap to it shows above the dashboard. Your 10 best laps on each track are kept here.</p>
+          </div>
         </div>
+        <div class="start-bar"><button type="button" class="btn red big" data-start="tt-start">Start time trial</button></div>
       </div>
     </section>
 
@@ -109,13 +111,25 @@
         <h2>Career statistics</h2>
         <span></span>
       </div>
-      <div class="results-wrap career-wrap">
+      <div class="career-tabs-row">
+        <div class="seg career-tabs" id="career-tabs" role="tablist" aria-label="Career statistics">
+          <button type="button" role="tab" data-v="stats" id="career-tab-stats" aria-controls="career-page-stats">My statistics</button><button type="button" role="tab" data-v="ach" id="career-tab-ach" aria-controls="career-page-ach">Achievements <span class="tab-n" id="career-ach-n"></span></button>
+        </div>
+      </div>
+      <div class="results-wrap career-wrap" id="career-page-stats" role="tabpanel" aria-labelledby="career-tab-stats">
         <div class="career-stats" id="career-stats"></div>
         <p class="tt-note" id="career-note"></p>
-        <table class="results career-table">
-          <thead><tr><th>Track</th><th class="r">Best lap</th><th>Set in</th><th class="r">Races</th><th class="r">Wins</th><th class="r">Podiums</th><th class="r">Best finish</th></tr></thead>
-          <tbody id="career-tracks"></tbody>
-        </table>
+        <div class="career-scroll">
+          <table class="results career-table">
+            <thead><tr><th>Track</th><th class="r">Best lap</th><th>Set in</th><th class="r">Races</th><th class="r">Wins</th><th class="r">Podiums</th><th class="r">Best finish</th><th class="r">Time played</th></tr></thead>
+            <tbody id="career-tracks"></tbody>
+          </table>
+        </div>
+      </div>
+      <div class="results-wrap career-wrap hidden" id="career-page-ach" role="tabpanel" aria-labelledby="career-tab-ach">
+        <div class="ach-top"><span class="ach-count" id="ach-count"></span><div class="ach-total"><i id="ach-total-bar"></i></div></div>
+        <div id="ach-groups"></div>
+        <p class="tt-note">Race feats count in races with at least 5 opponents.</p>
       </div>
     </section>
 
@@ -124,40 +138,40 @@
       <div class="panel-head">
         <button class="btn ghost" data-go="home">← Back</button>
         <h2>Grand Prix</h2>
-        <button class="btn red" id="gp-start">Start weekend</button>
+        <button class="btn red start-head" id="gp-start">Start weekend</button>
       </div>
-      <div class="weekend-bar">
-        <span class="wk-title">Weekend</span>
-        <label>Practice 1<select id="gp-p1"></select></label>
-        <label>Practice 2<select id="gp-p2"></select></label>
-        <label>Practice 3<select id="gp-p3"></select></label>
-        <label>Qualifying<select id="gp-quali"></select></label>
-        <label title="The race starts in the opposite order to qualifying: the fastest starts last">Reverse grid<select id="gp-reverse"><option value="0">Off</option><option value="1">On</option></select></label>
-        <label>Race<select id="gp-race"></select></label>
-        <span class="wk-note">Practice starts in your pit box and ends after your timed laps</span>
-      </div>
-      <div class="cols">
-        <div class="col narrow">
-          <h3>Track</h3>
-          <div class="tracks" id="gp-tracks"></div>
-          <h3>Opponents</h3>
-          <div class="row"><input type="range" id="gp-ai" min="1" max="21" value="15"><span class="val" id="gp-ai-val">15</span></div>
-          <p class="note">Opponents are picked at random from the 2026 grid.</p>
-          <h3>AI difficulty</h3>
-          <div class="seg levels" id="gp-level">
-            <button data-v="easy">Easy</button><button data-v="medium" class="on">Medium</button><button data-v="hard">Hard</button><button data-v="extrahard">Extra hard</button><button data-v="expert">Expert</button>
-          </div>
-          <h3>Conditions</h3>
-          <div class="cond-box">
-            <label class="check" title="Right behind another car on a straight there is less air to push through: you go faster"><input type="checkbox" id="gp-draft"> Drafting <span class="muted-inline">(slipstream on the straights)</span></label>
-            <label class="check" title="Tyres wear out as you drive; in a race at least one pit stop is compulsory"><input type="checkbox" id="gp-tyres"> Tyre wear <span class="muted-inline">(and pit stops)</span></label>
-            <label class="check" title="Rain can come and go during a session, as it would at that track"><input type="checkbox" id="gp-weather"> Weather <span class="muted-inline">(off = always dry)</span></label>
-          </div>
+      <div class="setup">
+        <div class="setup-picks">
+          <div class="set-box"><h3>Track</h3><div class="pick" id="gp-trackpick" role="button" tabindex="0"></div></div>
+          <div class="set-box"><h3>Your driver</h3><div class="pick drv" id="gp-driverpick" role="button" tabindex="0"></div></div>
         </div>
-        <div class="col wide">
-          <h3>Choose your driver</h3>
-          <div class="drivers" id="gp-drivers"></div>
+        <div class="setup-opts">
+          <div class="set-box">
+            <h3>Weekend</h3>
+            <div class="wk-grid">
+              <label>Practice 1<select id="gp-p1"></select></label>
+              <label>Practice 2<select id="gp-p2"></select></label>
+              <label>Practice 3<select id="gp-p3"></select></label>
+              <label>Qualifying<select id="gp-quali"></select></label>
+              <label title="The race starts in the opposite order to qualifying: the fastest starts last">Reverse grid<select id="gp-reverse"><option value="0">Off</option><option value="1">On</option></select></label>
+              <label>Race<select id="gp-race"></select></label>
+            </div>
+            <p class="note">Practice starts in your pit box and ends after your timed laps</p>
+          </div>
+          <div class="set-box set-2">
+            <div><h3>Opponents</h3><div class="row"><input type="range" id="gp-ai" min="1" max="21" value="15"><span class="val" id="gp-ai-val">15</span></div>
+              <p class="note">Picked at random from the 2026 grid.</p></div>
+            <div><h3>AI difficulty</h3><div class="seg levels" id="gp-level">
+                <button data-v="easy">Easy</button><button data-v="medium" class="on">Medium</button><button data-v="hard">Hard</button><button data-v="extrahard">Extra hard</button><button data-v="expert">Expert</button>
+              </div></div>
+          </div>
+          <div class="set-box"><h3>Conditions</h3><div class="cond-box">
+                <label class="check" title="Right behind another car on a straight there is less air to push through: you go faster"><input type="checkbox" id="gp-draft"> Drafting <span class="muted-inline">(slipstream on the straights)</span></label>
+                <label class="check" title="Tyres wear out as you drive; in a race at least one pit stop is compulsory"><input type="checkbox" id="gp-tyres"> Tyre wear <span class="muted-inline">(and pit stops)</span></label>
+                <label class="check" title="Rain can come and go during a session, as it would at that track"><input type="checkbox" id="gp-weather"> Weather <span class="muted-inline">(off = always dry)</span></label>
+              </div></div>
         </div>
+        <div class="start-bar"><button type="button" class="btn red big" data-start="gp-start">Start weekend</button></div>
       </div>
     </section>
 
@@ -166,47 +180,45 @@
       <div class="panel-head">
         <button class="btn ghost" data-go="home">← Back</button>
         <h2>Championship</h2>
-        <button class="btn red" id="champ-start">Start season</button>
+        <button class="btn red start-head" id="champ-start">Start season</button>
       </div>
       <div class="champ-continue hidden" id="champ-continue">
         <div class="cc-text"><b id="cc-title">Season in progress</b><span id="cc-sub"></span></div>
         <button class="btn ghost" id="cc-standings">Standings</button>
         <button class="btn red" id="cc-go">Continue season</button>
       </div>
-      <div class="weekend-bar">
-        <span class="wk-title">Every weekend</span>
-        <label>Practice 1<select id="champ-p1"></select></label>
-        <label>Practice 2<select id="champ-p2"></select></label>
-        <label>Practice 3<select id="champ-p3"></select></label>
-        <label>Qualifying<select id="champ-quali"></select></label>
-        <label title="Every race starts in the opposite order to qualifying: the fastest starts last">Reverse grid<select id="champ-reverse"><option value="0">Off</option><option value="1">On</option></select></label>
-        <label>Race<select id="champ-race"></select></label>
-        <span class="wk-note">Points: 25-18-15-12-10-8-6-4-2-1 for the top 10</span>
-      </div>
-      <div class="cols">
-        <div class="col narrow">
-          <h3>Calendar</h3>
-          <p class="note cal-note">Click the tracks in the order you want to race them (2 to 27 races).</p>
-          <div class="cal-btns"><button type="button" class="btn small" id="champ-all">Select all</button><button type="button" class="btn small ghost" id="champ-none">Clear all</button></div>
-          <div class="tracks" id="champ-tracks"></div>
-          <h3>Opponents</h3>
-          <div class="row"><input type="range" id="champ-ai" min="1" max="21" value="15"><span class="val" id="champ-ai-val">15</span></div>
-          <p class="note">The same rivals race you all season.</p>
-          <h3>AI difficulty</h3>
-          <div class="seg levels" id="champ-level">
-            <button data-v="easy">Easy</button><button data-v="medium" class="on">Medium</button><button data-v="hard">Hard</button><button data-v="extrahard">Extra hard</button><button data-v="expert">Expert</button>
-          </div>
-          <h3>Conditions</h3>
-          <div class="cond-box">
-            <label class="check" title="Right behind another car on a straight there is less air to push through: you go faster"><input type="checkbox" id="champ-draft"> Drafting <span class="muted-inline">(slipstream on the straights)</span></label>
-            <label class="check" title="Tyres wear out as you drive; in a race at least one pit stop is compulsory"><input type="checkbox" id="champ-tyres"> Tyre wear <span class="muted-inline">(and pit stops)</span></label>
-            <label class="check" title="Rain can come and go during a session, as it would at that track"><input type="checkbox" id="champ-weather"> Weather <span class="muted-inline">(off = always dry)</span></label>
-          </div>
+      <div class="setup">
+        <div class="setup-picks">
+          <div class="set-box"><h3>Calendar</h3><div class="pick" id="champ-trackpick" role="button" tabindex="0"></div></div>
+          <div class="set-box"><h3>Your driver</h3><div class="pick drv" id="champ-driverpick" role="button" tabindex="0"></div></div>
         </div>
-        <div class="col wide">
-          <h3>Choose your driver</h3>
-          <div class="drivers" id="champ-drivers"></div>
+        <div class="setup-opts">
+          <div class="set-box">
+            <h3>Every weekend</h3>
+            <div class="wk-grid">
+              <label>Practice 1<select id="champ-p1"></select></label>
+              <label>Practice 2<select id="champ-p2"></select></label>
+              <label>Practice 3<select id="champ-p3"></select></label>
+              <label>Qualifying<select id="champ-quali"></select></label>
+              <label title="The race starts in the opposite order to qualifying: the fastest starts last">Reverse grid<select id="champ-reverse"><option value="0">Off</option><option value="1">On</option></select></label>
+              <label>Race<select id="champ-race"></select></label>
+            </div>
+            <p class="note">Points: 25-18-15-12-10-8-6-4-2-1 for the top 10</p>
+          </div>
+          <div class="set-box set-2">
+            <div><h3>Opponents</h3><div class="row"><input type="range" id="champ-ai" min="1" max="21" value="15"><span class="val" id="champ-ai-val">15</span></div>
+              <p class="note">The same rivals race you all season.</p></div>
+            <div><h3>AI difficulty</h3><div class="seg levels" id="champ-level">
+                <button data-v="easy">Easy</button><button data-v="medium" class="on">Medium</button><button data-v="hard">Hard</button><button data-v="extrahard">Extra hard</button><button data-v="expert">Expert</button>
+              </div></div>
+          </div>
+          <div class="set-box"><h3>Conditions</h3><div class="cond-box">
+                <label class="check" title="Right behind another car on a straight there is less air to push through: you go faster"><input type="checkbox" id="champ-draft"> Drafting <span class="muted-inline">(slipstream on the straights)</span></label>
+                <label class="check" title="Tyres wear out as you drive; in a race at least one pit stop is compulsory"><input type="checkbox" id="champ-tyres"> Tyre wear <span class="muted-inline">(and pit stops)</span></label>
+                <label class="check" title="Rain can come and go during a session, as it would at that track"><input type="checkbox" id="champ-weather"> Weather <span class="muted-inline">(off = always dry)</span></label>
+              </div></div>
         </div>
+        <div class="start-bar"><button type="button" class="btn red big" data-start="champ-start">Start season</button></div>
       </div>
     </section>
 
@@ -294,7 +306,7 @@
           <div class="settings-grid" id="lobby-settings">
             <label class="span2">Mode<select id="set-mode"><option value="single">Single race weekend</option><option value="champ">Championship (a season of races)</option></select></label>
             <div class="lobby-cal span2" id="lobby-cal">
-              <div class="cal-head">Calendar <span id="lobby-cal-n"></span><span class="cal-btns mini" id="lobby-cal-btns"><button type="button" class="btn small" id="lobby-cal-all">Select all</button><button type="button" class="btn small ghost" id="lobby-cal-none">Clear all</button></span></div>
+              <div class="cal-head">Calendar <span id="lobby-cal-n"></span><span class="cal-btns mini" id="lobby-cal-btns"><button type="button" class="btn small" id="lobby-cal-all" title="Every track of the 2026 calendar, in order">2026 calendar</button><button type="button" class="btn small ghost" id="lobby-cal-none">Clear all</button></span></div>
               <div class="cal-chips" id="lobby-cal-chips"></div>
             </div>
             <label id="set-track-wrap">Track<select id="set-track"></select></label>
@@ -420,67 +432,90 @@
   </div>
 
   <!-- SETTINGS -->
+  <div id="picker" class="modal hidden">
+    <div class="modal-box picker-box" role="dialog" aria-modal="true" aria-labelledby="picker-title">
+      <div class="modal-head"><h2 id="picker-title">Choose a track</h2><button type="button" class="x-btn" id="picker-x" aria-label="Close" title="Close">
+        <svg viewBox="0 0 24 24" width="20" height="20" aria-hidden="true"><path d="M6 6l12 12M18 6L6 18" fill="none" stroke="currentColor" stroke-width="2.6" stroke-linecap="round"/></svg></button></div>
+      <div class="picker-chips" id="picker-chips"></div>
+      <div class="picker-body" id="picker-body"></div>
+      <div class="picker-foot hidden" id="picker-foot"></div>
+    </div>
+  </div>
   <div id="settings" class="modal hidden">
-    <div class="modal-box">
+    <div class="modal-box settings-box">
       <div class="modal-head"><h2>Settings</h2><button type="button" class="x-btn" id="settings-x" aria-label="Close settings" title="Close">
         <svg viewBox="0 0 24 24" width="20" height="20" aria-hidden="true"><path d="M6 6l12 12M18 6L6 18" fill="none" stroke="currentColor" stroke-width="2.6" stroke-linecap="round"/></svg></button></div>
-      <label class="slider key-only"><span class="slider-title">Steering sensitivity <b id="set-steer-val">5</b></span>
-        <input type="range" id="set-steer" min="1" max="15" step="1">
-        <span class="hint-row"><span>Gentle</span><span>Quick</span></span>
-      </label>
-      <label>Camera
-        <div class="seg" id="set-camera">
-          <button data-v="rotate">Rotate with car</button><button data-v="fixed">Fixed (north up)</button>
-        </div>
-      </label>
-      <label>Camera distance <span class="muted-inline key-only">(press C while driving)</span>
-        <div class="seg" id="set-zoom">
-          <button data-v="close">Close</button><button data-v="normal">Normal</button><button data-v="far">Far</button>
-        </div>
-      </label>
-      <label>Graphics
-        <div class="seg" id="set-graphics">
-          <button data-v="auto">Auto</button><button data-v="sharp">High</button><button data-v="light">Low</button>
-        </div>
-      </label>
-      <p class="note" id="set-graphics-note"></p>
-      <label>Speed shown in
-        <div class="seg" id="set-units">
-          <button data-v="kmh">km/h</button><button data-v="mph">mph</button>
-        </div>
-      </label>
-      <label class="touch-only">Steering on the screen
-        <div class="seg" id="set-touchmode">
-          <button data-v="arrows">Arrow buttons</button><button data-v="slide">Slider</button>
-        </div>
-      </label>
-      <label class="touch-only" id="set-vibrate-row">Vibration
-        <div class="seg" id="set-vibrate">
-          <button data-v="on">On</button><button data-v="off">Off</button>
-        </div>
-      </label>
-      <label class="slider touch-only"><span class="slider-title">Touch steering sensitivity <b id="set-touch-val">5</b></span>
-        <input type="range" id="set-touch" min="1" max="10" step="1">
-        <span class="hint-row"><span id="set-touch-lo">Gentle</span><span id="set-touch-hi">Quick</span></span>
-      </label>
-      <p class="note touch-only" id="set-touch-note"></p>
-      <div class="keys-box" id="keys-box">
-        <div class="sound-head"><span>Driving keys</span><button type="button" class="btn small" id="keys-reset">Reset keys</button></div>
-        <div class="keys-grid" id="keys-grid"></div>
-        <p class="note" id="keys-note">Click a key, then press the new one. Each action can have two keys.</p>
+      <div class="seg set-tabs" id="set-tabs" role="tablist" aria-label="Settings">
+        <button type="button" role="tab" data-v="driving" id="set-tab-driving" aria-controls="set-page-driving">Driving</button><button type="button" role="tab" data-v="view" id="set-tab-view" aria-controls="set-page-view">View</button><button type="button" role="tab" data-v="sound" id="set-tab-sound" aria-controls="set-page-sound">Sound</button>
       </div>
-      <label class="check"><input type="checkbox" id="set-labels"> Show driver names above cars</label>
-      <label class="check"><input type="checkbox" id="set-ghost"> Ghost car of your best lap (practice sessions)</label>
-      <div class="sound-box">
-        <div class="sound-head"><span>Sound</span><label class="check"><input type="checkbox" id="set-mute"> Mute (M)</label></div>
-        <label class="slider small"><span class="slider-title">Master <b id="set-vol-master-val">80</b></span><input type="range" id="set-vol-master" min="0" max="100" step="5"></label>
-        <label class="slider small"><span class="slider-title">Engines <b id="set-vol-engine-val">68</b></span><input type="range" id="set-vol-engine" min="0" max="100" step="5"></label>
-        <label class="slider small"><span class="slider-title">Effects <b id="set-vol-effects-val">80</b></span><input type="range" id="set-vol-effects" min="0" max="100" step="5"></label>
-        <div class="engine-row">
-          <label>Your engine<select id="set-engine"><option value="onboard">Onboard (realistic)</option><option value="tv">TV camera</option></select></label>
-          <button class="btn small" id="set-engine-test">▶ Test engine</button>
+      <!-- (every tab is as tall as the tallest one, so the window keeps its size when you switch: see main.js) -->
+      <div class="set-pages" id="set-pages">
+        <div class="set-page" id="set-page-driving" data-tab="driving" role="tabpanel" aria-labelledby="set-tab-driving">
+          <label class="slider key-only"><span class="slider-title">Steering sensitivity <b id="set-steer-val">5</b></span>
+            <input type="range" id="set-steer" min="1" max="15" step="1">
+            <span class="hint-row"><span>Gentle</span><span>Quick</span></span>
+          </label>
+          <label class="touch-only">Steering on the screen
+            <div class="seg" id="set-touchmode">
+              <button data-v="arrows">Arrow buttons</button><button data-v="slide">Slider</button>
+            </div>
+          </label>
+          <label class="touch-only" id="set-vibrate-row">Vibration
+            <div class="seg" id="set-vibrate">
+              <button data-v="on">On</button><button data-v="off">Off</button>
+            </div>
+          </label>
+          <label class="slider touch-only"><span class="slider-title">Touch steering sensitivity <b id="set-touch-val">5</b></span>
+            <input type="range" id="set-touch" min="1" max="10" step="1">
+            <span class="hint-row"><span id="set-touch-lo">Gentle</span><span id="set-touch-hi">Quick</span></span>
+          </label>
+          <p class="note touch-only" id="set-touch-note"></p>
+          <div class="keys-box" id="keys-box">
+            <div class="sound-head"><span>Driving keys</span><button type="button" class="btn small" id="keys-reset">Reset keys</button></div>
+            <div class="keys-grid" id="keys-grid"></div>
+            <p class="note" id="keys-note">Click a key, then press the new one. Each action can have two keys.</p>
+          </div>
         </div>
-        <p class="note" id="set-engine-note"></p>
+        <div class="set-page" id="set-page-view" data-tab="view" role="tabpanel" aria-labelledby="set-tab-view">
+          <label>Camera
+            <div class="seg" id="set-camera">
+              <button data-v="rotate">Rotate with car</button><button data-v="fixed">Fixed (north up)</button>
+            </div>
+          </label>
+          <label><span>Camera distance <span class="muted-inline key-only">(press C while driving)</span></span>
+            <div class="seg" id="set-zoom">
+              <button data-v="close">Close</button><button data-v="normal">Normal</button><button data-v="far">Far</button>
+            </div>
+          </label>
+          <label>Graphics
+            <div class="seg" id="set-graphics">
+              <button data-v="auto">Auto</button><button data-v="sharp">High</button><button data-v="light">Low</button>
+            </div>
+          </label>
+          <p class="note" id="set-graphics-note"></p>
+          <label>Speed shown in
+            <div class="seg" id="set-units">
+              <button data-v="kmh">km/h</button><button data-v="mph">mph</button>
+            </div>
+          </label>
+          <label class="check"><input type="checkbox" id="set-labels"> Show driver names above cars</label>
+          <label class="check"><input type="checkbox" id="set-ghost"> Ghost car of your best lap (practice sessions)</label>
+        </div>
+        <div class="set-page" id="set-page-sound" data-tab="sound" role="tabpanel" aria-labelledby="set-tab-sound">
+          <label class="check"><input type="checkbox" id="set-mute"> Mute all sound (M)</label>
+          <label class="slider"><span class="slider-title">Master <b id="set-vol-master-val">80</b></span><input type="range" id="set-vol-master" min="0" max="100" step="5"></label>
+          <label class="slider"><span class="slider-title">Engines <b id="set-vol-engine-val">68</b></span><input type="range" id="set-vol-engine" min="0" max="100" step="5"></label>
+          <label class="slider"><span class="slider-title">Effects <b id="set-vol-effects-val">80</b></span><input type="range" id="set-vol-effects" min="0" max="100" step="5"></label>
+          <div class="engine-row">
+            <label for="set-engine">Your engine</label>
+            <div class="engine-ctrls">
+              <select id="set-engine"><option value="onboard">Onboard</option><option value="tv">TV camera</option></select>
+              <button type="button" class="btn" id="set-engine-test">▶ Test engine</button>
+            </div>
+          </div>
+          <p class="note">Onboard is the most realistic: your engine as heard in the car.</p>
+          <p class="note" id="set-engine-note"></p>
+        </div>
       </div>
       <button class="btn red" id="settings-close">Save</button>
     </div>
@@ -519,6 +554,12 @@
   </div>
 
   <div id="toast"></div>
+
+  <!-- an achievement unlocked (in the menus; while driving it shows as a message at the top of the screen) -->
+  <div id="achpop" class="hidden" role="status" aria-live="polite">
+    <span class="ach-ico" aria-hidden="true"></span>
+    <div class="achpop-text"><small>Achievement unlocked</small><b id="achpop-name"></b><span id="achpop-desc"></span></div>
+  </div>
 
   <div id="soundbtn" class="hidden">
     <button type="button" aria-label="Sound on or off (M)" title="Sound on / off (M)">

@@ -626,7 +626,8 @@
   const RAIN = { spa: 0.38, silverstone: 0.33, interlagos: 0.33, zandvoort: 0.27, suzuka: 0.25, montreal: 0.25, redbullring: 0.25,
     singapore: 0.22, monaco: 0.16, monza: 0.14, baku: 0.06, jeddah: 0.03, lasvegas: 0.03, abudhabi: 0.02,
     australia: 0.22, china: 0.25, miami: 0.2, barcelona: 0.1, bahrain: 0.02,
-    sepang: 0.45, hungaroring: 0.2, istanbul: 0.2, austin: 0.15, mexico: 0.15, madring: 0.08, portimao: 0.08, lusail: 0.01 };
+    sepang: 0.45, hungaroring: 0.2, istanbul: 0.2, austin: 0.15, mexico: 0.15, madring: 0.08, portimao: 0.08, lusail: 0.01,
+    imola: 0.25, paulricard: 0.08, sochi: 0.15, mugello: 0.15, nurburgring: 0.35, hockenheim: 0.2, bahrainouter: 0.02 };
   F1.rainChance = function (T) { return RAIN[T.id] !== undefined ? RAIN[T.id] : 0.2; };
   /* A session's weather, from its seed: the rain showers over the session (start, end, how hard at their peak).
      Sometimes it is already raining when the session starts; a long session can have a second shower. */
@@ -2115,6 +2116,9 @@
     if (this.type !== 'race') { c.drsElig[z] = true; return; }
     const prev = this.detLast[z];
     c.drsElig[z] = this.phase === 'running' && c.maxLine >= 2 && prev !== null && prev.id !== c.id && this.time - prev.t <= 1.0;
+    // a player's engineer warns them when the car behind gets DRS on them (not a car lapping them)
+    const ahead = c.drsElig[z] ? this.byId[prev.id] : null;
+    if (ahead && !ahead.isAI && !ahead.out && !ahead.finished && c.raceDist < ahead.raceDist) this.events.push({ k: 'drsBehind', id: ahead.id, by: c.id });
     this.detLast[z] = { id: c.id, t: this.time };
   };
 

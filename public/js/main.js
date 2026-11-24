@@ -299,6 +299,7 @@
     }
   }
   function goHome() {
+    PlayTime.flush();
     cancelLoading();
     lobbyNoticeShown = false;
     $('fsnotice').classList.add('hidden');
@@ -323,38 +324,6 @@
   // ------------------------------------------------------------- shared widgets
   // (the cards show each track's outline only: the whole track is built when a session starts)
   // surprise: a "Surprise me" card first (id 'random')
-  function buildTrackCards(container, selected, onPick, disabled, surprise) {
-    container.innerHTML = '';
-    const pick = function (b, id) {
-      b.addEventListener('click', function () {
-        container.querySelectorAll('.track-card').forEach(function (c) { c.classList.toggle('on', c.dataset.id === id); });
-        onPick(id);
-      });
-    };
-    if (surprise) {
-      const b = el('button', 'track-card surprise' + (selected === 'random' ? ' on' : ''));
-      b.append(el('div', 'q', '?'), el('div', 'tname', 'Surprise me'), el('div', 'tlen', 'A random track'), el('div', 'tpb none', 'Revealed when you start'));
-      b.dataset.id = 'random';
-      b.disabled = !!disabled;
-      pick(b, 'random');
-      container.appendChild(b);
-    }
-    Object.keys(F1.TRACK_DEFS).forEach(function (id) {
-      const T = F1.trackOutline(id);
-      const b = el('button', 'track-card' + (id === selected ? ' on' : ''));
-      const cv = el('canvas');
-      const pb = window.PB.get(id);
-      b.append(cv, el('div', 'tname', T.name), el('div', 'tlen', (T.length / 1000).toFixed(3) + ' km · ' + T.country),
-        el('div', 'tpb' + (pb ? '' : ' none'), pb ? 'PB ' + F1.fmtLap(pb.t) : 'No personal best yet'));
-      if (T.night) b.appendChild(el('span', 'night-badge', 'Night'));
-      b.dataset.id = id;
-      b.disabled = !!disabled;
-      pick(b, id);
-      container.appendChild(b);
-      requestAnimationFrame(function () { Renderer.trackPreview(cv, T); });
-    });
-  }
-
   function buildDrivers(container, opts) {
     container.innerHTML = '';
     F1.TEAMS.forEach(function (team) {
@@ -381,6 +350,214 @@
     });
   }
 
+  // ------------------------------------------------------------- the track and driver pickers
+  /* The setup pages show the track (or a championship's calendar) and your driver as one card each; choosing opens a
+     picker over the page: every track, in two groups (the 2026 calendar, then the classic tracks) with filters, or
+     every driver. A calendar is picked in the same picker: several tracks, in race order. */
+  const Picker = {
+    onClose: null,
+    open: function (title, wide) {
+      $('picker-title').textContent = title;
+      $('picker-body').innerHTML = ''; $('picker-chips').innerHTML = ''; $('picker-foot').innerHTML = '';
+      $('picker-chips').classList.add('hidden'); $('picker-foot').classList.add('hidden');
+      $('picker').querySelector('.picker-box').classList.toggle('drivers-mode', !wide);
+      $('picker').classList.remove('hidden');
+      $('picker-body').scrollTop = 0;
+      setTimeout(function () { $('picker-x').focus({ preventScroll: true }); }, 30);
+    },
+    close: function () {
+      if ($('picker').classList.contains('hidden')) return;
+      $('picker').classList.add('hidden');
+      const f = this.onClose; this.onClose = null;
+      if (f) f();
+    },
+    isOpen: function () { return !$('picker').classList.contains('hidden'); }
+  };
+  $('picker-x').addEventListener('click', function () { Picker.close(); });
+  $('picker').addEventListener('click', function (e) { if (e.target === this) Picker.close(); });
+  document.addEventListener('keydown', function (e) { if (e.key === 'Escape' && Picker.isOpen()) { e.stopPropagation(); Picker.close(); } }, true);
+
+  /* A track's card: its picture, name, length and country, and your best lap there (time trial: your best time trial
+     lap, or if you have none there yet, your best lap from your other sessions). */
+  function trackCard(id, tt) {
+    const T = F1.trackOutline(id), b = el('button', 'track-card'), cv = el('canvas');
+    b.type = 'button';
+    let line, none = false, title = '';
+    const pb = window.PB.get(id);
+    if (tt) {
+      const l = window.TTBoard.list(id);
+      line = l.length ? 'Best ' + F1.fmtLap(l[0].t) : pb ? 'PB ' + F1.fmtLap(pb.t) : 'No time yet';
+      none = !l.length && !pb;
+      if (!l.length && pb) title = 'Your best lap here in a practice, qualifying or race (no time trial lap yet)';
+    } else { line = pb ? 'PB ' + F1.fmtLap(pb.t) : 'No personal best yet'; none = !pb; }
+    const tp = el('div', 'tpb' + (none ? ' none' : ''), line);
+    if (title) tp.title = title;
+    b.append(cv, el('div', 'tname', T.name), el('div', 'tlen', (T.length / 1000).toFixed(3) + ' km · ' + T.country), tp);
+    if (T.night) b.appendChild(el('span', 'night-badge', 'Night'));
+    b.dataset.id = id;
+    requestAnimationFrame(function () { Renderer.trackPreview(cv, T); });
+    return b;
+  }
+  function surpriseCard() {
+    const b = el('button', 'track-card surprise');
+    b.type = 'button';
+    b.append(el('div', 'q', '?'), el('div', 'tname', 'Surprise me'), el('div', 'tlen', 'A random track'), el('div', 'tpb none', 'Revealed when you start'));
+    b.dataset.id = 'random';
+    return b;
+  }
+  /* o: { selected, surprise, tt, onPick(id) } for one track; { calendar: [ids], onChange() } for a calendar */
+  function openTrackPicker(o) {
+    const multi = !!o.calendar, ids = Object.keys(F1.TRACK_DEFS);
+    const classic = function (id) { return !!F1.TRACK_DEFS[id].classic; };
+    const timed = function (id) { return o.tt ? window.TTBoard.list(id).length > 0 || !!window.PB.get(id) : !!window.PB.get(id); };
+    let filter = 'all';
+    Picker.open(multi ? 'Choose your calendar' : 'Choose a track', true);
+    const chips = $('picker-chips'), body = $('picker-body'), foot = $('picker-foot');
+    chips.classList.remove('hidden');
+    [['all', 'All'], ['calendar', '2026 calendar'], ['classic', 'Classic tracks'], ['night', 'Night races'], ['notime', 'No time yet']].forEach(function (c) {
+      const b = el('button', 'chip' + (c[0] === filter ? ' on' : ''), c[1]);
+      b.type = 'button';
+      b.addEventListener('click', function () { filter = c[0]; chips.querySelectorAll('.chip').forEach(function (x) { x.classList.toggle('on', x === b); }); draw(); });
+      chips.appendChild(b);
+    });
+    const mark = function () {
+      if (!multi) return;
+      body.querySelectorAll('.track-card').forEach(function (b) {
+        const k = o.calendar.indexOf(b.dataset.id);
+        b.classList.toggle('on', k >= 0);
+        const old = b.querySelector('.round-badge'); if (old) old.remove();
+        if (k >= 0) b.appendChild(el('span', 'round-badge', String(k + 1)));
+      });
+      const n = o.calendar.length;
+      $('picker-n').textContent = n ? n + (n === 1 ? ' race' : ' races') : 'Click the tracks in the order you want to race them';
+      $('picker-done').disabled = n < 2;
+      $('picker-done').textContent = n < 2 ? 'Pick at least 2' : 'Done';
+    };
+    const draw = function () {
+      body.innerHTML = '';
+      let groups;
+      if (filter === 'calendar') groups = [['2026 calendar', ids.filter(function (id) { return !classic(id); })]];
+      else if (filter === 'classic') groups = [['Classic tracks', ids.filter(classic)]];
+      else if (filter === 'night') groups = [['Night races', ids.filter(function (id) { return F1.TRACK_DEFS[id].night; })]];
+      else if (filter === 'notime') groups = [[o.tt ? 'No time trial lap yet' : 'No personal best yet', ids.filter(function (id) { return !timed(id); })]];
+      // (all: Bahrain 2 next to Bahrain 1)
+      else groups = [['2026 calendar', ids.filter(function (id) { return !classic(id) || id === 'bahrainouter'; })], ['Classic tracks', ids.filter(function (id) { return classic(id) && id !== 'bahrainouter'; })]];
+      groups.forEach(function (g, gi) {
+        body.appendChild(el('div', 'pk-head', g[0]));
+        const grid = el('div', 'pk-grid');
+        if (gi === 0 && filter === 'all' && o.surprise) grid.appendChild(surpriseCard());
+        g[1].forEach(function (id) { grid.appendChild(trackCard(id, o.tt)); });
+        if (!g[1].length) grid.appendChild(el('div', 'pk-empty', 'None'));
+        body.appendChild(grid);
+      });
+      body.querySelectorAll('.track-card').forEach(function (b) {
+        const id = b.dataset.id;
+        if (!multi && id === o.selected) b.classList.add('on');
+        b.addEventListener('click', function () {
+          if (!multi) { Picker.close(); o.onPick(id); return; }
+          const k = o.calendar.indexOf(id);
+          if (k >= 0) o.calendar.splice(k, 1); else o.calendar.push(id);
+          mark(); o.onChange();
+        });
+      });
+      mark();
+    };
+    if (multi) {
+      foot.classList.remove('hidden');
+      const n = el('span', 'pk-n'); n.id = 'picker-n';
+      const all = el('button', 'btn small', '2026 calendar'); all.type = 'button'; all.title = 'Every track of the 2026 calendar, in order';
+      const none = el('button', 'btn small ghost', 'Clear'); none.type = 'button';
+      const done = el('button', 'btn red', 'Done'); done.type = 'button'; done.id = 'picker-done';
+      all.addEventListener('click', function () { o.calendar.length = 0; Array.prototype.push.apply(o.calendar, F1.calendarTracks()); mark(); o.onChange(); });
+      none.addEventListener('click', function () { o.calendar.length = 0; mark(); o.onChange(); });
+      done.addEventListener('click', function () { Picker.close(); });
+      foot.append(n, all, none, done);
+    }
+    draw();
+  }
+  function openDriverPicker(o) {
+    Picker.open(o.title || 'Choose your driver', false);
+    const box = el('div', 'drivers');
+    $('picker-body').appendChild(box);
+    buildDrivers(box, { selected: o.selected, takenBy: o.takenBy, onPick: function (id) { Picker.close(); o.onPick(id); } });
+  }
+  /* The card of the chosen track on a setup page (or none yet: then the card asks you to choose one). */
+  function showTrackPick(pre, id, o) {
+    const box = $(pre + '-trackpick');
+    box.innerHTML = '';
+    box.classList.toggle('empty', !id);
+    const info = el('div', 'pinfo');
+    let art;
+    if (!id) {
+      art = el('div', 'pq plus', '+');
+      info.append(el('b', null, 'No track chosen'), el('span', null, 'Pick from ' + Object.keys(F1.TRACK_DEFS).length + ' circuits'));
+    } else if (id === 'random') {
+      art = el('div', 'pq', '?');
+      info.append(el('b', null, 'Surprise me'), el('span', null, 'A random track, revealed when you start'));
+    } else {
+      const T = F1.trackOutline(id), pb = window.PB.get(id);
+      art = el('canvas', 'pmap');
+      info.append(el('b', null, T.name), el('span', null, (T.length / 1000).toFixed(3) + ' km · ' + T.country + (T.night ? ' · night' : '')));
+      if (pre === 'tt') {
+        const l = window.TTBoard.list(id);
+        if (l.length) info.appendChild(el('span', 'pbl', 'Best ' + F1.fmtLap(l[0].t)));
+        else if (pb) info.appendChild(el('span', 'pbl', 'PB ' + F1.fmtLap(pb.t)));
+      } else if (pb) info.appendChild(el('span', 'pbl', 'PB ' + F1.fmtLap(pb.t)));
+      requestAnimationFrame(function () { Renderer.trackPreview(art, T); });
+    }
+    const btn = el('button', 'btn small' + (id ? '' : ' red'), id ? 'Change' : 'Choose');
+    btn.type = 'button';
+    box.append(art, info, btn);
+    box.onclick = function () { openTrackPicker(o); };
+    box.onkeydown = function (e) { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); openTrackPicker(o); } };
+  }
+  /* A championship's calendar on its setup page: how many races and the tracks in order. */
+  function showCalendarPick(cal, o) {
+    const box = $('champ-trackpick');
+    box.innerHTML = '';
+    box.classList.toggle('empty', !cal.length);
+    const info = el('div', 'pinfo');
+    if (!cal.length) info.append(el('b', null, 'No calendar yet'), el('span', null, 'Choose 2 or more tracks, in the order you want to race them'));
+    else {
+      info.appendChild(el('b', null, cal.length + (cal.length === 1 ? ' race' : ' races')));
+      const list = el('div', 'cal-list'), shown = cal.length > 6 ? 5 : cal.length;
+      cal.slice(0, shown).forEach(function (id, i) { list.appendChild(el('span', 'cal-item', (i + 1) + ' ' + (F1.TRACK_DEFS[id].short || F1.TRACK_DEFS[id].name))); });
+      if (cal.length > shown) list.appendChild(el('span', 'cal-item more', '+' + (cal.length - shown) + ' more'));
+      info.appendChild(list);
+    }
+    const btn = el('button', 'btn small' + (cal.length ? '' : ' red'), cal.length ? 'Change' : 'Choose');
+    btn.type = 'button';
+    box.append(el('div', 'pq cal', String(cal.length || '+')), info, btn);
+    box.onclick = function () { openTrackPicker(o); };
+    box.onkeydown = function (e) { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); openTrackPicker(o); } };
+  }
+  /* The card of your driver (or your car, in a time trial): the car, number, name and team. */
+  function showDriverPick(pre, driverId, onPick, title) {
+    const box = $(pre + '-driverpick'), d = F1.driver(driverId) || F1.DRIVERS[0], team = F1.team(d.team);
+    box.innerHTML = '';
+    box.style.setProperty('--team', teamColor(team));
+    const cv = el('canvas', 'pcar'), info = el('div', 'pinfo'), top = el('span', 'dteam');
+    top.append(el('span', 'num', '#' + d.number), document.createTextNode(team.name));
+    info.append(top, el('b', null, d.name));
+    const btn = el('button', 'btn small', 'Change');
+    btn.type = 'button';
+    box.append(cv, info, btn);
+    requestAnimationFrame(function () { Renderer.carPreview(cv, team); });
+    const open = function () { openDriverPicker({ title: title, selected: d.id, onPick: function (id) { onPick(id); showDriverPick(pre, id, onPick, title); } }); };
+    box.onclick = open;
+    box.onkeydown = function (e) { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); open(); } };
+  }
+  /* The Start button of a setup page (and its copy in the bar at the bottom on narrow screens): until a track is chosen
+     it says so, and opens the picker. */
+  function setStart(pre, ready, label, choose) {
+    [$(pre + '-start'), document.querySelector('[data-start="' + pre + '-start"]')].forEach(function (b) {
+      if (!b) return;
+      b.textContent = ready ? label : choose;
+      b.classList.toggle('choose', !ready);
+    });
+  }
+  document.querySelectorAll('[data-start]').forEach(function (b) { b.addEventListener('click', function () { $(b.dataset.start).click(); }); });
+
   function segInit(container, value, onPick) {
     container.querySelectorAll('button').forEach(function (b) {
       b.classList.toggle('on', b.dataset.v === value);
@@ -392,9 +569,19 @@
   }
 
   // ------------------------------------------------------------- practice
+  /* (each setup page opens with no track chosen: you pick one) */
+  function practicePickTrack() {
+    const o = { selected: practiceOpts.track, surprise: true, onPick: function (id) { practiceOpts.track = id; practiceTrackShown(); } };
+    return o;
+  }
+  function practiceTrackShown() {
+    showTrackPick('practice', practiceOpts.track, practicePickTrack());
+    setStart('practice', !!practiceOpts.track, 'Start practice', 'Choose a track');
+  }
   function openPractice() {
-    buildTrackCards($('practice-tracks'), practiceOpts.track, function (id) { practiceOpts.track = id; }, false, true);
-    buildDrivers($('practice-drivers'), { selected: practiceOpts.driverId, onPick: function (id) { practiceOpts.driverId = id; } });
+    practiceOpts.track = null;
+    practiceTrackShown();
+    showDriverPick('practice', practiceOpts.driverId, function (id) { practiceOpts.driverId = id; });
     $('practice-ai').value = practiceOpts.aiCount;
     $('practice-ai-val').textContent = practiceOpts.aiCount;
     $('practice-ai').oninput = function () { practiceOpts.aiCount = Number(this.value); $('practice-ai-val').textContent = this.value; };
@@ -431,7 +618,10 @@
       if (surprise && !again) revealTrack(practiceTrack, 'Today you practise at');
     });
   }
-  $('practice-start').addEventListener('click', function () { fsGate(startPractice); });
+  $('practice-start').addEventListener('click', function () {
+    if (!practiceOpts.track) { openTrackPicker(practicePickTrack()); return; }
+    fsGate(startPractice);
+  });
 
   // ------------------------------------------------------------- time trial
   const ttOpts = Object.assign({ track: 'monza', driverId: 'NOR' }, Settings.data.tt || {});
@@ -439,6 +629,12 @@
   function showTTBoard(track) {
     const body = $('tt-board');
     body.innerHTML = '';
+    if (!track) {
+      $('tt-board-title').textContent = 'Your best laps';
+      const tr = el('tr'), td = el('td', 'empty', 'Choose a track to see your best laps on it');
+      td.colSpan = 5; tr.appendChild(td); body.appendChild(tr);
+      return;
+    }
     if (track === 'random') {
       $('tt-board-title').textContent = 'Your best laps — Surprise me';
       const tr = el('tr'), td = el('td', 'empty', 'A random track: you find out which one when you start');
@@ -467,19 +663,18 @@
       body.appendChild(tr);
     });
   }
-  function openTT() {
-    buildTrackCards($('tt-tracks'), ttOpts.track, function (id) { ttOpts.track = id; showTTBoard(id); }, false, true);
-    // the cards show your best time trial lap on each track, or if you have none there yet, your best lap there in any
-    // other session (practice, qualifying, a race)
-    $('tt-tracks').querySelectorAll('.track-card').forEach(function (card) {
-      if (card.dataset.id === 'random') return;
-      const l = window.TTBoard.list(card.dataset.id), best = window.PB.get(card.dataset.id), pb = card.querySelector('.tpb');
-      pb.textContent = l.length ? 'Best ' + F1.fmtLap(l[0].t) : best ? 'PB ' + F1.fmtLap(best.t) : 'No time yet';
-      pb.title = !l.length && best ? 'Your best lap here in a practice, qualifying or race (no time trial lap yet)' : '';
-      pb.classList.toggle('none', !l.length && !best);
-    });
-    buildDrivers($('tt-drivers'), { selected: ttOpts.driverId, onPick: function (id) { ttOpts.driverId = id; } });
+  // (the track cards in the picker show your best time trial lap on each track, or if you have none there yet, your best
+  // lap there in any other session: see trackCard)
+  function ttPickTrack() { return { selected: ttOpts.track, surprise: true, tt: true, onPick: function (id) { ttOpts.track = id; ttTrackShown(); } }; }
+  function ttTrackShown() {
+    showTrackPick('tt', ttOpts.track, ttPickTrack());
     showTTBoard(ttOpts.track);
+    setStart('tt', !!ttOpts.track, 'Start time trial', 'Choose a track');
+  }
+  function openTT(keep) {
+    if (!keep) ttOpts.track = null;     // (quitting a time trial comes back here with its track still chosen)
+    ttTrackShown();
+    showDriverPick('tt', ttOpts.driverId, function (id) { ttOpts.driverId = id; }, 'Choose your car');
     show('tt');
   }
   let ttTrack = null;             // the track of the time trial on now (a restart keeps a surprise pick)
@@ -498,7 +693,10 @@
       if (surprise && !again) revealTrack(ttTrack, 'Your time trial is at');
     });
   }
-  $('tt-start').addEventListener('click', function () { fsGate(startTT); });
+  $('tt-start').addEventListener('click', function () {
+    if (!ttOpts.track) { openTrackPicker(ttPickTrack()); return; }
+    fsGate(startTT);
+  });
 
   // ------------------------------------------------------------- grand prix
   const MAX_RACE_LAPS = 20;
@@ -519,9 +717,15 @@
     for (let i = min; i <= max; i++) opts.push([i, i + (i === 1 ? ' lap' : ' laps')]);
     fillSelect(sel, opts, value);
   }
+  function gpPickTrack() { return { selected: gpOpts.track, surprise: true, onPick: function (id) { gpOpts.track = id; gpTrackShown(); } }; }
+  function gpTrackShown() {
+    showTrackPick('gp', gpOpts.track, gpPickTrack());
+    setStart('gp', !!gpOpts.track, 'Start weekend', 'Choose a track');
+  }
   function openGp() {
-    buildTrackCards($('gp-tracks'), gpOpts.track, function (id) { gpOpts.track = id; }, false, true);
-    buildDrivers($('gp-drivers'), { selected: gpOpts.driverId, onPick: function (id) { gpOpts.driverId = id; } });
+    gpOpts.track = null;
+    gpTrackShown();
+    showDriverPick('gp', gpOpts.driverId, function (id) { gpOpts.driverId = id; });
     $('gp-ai').value = gpOpts.aiCount;
     $('gp-ai-val').textContent = gpOpts.aiCount;
     $('gp-ai').oninput = function () { gpOpts.aiCount = Number(this.value); $('gp-ai-val').textContent = this.value; };
@@ -582,7 +786,8 @@
         const rev = type === 'quali' && !!o.reverseGrid;
         // career: races, wins, podiums, fastest laps and pole positions
         const own = results.find(function (r) { return !r.isAI; });
-        if (own && type === 'race') Career.race({ track: o.track, pos: own.pos, out: !!own.out, fl: !!own.fl, pts: own.pts || 0, laps: own.laps || 0, online: false });
+        if (own && type === 'race') Career.race({ track: o.track, pos: own.pos, out: !!own.out, fl: !!own.fl, pts: own.pts || 0, laps: own.laps || 0, online: false,
+          grid: own.grid, ovt: own.ovt || 0, cars: results.length, rain: !!(g && g.rainSeen), level: o.aiLevel, full: gp.stages.length === 5 });
         if (own && type === 'quali' && own.pos === 1 && own.best !== null && !own.out) Career.pole();
         if (type === 'quali') gp.grid = rev ? F1.reverseGrid(results) : results.map(function (r) { return r.driverId; });
         if (type === 'race' && gp.champ && !gp.recorded) recordRound(gp.champ, o.track, results);
@@ -595,7 +800,10 @@
     show(null);
     if (o.surprise && !gp.revealed) { gp.revealed = true; revealTrack(o.track, 'This weekend you race at'); }
   }
-  $('gp-start').addEventListener('click', function () { fsGate(startGp); });
+  $('gp-start').addEventListener('click', function () {
+    if (!gpOpts.track) { openTrackPicker(gpPickTrack()); return; }
+    fsGate(startGp);
+  });
   $('results-next').addEventListener('click', function () { if (gp && gp.idx + 1 < gp.stages.length) startGpStage(gp.idx + 1); });
   $('results-again').addEventListener('click', function () { if (gp) startGpStage(gp.stages.length - 1); });   // same grid
   $('podium-next').addEventListener('click', function () { if (window.GameAudio) window.GameAudio.click('tap'); leavePodium(); });
@@ -620,41 +828,17 @@
     save: function (c) { try { window.localStorage.setItem('topdowngp.champ', JSON.stringify(c)); } catch (e) { /* ignore */ } }
   };
 
-  function buildCalendar() {
-    const box = $('champ-tracks');
-    box.innerHTML = '';
-    Object.keys(F1.TRACK_DEFS).forEach(function (id) {
-      const T = F1.trackOutline(id);
-      const b = el('button', 'track-card');
-      const cv = el('canvas');
-      b.append(cv, el('div', 'tname', T.name), el('div', 'tlen', (T.length / 1000).toFixed(3) + ' km · ' + T.country));
-      if (T.night) b.appendChild(el('span', 'night-badge', 'Night'));
-      b.dataset.id = id;
-      b.addEventListener('click', function () {
-        const k = champOpts.calendar.indexOf(id);
-        if (k >= 0) champOpts.calendar.splice(k, 1); else champOpts.calendar.push(id);
-        markCalendar();
-      });
-      box.appendChild(b);
-      requestAnimationFrame(function () { Renderer.trackPreview(cv, T); });
-    });
-    markCalendar();
-  }
-  function markCalendar() {
-    $('champ-tracks').querySelectorAll('.track-card').forEach(function (b) {
-      const k = champOpts.calendar.indexOf(b.dataset.id);
-      b.classList.toggle('on', k >= 0);
-      const old = b.querySelector('.round-badge');
-      if (old) old.remove();
-      if (k >= 0) b.appendChild(el('span', 'round-badge', String(k + 1)));
-    });
+  /* The calendar: picked in the track picker, several tracks in race order (the 2026 calendar in one click). */
+  function champCalendarShown() {
+    const o = { calendar: champOpts.calendar, onChange: champCalendarShown };
+    showCalendarPick(champOpts.calendar, o);
     const n = champOpts.calendar.length;
-    $('champ-start').textContent = n >= 2 ? 'Start season (' + n + ' races)' : 'Start season';
+    setStart('champ', n >= 2, 'Start season (' + n + ' races)', n ? 'Pick at least 2 tracks' : 'Choose the tracks');
   }
-
   function openChamp() {
-    buildCalendar();
-    buildDrivers($('champ-drivers'), { selected: champOpts.driverId, onPick: function (id) { champOpts.driverId = id; } });
+    champOpts.calendar.length = 0;
+    champCalendarShown();
+    showDriverPick('champ', champOpts.driverId, function (id) { champOpts.driverId = id; });
     $('champ-ai').value = champOpts.aiCount; $('champ-ai-val').textContent = champOpts.aiCount;
     $('champ-ai').oninput = function () { champOpts.aiCount = Number(this.value); $('champ-ai-val').textContent = this.value; };
     segInit($('champ-level'), champOpts.aiLevel, function (v) { champOpts.aiLevel = v; });
@@ -687,7 +871,7 @@
     show('champ');
   }
   function startSeason() {
-    if (champOpts.calendar.length < 2) { toast('Pick at least 2 tracks for the calendar'); return; }
+    if (champOpts.calendar.length < 2) { openTrackPicker({ calendar: champOpts.calendar, onChange: champCalendarShown }); return; }
     Settings.data.champ = JSON.parse(JSON.stringify(champOpts));
     Settings.save();
     const pool = F1.DRIVERS.map(function (d) { return d.id; }).filter(function (id) { return id !== champOpts.driverId; });
@@ -707,7 +891,7 @@
     c.rounds.push({ track: track, res: results.map(function (r) { return { d: r.driverId, pos: r.pos, pts: r.pts || 0, out: !!r.out }; }) });
     if (c.rounds.length >= c.calendar.length) c.done = true;
     Champ.save(c);
-    if (c.done) Career.season(standings(c).drivers[0].id === c.opts.driverId);
+    if (c.done) Career.season(standings(c).drivers[0].id === c.opts.driverId, c.calendar.length);
   }
   /* Drivers' and constructors' points; ties go to whoever has more wins, then more 2nd places, and so on. */
   function standings(c) {
@@ -741,7 +925,8 @@
   const CODES = { suzuka: 'JPN', jeddah: 'KSA', montreal: 'CAN', monaco: 'MON', redbullring: 'AUT', silverstone: 'GBR', spa: 'BEL', zandvoort: 'NED', monza: 'ITA',
     baku: 'AZE', singapore: 'SGP', interlagos: 'BRA', lasvegas: 'LVG', abudhabi: 'UAE',
     australia: 'AUS', china: 'CHN', bahrain: 'BHR', miami: 'MIA', barcelona: 'ESP',
-    hungaroring: 'HUN', madring: 'MAD', sepang: 'MAS', austin: 'USA', mexico: 'MEX', lusail: 'QAT', portimao: 'POR', istanbul: 'TUR' };
+    hungaroring: 'HUN', madring: 'MAD', sepang: 'MAS', austin: 'USA', mexico: 'MEX', lusail: 'QAT', portimao: 'POR', istanbul: 'TUR',
+    imola: 'EMI', paulricard: 'FRA', sochi: 'RUS', mugello: 'TUS', nurburgring: 'EIF', hockenheim: 'GER', bahrainouter: 'SKH' };
   function renderStandings(o) {
     $('st-title').textContent = o.title;
     const banner = $('st-banner');
@@ -908,8 +1093,7 @@
   }
   $('champ-start').addEventListener('click', function () { if (champOpts.calendar.length < 2) startSeason(); else fsGate(startSeason); });
   // Select all: every track, in calendar order; Clear all: none (then click the ones you want)
-  $('champ-all').addEventListener('click', function () { champOpts.calendar.length = 0; Array.prototype.push.apply(champOpts.calendar, Object.keys(F1.TRACK_DEFS)); markCalendar(); });
-  $('champ-none').addEventListener('click', function () { champOpts.calendar.length = 0; markCalendar(); });
+
   $('cc-go').addEventListener('click', function () { const c = Champ.load(); if (c && !c.done) fsGate(function () { startRound(c); }); });
   $('cc-standings').addEventListener('click', function () { const c = Champ.load(); if (c) showStandings(c); });
   $('results-standings').addEventListener('click', function () {
@@ -948,27 +1132,57 @@
   }, function () { show('home'); });
 
   // ------------------------------------------------------------- career
-  /* Your records across every mode: totals, and for each track your best lap, races, wins and best finish. */
-  function openCareer() {
-    const d = Career.load(), box = $('career-stats');
+  /* Your records across every mode: totals (with your time played), and for each track your best lap, races, wins,
+     best finish and time played; and your achievements, in a second tab. */
+  let careerTab = 'stats';
+  function showCareerTab(t, focus) {
+    careerTab = t;
+    document.querySelectorAll('#career-tabs button').forEach(function (b) {
+      const on = b.dataset.v === t;
+      b.classList.toggle('on', on);
+      b.setAttribute('aria-selected', on ? 'true' : 'false');
+      b.tabIndex = on ? 0 : -1;
+      if (on && focus) b.focus();
+    });
+    $('career-page-stats').classList.toggle('hidden', t !== 'stats');
+    $('career-page-ach').classList.toggle('hidden', t !== 'ach');
+    const sc = $('career').querySelector('.career-wrap:not(.hidden)');
+    if (sc) sc.scrollTop = 0;
+  }
+  document.querySelectorAll('#career-tabs button').forEach(function (b) {
+    b.addEventListener('click', function () { showCareerTab(b.dataset.v); });
+    b.addEventListener('keydown', function (e) {
+      if (e.key === 'ArrowRight' || e.key === 'ArrowLeft') { e.preventDefault(); e.stopPropagation(); showCareerTab(careerTab === 'stats' ? 'ach' : 'stats', true); }
+    });
+  });
+  function openCareer(tab) {
+    PlayTime.flush();
+    const d = window.Career.load(), box = $('career-stats'), Ach = window.Ach;
+    const got = Ach.got(), nGot = Ach.LIST.filter(function (a) { return got[a.id]; }).length;
     box.innerHTML = '';
-    const tile = function (label, num, sub, gold) {
-      const c = el('div', 'stat-card' + (gold ? ' gold' : ''));
+    const tile = function (label, num, sub, gold, cls) {
+      const c = el('div', 'stat-card' + (gold ? ' gold' : '') + (cls ? ' ' + cls : ''));
       const n = el('div', 'num', String(num));
       if (sub) n.appendChild(el('small', null, ' ' + sub));
       c.append(el('div', 'lbl', label), n);
       box.appendChild(c);
+      return c;
     };
+    const mins = Math.floor(d.time / 60);
+    if (mins >= 60) tile('Time played', Math.floor(mins / 60), 'h ' + (mins % 60) + ' min', false, 'played');
+    else tile('Time played', mins, 'min', false, 'played');
     tile('Races', d.races);
     tile('Wins', d.wins, null, d.wins > 0);
     tile('Podiums', d.podiums);
     tile('Pole positions', d.poles);
     tile('Fastest laps', d.fl);
     tile('Championships', d.titles, d.seasons ? 'of ' + d.seasons : null, d.titles > 0);
+    tile('Achievements', nGot, 'of ' + Ach.LIST.length, false, 'ach-tile').addEventListener('click', function () { showCareerTab('ach'); });
+    box.lastChild.title = 'See your achievements';
     const since = new Date(d.since).toLocaleDateString(undefined, { day: 'numeric', month: 'short', year: 'numeric' });
-    $('career-note').textContent = d.races
+    $('career-note').textContent = 'Total time played: ' + window.fmtPlayed(d.time) + ' · ' + (d.races
       ? d.points + (d.points === 1 ? ' point and ' : ' points and ') + d.laps + (d.laps === 1 ? ' racing lap so far' : ' racing laps so far') + (d.online.races ? ' · online: ' + d.online.races + (d.online.races === 1 ? ' race, ' : ' races, ') + d.online.wins + (d.online.wins === 1 ? ' win' : ' wins') : '') + ' · counting since ' + since + '.'
-      : 'Races, wins and championships are counted from now on, in every mode (Grand Prix, Championship and online). Your best laps from before are already here.';
+      : 'races, wins and championships are counted in every mode (Grand Prix, Championship and online).');
     const body = $('career-tracks');
     body.innerHTML = '';
     Object.keys(F1.TRACK_DEFS).forEach(function (id) {
@@ -987,12 +1201,133 @@
       tr.appendChild(el('td', 'r' + (t && t.wins ? '' : ' none'), t && t.wins ? String(t.wins) : '—'));
       tr.appendChild(el('td', 'r' + (t && t.podiums ? '' : ' none'), t && t.podiums ? String(t.podiums) : '—'));
       tr.appendChild(el('td', 'r' + (t && t.best ? (t.best === 1 ? ' best1' : '') : ' none'), t && t.best ? 'P' + t.best : '—'));
+      tr.appendChild(el('td', 'r' + (t && t.time >= 60 ? '' : ' none'), t && t.time >= 60 ? window.fmtPlayed(t.time) : '—'));
       body.appendChild(tr);
     });
+    renderAchievements(got);
+    showCareerTab(tab || 'stats');
     show('career');
   }
+  /* The Achievements tab: in groups, unlocked ones in gold; the counted ones still to come show how far you are. */
+  const ICON_TROPHY = '<svg viewBox="0 0 24 24" width="18" height="18" aria-hidden="true"><path d="M7 4h10v3.5A5 5 0 0 1 12 12.5 5 5 0 0 1 7 7.5V4z" fill="currentColor"/>' +
+    '<path d="M7 5.5H4.5v1.2A3.3 3.3 0 0 0 7.6 10M17 5.5h2.5v1.2A3.3 3.3 0 0 1 16.4 10" fill="none" stroke="currentColor" stroke-width="1.8"/><path d="M10.6 12.3h2.8l.5 3.7h-3.8z" fill="currentColor"/><rect x="7.5" y="16.6" width="9" height="3" rx="1" fill="currentColor"/></svg>';
+  const ICON_LOCK = '<svg viewBox="0 0 24 24" width="16" height="16" aria-hidden="true"><rect x="5" y="10.5" width="14" height="10" rx="2" fill="currentColor"/>' +
+    '<path d="M8 10.5V8a4 4 0 0 1 8 0v2.5" fill="none" stroke="currentColor" stroke-width="2.2"/></svg>';
+  function renderAchievements(got) {
+    const Ach = window.Ach, st = Ach.stats(), wrap = $('ach-groups');
+    got = got || Ach.got();
+    const n = Ach.LIST.filter(function (a) { return got[a.id]; }).length;
+    $('ach-count').textContent = n + ' of ' + Ach.LIST.length + ' unlocked';
+    $('ach-total-bar').style.width = (100 * n / Ach.LIST.length).toFixed(1) + '%';
+    $('career-ach-n').textContent = n + '/' + Ach.LIST.length;
+    wrap.innerHTML = '';
+    let grid = null, group = null;
+    Ach.LIST.forEach(function (a) {
+      if (a.group !== group) {
+        group = a.group;
+        wrap.appendChild(el('h3', 'ach-head', group));
+        grid = el('div', 'ach-grid');
+        wrap.appendChild(grid);
+      }
+      const on = !!got[a.id], c = el('div', 'ach' + (on ? ' on' : ''));
+      const ico = el('span', 'ach-ico');
+      ico.innerHTML = on ? ICON_TROPHY : ICON_LOCK;
+      const txt = el('div', 'ach-txt');
+      txt.append(el('b', null, a.name), el('span', null, Ach.desc(a)));
+      c.append(ico, txt);
+      const goal = Ach.goal(a);
+      if (on) c.title = 'Unlocked ' + new Date(got[a.id]).toLocaleDateString(undefined, { day: 'numeric', month: 'short', year: 'numeric' });
+      else if (a.v && goal > 1) {
+        const v = Math.min(goal, Math.floor(a.v(st))), bar = el('div', 'ach-bar'), fill = el('i');
+        fill.style.width = (100 * v / goal).toFixed(1) + '%';
+        bar.appendChild(fill);
+        c.append(bar, el('span', 'ach-prog', v.toLocaleString() + ' / ' + goal.toLocaleString() + (a.unit ? ' ' + a.unit : '')));
+      }
+      grid.appendChild(c);
+    });
+  }
+
+  /* An achievement unlocked: while you drive, a message at the top of the screen (with the race's other messages);
+     in the menus, a card at the top for a few seconds (one after another when there are more). */
+  const achQueue = [];
+  let achBusy = false;
+  function achNext() {
+    if (achBusy || !achQueue.length) return;
+    const a = achQueue.shift(), box = $('achpop');
+    achBusy = true;
+    $('achpop-name').textContent = a.name;
+    $('achpop-desc').textContent = a.text;
+    box.querySelector('.ach-ico').innerHTML = ICON_TROPHY;
+    box.classList.remove('hidden');
+    requestAnimationFrame(function () { requestAnimationFrame(function () { box.classList.add('show'); }); });
+    setTimeout(function () {
+      box.classList.remove('show');
+      setTimeout(function () { box.classList.add('hidden'); achBusy = false; achNext(); }, 380);
+    }, a.ms || (achQueue.length ? 2700 : 3800));     // (shorter when more are waiting)
+  }
+  function showUnlocked(list) {
+    const driving = mode !== 'menu' && game && game.kind !== 'attract' && game.msgs && $('overlay').classList.contains('hidden');
+    list.forEach(function (a) {
+      if (driving) game.msgs.add('ACHIEVEMENT UNLOCKED', { sub: a.name + ' — ' + window.Ach.desc(a), color: '#ffd600', subColor: '#ffe680', key: 'ach-' + a.id, dur: 5000 });
+      else achQueue.push({ name: a.name, text: window.Ach.desc(a) });
+    });
+    achNext();
+    if ($('career').classList.contains('active')) openCareer(careerTab);
+  }
+  // achievements earned before there were achievements (version 15): unlocked quietly, with one card saying so
+  (function () {
+    const before = window.Ach.refresh();
+    window.Ach.onUnlock = showUnlocked;
+    if (before.length) {
+      achQueue.push({ name: before.length === 1 ? '1 achievement' : before.length + ' achievements', text: 'Unlocked from your racing so far: see Career statistics', ms: 5200 });
+      setTimeout(achNext, 1800);
+    }
+  })();
 
   // ------------------------------------------------------------- settings
+  /* Three tabs: Driving, View, Sound (the last one used stays open next time, until the page is reloaded). */
+  let setTab = 'driving';
+  function showSetTab(t, focus) {
+    setTab = t;
+    document.querySelectorAll('#set-tabs button').forEach(function (b) {
+      const on = b.dataset.v === t;
+      b.classList.toggle('on', on);
+      b.setAttribute('aria-selected', on ? 'true' : 'false');
+      b.tabIndex = on ? 0 : -1;
+      if (on && focus) b.focus();
+    });
+    document.querySelectorAll('#set-pages .set-page').forEach(function (p) { p.classList.toggle('on', p.dataset.tab === t); });
+    $('set-pages').scrollTop = 0;
+  }
+  document.querySelectorAll('#set-tabs button').forEach(function (b) {
+    b.addEventListener('click', function () { closeDropdowns(); showSetTab(b.dataset.v); });
+    b.addEventListener('keydown', function (e) {
+      const order = ['driving', 'view', 'sound'], k = order.indexOf(setTab);
+      if (e.key === 'ArrowRight' || e.key === 'ArrowLeft') {
+        e.preventDefault(); e.stopPropagation();
+        showSetTab(order[(k + (e.key === 'ArrowRight' ? 1 : 2)) % 3], true);
+      }
+    });
+  });
+  /* Every tab as tall as the tallest one, so the window keeps its size when you switch (measured each time the window
+     opens, and again when something in it changes size: a longer note, the phone controls, a new window size). */
+  function fitSetPages() {
+    if ($('settings').classList.contains('hidden')) return;
+    const wrap = $('set-pages'), pages = wrap.querySelectorAll('.set-page'), top = wrap.scrollTop;
+    wrap.style.height = '';
+    let h = 0;
+    pages.forEach(function (p) {
+      pages.forEach(function (q) { q.classList.toggle('on', q === p); });
+      h = Math.max(h, p.offsetHeight);
+    });
+    pages.forEach(function (p) { p.classList.toggle('on', p.dataset.tab === setTab); });
+    const cs = getComputedStyle(wrap);
+    if (cs.boxSizing === 'border-box') h += parseFloat(cs.paddingTop) + parseFloat(cs.paddingBottom);
+    wrap.style.height = Math.ceil(h) + 'px';
+    wrap.scrollTop = top;
+  }
+  window.addEventListener('resize', fitSetPages);
+  new MutationObserver(fitSetPages).observe(document.body, { attributes: true, attributeFilter: ['class'] });   // (touch controls switched on)
   function openSettings() {
     const d = Settings.data;
     $('set-steer').value = d.steering;
@@ -1002,9 +1337,10 @@
     segInit($('set-zoom'), d.zoom || 'normal', function (v) { d.zoom = v; Settings.save(); });
     segInit($('set-units'), d.units === 'mph' ? 'mph' : 'kmh', function (v) { d.units = v; Settings.save(); });
     const gfxWords = function () {
-      $('set-graphics-note').textContent = d.graphics === 'sharp' ? 'High: always the full picture, even if the game can\'t keep up.'
-        : d.graphics === 'light' ? 'Low: smoother on a slow phone or computer (fewer effects, a slightly softer picture).'
-          : 'Auto: full graphics. On a phone it switches to Low by itself if the game can\'t keep up; on a computer drawing without its graphics chip, the picture gets a little softer instead.';
+      $('set-graphics-note').textContent = d.graphics === 'sharp' ? 'High: always full graphics, even if the game can\'t keep up.'
+        : d.graphics === 'light' ? 'Low: fewer effects, smoother on slow phones and computers.'
+          : 'Auto: full graphics, eased off if the game can\'t keep up.';
+      fitSetPages();
     };
     segInit($('set-graphics'), d.graphics, function (v) { d.graphics = v; Settings.save(); gfxWords(); applyGraphics(); });
     gfxWords();
@@ -1018,6 +1354,7 @@
       $('set-touch-note').textContent = arrows
         ? 'Left thumb: hold ← or → to steer (the longer you hold, the more the car turns). Right thumb: GO and BRAKE. Slide up from GO onto DRS when it lights up.'
         : 'Left thumb: slide left and right to steer. Right thumb: GO and BRAKE. Slide up from GO onto DRS when it lights up.';
+      fitSetPages();
     };
     segInit($('set-touchmode'), d.touchMode === 'slide' ? 'slide' : 'arrows', function (v) { d.touchMode = v; Settings.save(); touchWords(); window.TouchUI.refresh(); });
     segInit($('set-vibrate'), d.vibrate === 'off' ? 'off' : 'on', function (v) { d.vibrate = v; Settings.save(); if (v === 'on') window.Haptics.buzz(40); });
@@ -1041,9 +1378,12 @@
     function engineNote() {
       $('set-engine-note').textContent = GameAudio.ready && !GameAudio.onboardAvailable() && window.isSecureContext === false
         ? 'Onboard sound needs a secure page (https or localhost), so the TV camera sound is used here.' : '';
+      fitSetPages();
     }
     engineNote();
     $('settings').classList.remove('hidden');
+    showSetTab(setTab);
+    fitSetPages();
     Input.active = false;
   }
   /* Driving keys: click a key button, then press the new key (Esc cancels, Backspace empties the slot). */
@@ -1073,6 +1413,7 @@
   function keyNote(text, warn) {
     $('keys-note').textContent = text || 'Click a key, then press the new one. Each action can have two keys.';
     $('keys-note').classList.toggle('warn', !!warn);
+    fitSetPages();
   }
   /* The key list on the home screen follows your choices. */
   function renderKeyHints() {
@@ -1245,7 +1586,7 @@
     } else game.endEarly();
   }
   $('pause-quit').addEventListener('click', function () {
-    if (mode === 'online') askLeaveRoom(true); else if (mode === 'tt') { goHome(); openTT(); } else goHome();
+    if (mode === 'online') askLeaveRoom(true); else if (mode === 'tt') { goHome(); openTT(true); } else goHome();
   });
   $('soundbtn').querySelector('button').addEventListener('click', function (e) { e.currentTarget.blur(); toggleSound(); });
   $('fsbtn').querySelector('button').addEventListener('click', function (e) { e.currentTarget.blur(); toggleFullscreen(); });
@@ -1372,7 +1713,7 @@
 
   /* Find a room: the rooms on the server, open ones first (Join), private ones locked (they are joined with the code
      from the host). While the list is open it is brought up to date every 3 seconds. */
-  const finder = { open: false, timer: null, retry: null, last: null };
+  const finder = { open: false, timer: null, retry: null, last: null, shown: null };
   const ROOM_STATE = { lobby: 'In the lobby', results: 'In the lobby', stageResults: 'Between sessions', seasonBreak: 'Between races',
     p1: 'Practice 1 on', p2: 'Practice 2 on', p3: 'Practice 3 on', quali: 'Qualifying on', race: 'Race on', away: 'Paused: the host is away' };
   function roomWhat(r) {
@@ -1391,6 +1732,10 @@
     const nOpen = list.filter(function (r) { return r.open; }).length, nPriv = list.length - nOpen;
     $('online-find-n').textContent = list.length ? (nOpen ? nOpen + ' open' : '') + (nOpen && nPriv ? ' · ' : '') + (nPriv ? nPriv + ' private' : '') : '';
     if (!finder.open) return;
+    // (the same list as on screen: left as it is, so a Join being clicked is not swapped for a new button mid-click)
+    const key = JSON.stringify(list);
+    if (key === finder.shown) return;
+    finder.shown = key;
     const box = $('online-rooms');
     box.innerHTML = '';
     if (!list.length) { box.appendChild(el('div', 'room-empty', 'No rooms right now: create one and send your friends the link')); return; }
@@ -1422,6 +1767,7 @@
     $('online-rooms').classList.toggle('hidden', !on);
     $('online-find').setAttribute('aria-expanded', on ? 'true' : 'false');
     clearInterval(finder.timer); finder.timer = null;
+    finder.shown = null;
     if (on) {
       if (finder.last) renderRooms(finder.last);       // (the list from a moment ago, at once)
       else if (!$('online-rooms').children.length) $('online-rooms').appendChild(el('div', 'room-empty', 'Looking for rooms…'));
@@ -1677,7 +2023,7 @@
       });
     }
   }
-  $('lobby-cal-all').addEventListener('click', function () { if (net) net.socket.emit('settings', { calendar: Object.keys(F1.TRACK_DEFS) }); });
+  $('lobby-cal-all').addEventListener('click', function () { if (net) net.socket.emit('settings', { calendar: F1.calendarTracks() }); });
   $('lobby-cal-none').addEventListener('click', function () { if (net) net.socket.emit('settings', { calendar: [] }); });
   ['set-mode', 'set-track', 'set-p1', 'set-p2', 'set-p3', 'set-quali', 'set-reverse', 'set-race', 'set-ai', 'set-level', 'set-draft', 'set-tyres', 'set-weather'].forEach(function (id) {
     $(id).addEventListener('change', function () {
@@ -1734,7 +2080,7 @@
     // career: the season just finished while you were in it
     if (sv && sv.done && season && !season.done && sv.you) {
       const st = onlineStandings(sv);
-      Career.season(!!st.drivers.length && st.drivers[0].e.eid === sv.you);
+      Career.season(!!st.drivers.length && st.drivers[0].e.eid === sv.you, Array.isArray(sv.calendar) ? sv.calendar.length : 0);
     }
     season = sv;
     if (sv && sv.save) {
@@ -1798,7 +2144,10 @@
     // career: only a session you were driving in, and only once (the results can be sent again)
     if (game && game.kind === 'online' && !game.ended && game.myId !== null && m && m.results) {
       const code = game.code(game.myId), own = m.results.find(function (r) { return r.driverId === code && !r.isAI; });
-      if (own && m.type === 'race' && !own.left) Career.race({ track: m.track, pos: own.pos, out: !!own.out, fl: !!own.fl, pts: own.pts || 0, laps: own.laps || 0, online: true });
+      const rs = room && room.settings;      // (the weekend's settings: AI difficulty, sessions)
+      if (own && m.type === 'race' && !own.left) Career.race({ track: m.track, pos: own.pos, out: !!own.out, fl: !!own.fl, pts: own.pts || 0, laps: own.laps || 0, online: true,
+        grid: own.grid, ovt: own.ovt || 0, cars: m.results.length, rain: !!game.rainSeen,
+        level: rs && rs.aiCount > 0 ? rs.aiLevel : null, full: !!(rs && rs.p1 > 0 && rs.p2 > 0 && rs.p3 > 0 && rs.qualiLaps > 0) });
       if (own && m.type === 'quali' && own.pos === 1 && own.best !== null && !own.out) Career.pole();
     }
     if (game && game.kind === 'online') game.ended = true;
@@ -1806,6 +2155,7 @@
     showResults(m, 'online');
   }
   function showResults(m, ctx) {
+    PlayTime.flush();
     $('busy').classList.add('hidden');
     $('confirm').classList.add('hidden');
     lastResults = m;
@@ -2230,6 +2580,16 @@
     if (e.code === 'Enter' && garShown !== null && !e.repeat && game) { game.goOut = true; e.preventDefault(); }
   });
   let menuOdd = false;
+  /* Time played: counted while a session is on screen and running (not in the menus or results, not in the pause menu
+     or its 3-2-1, not behind the loading card, not while this tab is hidden), for each track. Added to your career
+     every 20 seconds, when a session ends and when the page is hidden or closed. */
+  const PlayTime = {
+    per: {}, n: 0,
+    add: function (id, s) { this.per[id] = (this.per[id] || 0) + s; this.n += s; if (this.n >= 20) this.flush(); },
+    flush: function () { if (!this.n) return; const per = this.per; this.per = {}; this.n = 0; window.Career.addTime(per); }
+  };
+  document.addEventListener('visibilitychange', function () { if (document.hidden) PlayTime.flush(); });
+  window.addEventListener('pagehide', function () { PlayTime.flush(); });
   // (the page was hidden, or the computer asleep, since the last picture: that gap is not the game being slow)
   let wasAway = false;
   document.addEventListener('visibilitychange', function () { if (document.hidden) wasAway = true; });
@@ -2259,6 +2619,12 @@
     // sound: only while a session is on screen (not in menus, pause or results)
     const audioOn = mode !== 'menu' && game.kind !== 'attract' && $('overlay').classList.contains('hidden') && $('pause').classList.contains('hidden') && !(game.resumeT > 0) && !game.frozen;
     GameAudio.setActive(audioOn);
+    if (audioOn && game.T) {
+      if (!document.hidden && !LC.on && raw > 0 && raw < 1) PlayTime.add(game.T.id, raw);
+      // (it rained in this session: for the Rain master achievement)
+      const rain = game.kind === 'online' ? game.wxT && game.wxT.rain : game.S && game.S.rain;
+      if (rain > 0.08) game.rainSeen = true;
+    }
     updateGarageUI();
     updateTyreUI();
     if (audioOn && game.audioState) { try { const st = game.audioState(); if (st) { GameAudio.update(st, dt); window.Haptics.kerb(st.own); } } catch (err) { console.error(err); } }

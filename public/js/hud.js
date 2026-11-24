@@ -39,6 +39,15 @@
       const ty = F1.TYRES[e.tyre];
       msgs.add('PIT STOP  ' + e.t.toFixed(1) + ' s', { sub: 'New ' + (ty ? ty.name.toLowerCase() : '') + ' tyres', color: '#19c94a', from: 'eng', key: 'stop', dur: 3500 });
     }
+    else if (e.k === 'drsBehind' && e.id === myId) {
+      // once a minute at most: a new car in range, or the same one back in range after a while (not every lap it stays there)
+      const st = msgs.drsB || (msgs.drsB = { by: null, said: -1e9, seen: -1e9 }), now = performance.now();
+      if ((st.by !== e.by || now - st.seen > 45000) && now - st.said > 60000) {
+        msgs.add('CAR BEHIND IS IN DRS RANGE', { sub: codeOf(e.by) + ' is less than a second behind you', color: '#ffd600', from: 'eng', key: 'drsb', dur: 4500 });
+        st.said = now;
+      }
+      st.by = e.by; st.seen = now;
+    }
     else if (e.k === 'rainSoon') msgs.add('RAIN EXPECTED', { sub: e.heavy ? 'Heavy rain in about a minute' : 'Light rain in about a minute', color: '#6ec1ff', from: 'eng', key: 'wx', dur: 4500 });
     else if (e.k === 'rain') msgs.add(e.n === 2 ? 'HEAVY RAIN' : 'IT IS RAINING', { sub: e.n === 2 ? 'Water\u2019s building up: full wets soon' : 'The track is getting wet', color: '#6ec1ff', from: 'eng', key: 'wx', dur: 4500 });
     else if (e.k === 'rainStop') msgs.add('RAIN HAS STOPPED', { sub: 'The racing line will dry first', color: '#6ec1ff', from: 'eng', key: 'wx', dur: 4000 });

@@ -53,6 +53,8 @@
       this.data[track] = { t: Math.round(t * 1000) / 1000, d: driverId || null, at: Date.now() };
       if (sec && sec.length === 3 && sec.every(function (v) { return isFinite(v) && v > 0; })) this.data[track].sec = sec.slice();
       try { window.localStorage.setItem('topdowngp.pb', JSON.stringify(this.data)); } catch (e) { /* ignore */ }
+      if (cur && cur.t - t >= 1) Ach.unlock(['ghost']);
+      Ach.refresh();
       return true;
     }
   };
@@ -60,11 +62,12 @@
 
   // ------------------------------------------------------------- career (your records across every mode, this browser)
   /* { v, since, races, wins, podiums, poles, fl (fastest laps), points, laps, seasons (championships finished),
-       titles (championships won), online: { races, wins, podiums }, tracks: { id: { races, wins, podiums, best } } } */
+       titles (championships won), time (seconds played), online: { races, wins, podiums },
+       tracks: { id: { races, wins, podiums, best, time } } } */
   const Career = {
     data: null,
     blank: function () {
-      return { v: 1, since: Date.now(), races: 0, wins: 0, podiums: 0, poles: 0, fl: 0, points: 0, laps: 0, seasons: 0, titles: 0,
+      return { v: 1, since: Date.now(), races: 0, wins: 0, podiums: 0, poles: 0, fl: 0, points: 0, laps: 0, seasons: 0, titles: 0, time: 0,
         online: { races: 0, wins: 0, podiums: 0 }, tracks: {} };
     },
     load: function () {
@@ -73,10 +76,12 @@
         const o = JSON.parse(window.localStorage.getItem('topdowngp.career') || 'null');
         if (o && typeof o === 'object') {
           ['since', 'races', 'wins', 'podiums', 'poles', 'fl', 'points', 'laps', 'seasons', 'titles'].forEach(function (k) { if (isFinite(o[k]) && o[k] >= 0) d[k] = Math.floor(o[k]); });
+          if (isFinite(o.time) && o.time > 0) d.time = o.time;
           if (o.online) ['races', 'wins', 'podiums'].forEach(function (k) { if (isFinite(o.online[k]) && o.online[k] >= 0) d.online[k] = Math.floor(o.online[k]); });
           if (o.tracks && typeof o.tracks === 'object') Object.keys(o.tracks).forEach(function (id) {
             const t = o.tracks[id];
-            if (t && F1.TRACK_DEFS[id]) d.tracks[id] = { races: Math.floor(t.races) || 0, wins: Math.floor(t.wins) || 0, podiums: Math.floor(t.podiums) || 0, best: t.best > 0 ? Math.floor(t.best) : 0 };
+            if (t && F1.TRACK_DEFS[id]) d.tracks[id] = { races: Math.floor(t.races) || 0, wins: Math.floor(t.wins) || 0, podiums: Math.floor(t.podiums) || 0, best: t.best > 0 ? Math.floor(t.best) : 0,
+              time: isFinite(t.time) && t.time > 0 ? t.time : 0 };
           });
         }
       } catch (e) { /* keep the blank career */ }
@@ -84,9 +89,11 @@
       return d;
     },
     save: function () { try { window.localStorage.setItem('topdowngp.career', JSON.stringify(this.data)); } catch (e) { /* ignore */ } },
-    /* A race you finished or retired from: { track, pos, out, fl, pts, laps, online } */
+    /* A race you finished or retired from: { track, pos, out, fl, pts, laps, online } and for the achievements
+       { grid (your place on the grid), ovt (your overtakes), cars, rain (it rained in the race), level (the AI's
+       difficulty, when there were AI cars), full (a weekend with all three practices and qualifying) } */
     race: function (o) {
-      const d = this.load(), t = d.tracks[o.track] || (d.tracks[o.track] = { races: 0, wins: 0, podiums: 0, best: 0 });
+      const d = this.load(), t = this.trk(d, o.track);
       const win = !o.out && o.pos === 1, pod = !o.out && o.pos <= 3;
       d.races++; t.races++;
       if (win) { d.wins++; t.wins++; }
@@ -97,10 +104,136 @@
       d.laps += o.laps || 0;
       if (o.online) { d.online.races++; if (win) d.online.wins++; if (pod) d.online.podiums++; }
       this.save();
+      Ach.race(o, win, pod);
     },
-    pole: function () { const d = this.load(); d.poles++; this.save(); },
-    /* A championship you raced to the end (single-player or online). */
-    season: function (won) { const d = this.load(); d.seasons++; if (won) d.titles++; this.save(); }
+    trk: function (d, id) { return d.tracks[id] || (d.tracks[id] = { races: 0, wins: 0, podiums: 0, best: 0, time: 0 }); },
+    pole: function () { const d = this.load(); d.poles++; this.save(); Ach.refresh(); },
+    /* A championship you raced to the end (single-player or online), and how many races it had. */
+    season: function (won, rounds) {
+      const d = this.load(); d.seasons++; if (won) d.titles++; this.save();
+      if (rounds >= 24) Ach.unlock(['fullseason']);
+      Ach.refresh();
+    },
+    /* Time played, in seconds per track: { trackId: seconds } */
+    addTime: function (per) {
+      const d = this.load(), self = this;
+      Object.keys(per).forEach(function (id) {
+        if (!F1.TRACK_DEFS[id] || !(per[id] > 0)) return;
+        d.time = Math.round((d.time + per[id]) * 10) / 10;
+        const t = self.trk(d, id);
+        t.time = Math.round((t.time + per[id]) * 10) / 10;
+      });
+      this.save();
+      Ach.refresh();
+    }
+  };
+  /* "12 h 14 min", "43 min" (time played) */
+  function fmtPlayed(s) {
+    const m = Math.floor((s || 0) / 60);
+    return m < 60 ? m + ' min' : Math.floor(m / 60) + ' h ' + (m % 60) + ' min';
+  }
+
+  // ------------------------------------------------------------- achievements (this browser)
+  /* 40 achievements. Counted ones (goal) unlock when their number is reached and show a progress bar until then; the
+     others unlock at a moment in a race. The race feats need at least 5 opponents in the race. Unlocked achievements
+     are kept with the time they were unlocked: { id: time }. */
+  const nTracks = function () { return Object.keys(F1.TRACK_DEFS).length; };
+  const ACH = [
+    { id: 'race1', group: 'Racing', name: 'Lights out', desc: 'Start your first race', goal: 1, v: function (s) { return s.c.races; } },
+    { id: 'win1', group: 'Racing', name: 'First win', desc: 'Win a race', goal: 1, v: function (s) { return s.c.wins; } },
+    { id: 'podium1', group: 'Racing', name: 'On the podium', desc: 'Finish in the top three', goal: 1, v: function (s) { return s.c.podiums; } },
+    { id: 'wins10', group: 'Racing', name: 'Serial winner', desc: 'Win 10 races', goal: 10, v: function (s) { return s.c.wins; } },
+    { id: 'wins50', group: 'Racing', name: 'Dominant', desc: 'Win 50 races', goal: 50, v: function (s) { return s.c.wins; } },
+    { id: 'podiums25', group: 'Racing', name: 'Champagne shower', desc: 'Finish on the podium 25 times', goal: 25, v: function (s) { return s.c.podiums; } },
+    { id: 'pole1', group: 'Racing', name: 'Pole position', desc: 'Be fastest in qualifying', goal: 1, v: function (s) { return s.c.poles; } },
+    { id: 'poles10', group: 'Racing', name: 'Pole master', desc: 'Take 10 pole positions', goal: 10, v: function (s) { return s.c.poles; } },
+    { id: 'fl1', group: 'Racing', name: 'Fastest lap', desc: 'Set the fastest lap of a race', goal: 1, v: function (s) { return s.c.fl; } },
+    { id: 'fl10', group: 'Racing', name: 'Purple patch', desc: 'Set the fastest lap in 10 races', goal: 10, v: function (s) { return s.c.fl; } },
+    { id: 'pts100', group: 'Racing', name: 'Points on the board', desc: 'Score 100 points', goal: 100, v: function (s) { return s.c.points; } },
+    { id: 'pts1000', group: 'Racing', name: 'Points machine', desc: 'Score 1,000 points', goal: 1000, v: function (s) { return s.c.points; } },
+    { id: 'laps100', group: 'Racing', name: 'Centurion', desc: 'Drive 100 racing laps', goal: 100, v: function (s) { return s.c.laps; } },
+    { id: 'laps1000', group: 'Racing', name: 'Marathon', desc: 'Drive 1,000 racing laps', goal: 1000, v: function (s) { return s.c.laps; } },
+    { id: 'season1', group: 'Championships', name: 'Season done', desc: 'Race a championship to the end', goal: 1, v: function (s) { return s.c.seasons; } },
+    { id: 'title1', group: 'Championships', name: 'World Champion', desc: 'Win a championship', goal: 1, v: function (s) { return s.c.titles; } },
+    { id: 'titles3', group: 'Championships', name: 'Dynasty', desc: 'Win 3 championships', goal: 3, v: function (s) { return s.c.titles; } },
+    { id: 'fullseason', group: 'Championships', name: 'Full calendar', desc: 'Race a championship of 24 races to the end' },
+    { id: 'sweep', group: 'Race feats', name: 'Clean sweep', desc: 'Start first, win and set the fastest lap' },
+    { id: 'comeback', group: 'Race feats', name: 'Comeback', desc: 'Win from P15 or lower on the grid' },
+    { id: 'fromback', group: 'Race feats', name: 'From the back', desc: 'Start last and finish on the podium' },
+    { id: 'overtaker', group: 'Race feats', name: 'Overtaker', desc: 'Make 10 overtakes in one race' },
+    { id: 'rain', group: 'Race feats', name: 'Rain master', desc: 'Win a race in the rain' },
+    { id: 'night', group: 'Race feats', name: 'Under the lights', desc: 'Win a night race' },
+    { id: 'monaco', group: 'Race feats', name: 'Monaco king', desc: 'Win at Monaco' },
+    { id: 'monza', group: 'Race feats', name: 'Temple of speed', desc: 'Win at Monza' },
+    { id: 'classic', group: 'Race feats', name: 'Old school', desc: 'Win on a classic track' },
+    { id: 'expert', group: 'Race feats', name: 'Beat the best', desc: 'Win a race on Expert difficulty' },
+    { id: 'fullgrid', group: 'Race feats', name: 'Full grid', desc: 'Win a race against 21 opponents' },
+    { id: 'weekend', group: 'Race feats', name: 'Full weekend', desc: 'Race a weekend with all three practices and qualifying' },
+    { id: 'tracksall', group: 'Tracks and laps', name: 'Globetrotter', desc: function () { return 'Race on all ' + nTracks() + ' tracks'; }, goal: nTracks, v: function (s) { return s.raced; } },
+    { id: 'wintracks10', group: 'Tracks and laps', name: 'World tour', desc: 'Win on 10 different tracks', goal: 10, v: function (s) { return s.won; } },
+    { id: 'pb10', group: 'Tracks and laps', name: 'Speed collector', desc: 'Set a best lap on 10 tracks', goal: 10, v: function (s) { return s.pbs; } },
+    { id: 'pball', group: 'Tracks and laps', name: 'All-rounder', desc: function () { return 'Set a best lap on all ' + nTracks() + ' tracks'; }, goal: nTracks, v: function (s) { return s.pbs; } },
+    { id: 'ghost', group: 'Tracks and laps', name: 'Ghostbuster', desc: 'Beat your best lap on a track by a full second' },
+    { id: 'tt10', group: 'Tracks and laps', name: 'Time trialist', desc: 'Set a time trial lap on 10 tracks', goal: 10, v: function (s) { return s.tts; } },
+    { id: 'online1', group: 'Online and time', name: 'Online racer', desc: 'Race online', goal: 1, v: function (s) { return s.c.online.races; } },
+    { id: 'onlinewin', group: 'Online and time', name: 'Online winner', desc: 'Win an online race', goal: 1, v: function (s) { return s.c.online.wins; } },
+    { id: 'hour1', group: 'Online and time', name: 'Warming up', desc: 'Play for 1 hour', goal: 60, unit: 'min', v: function (s) { return s.c.time / 60; } },
+    { id: 'hours10', group: 'Online and time', name: 'Night owl', desc: 'Play for 10 hours', goal: 600, unit: 'min', v: function (s) { return s.c.time / 60; } }
+  ];
+  const ACH_BY = {};
+  ACH.forEach(function (a) { ACH_BY[a.id] = a; });
+  const Ach = {
+    LIST: ACH,
+    onUnlock: null,          // (main.js shows the new ones)
+    got: function () {
+      try { return JSON.parse(window.localStorage.getItem('topdowngp.ach') || '{}') || {}; } catch (e) { return {}; }
+    },
+    goal: function (a) { return typeof a.goal === 'function' ? a.goal() : a.goal; },
+    desc: function (a) { return typeof a.desc === 'function' ? a.desc() : a.desc; },
+    /* The numbers the counted achievements go by. */
+    stats: function () {
+      const c = Career.load(), tr = c.tracks;
+      const tt = window.TTBoard ? window.TTBoard.load() : {};
+      return { c: c,
+        raced: Object.keys(tr).filter(function (id) { return tr[id].races > 0; }).length,
+        won: Object.keys(tr).filter(function (id) { return tr[id].wins > 0; }).length,
+        pbs: Object.keys(F1.TRACK_DEFS).filter(function (id) { return !!PB.get(id); }).length,
+        tts: Object.keys(F1.TRACK_DEFS).filter(function (id) { return Array.isArray(tt[id]) && tt[id].length > 0; }).length };
+    },
+    unlock: function (ids) {
+      const got = this.got(), fresh = [];
+      ids.forEach(function (id) { if (ACH_BY[id] && !got[id]) { got[id] = Date.now(); fresh.push(ACH_BY[id]); } });
+      if (fresh.length) {
+        try { window.localStorage.setItem('topdowngp.ach', JSON.stringify(got)); } catch (e) { /* ignore */ }
+        if (this.onUnlock) { try { this.onUnlock(fresh); } catch (e) { /* ignore */ } }
+      }
+      return fresh;
+    },
+    /* Unlock the counted achievements whose number has been reached. */
+    refresh: function () {
+      const s = this.stats(), self = this;
+      return this.unlock(ACH.filter(function (a) { return a.v && a.v(s) >= self.goal(a); }).map(function (a) { return a.id; }));
+    },
+    /* The race feats, at the end of a race (see Career.race). */
+    race: function (o, win, pod) {
+      const T = F1.TRACK_DEFS[o.track] || {}, ids = [], cars = o.cars || 0, field = cars >= 6;
+      if (field) {
+        if (win && o.grid === 1 && o.fl) ids.push('sweep');
+        if (win && o.grid >= 15) ids.push('comeback');
+        if (pod && cars >= 10 && o.grid === cars) ids.push('fromback');
+        if (!o.out && o.ovt >= 10) ids.push('overtaker');
+        if (win && o.rain) ids.push('rain');
+        if (win && T.night) ids.push('night');
+        if (win && o.track === 'monaco') ids.push('monaco');
+        if (win && o.track === 'monza') ids.push('monza');
+        if (win && T.classic) ids.push('classic');
+        if (win && o.level === 'expert') ids.push('expert');
+        if (win && cars >= 22) ids.push('fullgrid');
+      }
+      if (!o.out && o.full) ids.push('weekend');
+      this.unlock(ids);
+      this.refresh();
+    }
   };
 
   // ------------------------------------------------------------- input
@@ -311,6 +444,8 @@
   window.Input = Input;
   window.KeyBind = KeyBind;
   window.Career = Career;
+  window.Ach = Ach;
+  window.fmtPlayed = fmtPlayed;
   window.Messages = Messages;
   window.gearFor = gearFor;
   window.controlsHint = controlsHint;

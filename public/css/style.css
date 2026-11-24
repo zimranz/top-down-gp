@@ -725,3 +725,174 @@ body.touch .tp-title { font-size: 13px; }
   .pstep .pblock span { font-size: 24px; }
   .pstep.p1 .pblock { height: 62px; } .pstep.p2 .pblock { height: 46px; } .pstep.p3 .pblock { height: 34px; }
 }
+
+
+/* ------------------------------------------------------------------ version 15 */
+/* setup pages (practice, time trial, Grand Prix, championship): the track and your driver as one card each, the
+   settings always in view beside them; on narrow screens one column, with the Start button in a bar at the bottom */
+.setup { display: grid; grid-template-columns: minmax(340px, 420px) minmax(0, 1fr); gap: 14px; padding: 14px 18px 18px; overflow: auto; min-height: 0; align-items: start; }
+.setup-picks, .setup-opts { display: flex; flex-direction: column; gap: 12px; min-width: 0; }
+.set-box { background: rgba(255,255,255,0.04); border: 1px solid rgba(255,255,255,0.07); border-radius: 12px; padding: 12px 14px; min-width: 0; }
+.set-box h3:first-child { margin-top: 0; }
+.set-box .note { margin: 8px 0 0; }
+.set-2 { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1.5fr); gap: 18px; }
+.set-2 h3 { margin-top: 0; }
+.wk-grid { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 8px 12px; }
+.wk-grid label { display: flex; flex-direction: column; gap: 4px; font-size: 12.5px; color: var(--muted); font-weight: 700; min-width: 0; }
+.wk-grid select { width: 100%; }
+.pick { display: flex; align-items: center; gap: 12px; cursor: pointer; border-radius: 9px; padding: 4px; margin: -4px; outline: none; }
+.pick:hover, .pick:focus-visible { background: rgba(255,255,255,0.05); }
+.pick .pinfo { flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 1px; }
+.pick .pinfo b { font-size: 18px; line-height: 1.2; }
+.pick .pinfo span { font-size: 13px; color: var(--muted); }
+.pick .pinfo .pbl { color: var(--yellow); font-weight: 700; }
+.pick .btn { flex: none; }
+.pick canvas.pmap { width: 100px; height: 74px; flex: none; }
+.pick .pq { width: 100px; height: 74px; flex: none; display: flex; align-items: center; justify-content: center; font-size: 44px; font-weight: 900; font-style: italic;
+  color: var(--yellow); border-radius: 9px; background: rgba(255,255,255,0.05); line-height: 1; }
+.pick .pq.plus { color: var(--muted); font-style: normal; font-weight: 400; border: 2px dashed rgba(255,255,255,0.18); background: none; }
+.pick .pq.cal { font-size: 36px; }
+.pick.empty .pinfo b { color: #cfd3d8; }
+.pick.drv { border-left: 4px solid var(--team, #888); border-radius: 4px; padding-left: 12px; margin-left: 0; }
+.pick canvas.pcar { width: 90px; height: 32px; flex: none; }
+.pick .num { font-style: italic; font-weight: 900; color: var(--team, #fff); margin-right: 7px; font-size: 14px; }
+.pick .pinfo .dteam { color: #cfd3d8; font-weight: 700; }
+.cal-list { display: flex; flex-wrap: wrap; gap: 4px; margin-top: 5px; }
+.cal-item { font-size: 12px !important; color: #cfd3d8 !important; background: rgba(255,255,255,0.07); border-radius: 5px; padding: 1px 6px; white-space: nowrap; }
+.cal-item.more { background: none; color: var(--muted) !important; }
+.btn.choose { background: #34353b; border-color: #34353b; }
+.start-bar { display: none; }
+.tt-board td.empty { color: var(--muted); }
+@media (max-width: 860px) {
+  .setup { grid-template-columns: minmax(0, 1fr); padding: 12px 12px 0; }
+  .panel-head .start-head { visibility: hidden; }
+  .start-bar { display: block; position: sticky; bottom: 0; z-index: 2; margin: 0 -12px; padding: 10px 12px 12px; background: linear-gradient(rgba(14,14,18,0), rgb(14,14,18) 30%); }
+  .start-bar .btn { width: 100%; }
+}
+@media (max-width: 560px) {
+  .wk-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+  .set-2 { grid-template-columns: minmax(0, 1fr); gap: 10px; }
+  .pick canvas.pmap, .pick .pq { width: 84px; height: 64px; }
+  .pick canvas.pcar { width: 78px; height: 28px; }
+  .pick .pinfo b { font-size: 16px; }
+}
+@media (max-height: 520px) {
+  .panel .setup { overflow: visible; }
+}
+/* the picker: every track (or every driver) over the page */
+#picker { z-index: 15; }
+.picker-box { width: min(1120px, 96vw); height: min(760px, 94vh); max-height: none; padding: 22px 24px 0; gap: 10px; overflow: hidden; }
+.picker-box.drivers-mode { width: min(980px, 96vw); }
+.picker-box .modal-head { position: static; margin: -22px -24px 0; padding: 14px 16px 10px 24px; }
+.picker-chips { display: flex; flex-wrap: wrap; gap: 6px; }
+.picker-chips.hidden, .picker-foot.hidden { display: none; }
+.chip { font-family: var(--font); font-weight: 700; font-size: 13px; color: #cfd3d8; background: transparent; border: 1px solid rgba(255,255,255,0.2); border-radius: 999px; padding: 6px 13px; cursor: pointer; }
+.chip.on { background: var(--red); border-color: transparent; color: #fff; }
+.picker-body { flex: 1; min-height: 0; overflow-y: auto; margin: 0 -24px; padding: 0 24px 18px; overscroll-behavior: contain; }
+.pk-head { margin: 12px 0 8px; font-size: 12.5px; letter-spacing: 1.5px; text-transform: uppercase; color: var(--muted); font-weight: 800; }
+.pk-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(150px, 1fr)); gap: 10px; }
+.pk-empty { color: var(--muted); font-size: 14px; padding: 8px 0; }
+.picker-body .drivers { margin-top: 4px; }
+.picker-foot { display: flex; align-items: center; gap: 8px; margin: 0 -24px; padding: 12px 24px 14px; border-top: 1px solid var(--line); background: #121217; flex-wrap: wrap; }
+.picker-foot .pk-n { flex: 1; font-weight: 800; min-width: 160px; }
+@media (max-width: 560px) {
+  .picker-box { width: 100vw; height: 100%; max-height: 100%; border-radius: 0; padding: 16px 12px 0; }
+  .picker-box .modal-head { margin: -16px -12px 0; padding: 10px 10px 8px 14px; }
+  .picker-body { margin: 0 -12px; padding: 0 12px 14px; }
+  .picker-foot { margin: 0 -12px; padding: 10px 12px 12px; }
+  .pk-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 8px; }
+  #picker { padding: 0; }
+}
+/* phones on their side (short screens): the picker fills the screen, a slimmer head, the filters in one line that
+   scrolls, smaller track pictures, so two rows of tracks fit */
+@media (max-height: 520px) {
+  #picker { padding: 0; }
+  .picker-box { width: 100vw; height: 100%; max-height: 100%; border-radius: 0; padding: 8px 16px 0; gap: 6px; }
+  .picker-box .modal-head { margin: -8px -16px 0; padding: 6px 10px 2px 18px; }
+  .picker-box .modal-head h2 { font-size: 19px; }
+  .picker-chips { flex-wrap: nowrap; overflow-x: auto; scrollbar-width: none; }
+  .picker-chips::-webkit-scrollbar { display: none; }
+  .chip { flex: none; padding: 4px 11px; font-size: 12px; }
+  .picker-body { margin: 0 -16px; padding: 0 16px 10px; }
+  .pk-head { margin: 6px 0 6px; font-size: 11.5px; }
+  .pk-grid { grid-template-columns: repeat(auto-fill, minmax(132px, 1fr)); gap: 8px; }
+  .picker-body .track-card { padding: 6px; }
+  .picker-body .track-card canvas, .picker-body .track-card .q { height: 50px; }
+  .picker-body .track-card .q { font-size: 36px; }
+  .picker-foot { margin: 0 -16px; padding: 6px 16px 8px; }
+}
+
+/* settings in three tabs: Driving, View, Sound. Every tab is as tall as the tallest one (main.js sets the height), so the
+   window keeps its size when you switch; on a short screen the tab's contents scroll between the tabs and Save. */
+.settings-box { overflow: hidden; width: min(440px, 94vw); }
+.set-tabs { flex: none; }
+.set-tabs button { font-size: 15px; padding: 9px 6px; }
+.set-tabs button:focus-visible { outline: 2px solid rgba(255,255,255,0.6); outline-offset: -2px; }
+.set-pages { flex: 0 1 auto; min-height: 0; overflow-y: auto; overscroll-behavior: contain; margin: 0 -24px; padding: 2px 24px 6px; }
+.set-page { display: none; flex-direction: column; gap: 14px; }
+.set-page.on { display: flex; }
+#set-graphics-note { min-height: 2.5em; line-height: 1.25; }
+.engine-row { display: flex; flex-direction: column; align-items: stretch; gap: 6px; margin-top: 2px; }
+.engine-row > label { flex: none; font-size: 13px; font-weight: 700; color: var(--muted); }
+.engine-ctrls { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); gap: 10px; align-items: stretch; }
+.engine-ctrls .dd { display: block; }
+.engine-ctrls .btn { padding: 0 10px; white-space: nowrap; }
+@media (max-height: 520px) {
+  .settings-box { padding: 12px 18px; gap: 10px; }
+  .settings-box .modal-head { margin: -12px -18px 0; padding: 8px 12px 4px 18px; }
+  .settings-box .modal-head h2 { font-size: 20px; }
+  .set-pages { margin: 0 -18px; padding: 2px 18px 6px; }
+  .set-tabs button { padding: 7px 6px; }
+}
+
+/* career statistics: two tabs (My statistics, Achievements); time played among the totals */
+.career-tabs-row { display: flex; justify-content: center; padding: 12px 20px 0; }
+.career-tabs { width: min(440px, 100%); }
+.career-tabs button { font-size: 15px; padding: 9px 8px; }
+.career-tabs .tab-n { font-size: 12px; font-weight: 700; opacity: 0.8; margin-left: 3px; }
+.career-wrap.hidden { display: none; }
+.career-stats { grid-template-columns: repeat(8, minmax(0, 1fr)); }
+.career-stats .stat-card.ach-tile { cursor: pointer; }
+.career-stats .stat-card.ach-tile:hover { border-color: rgba(255,214,0,0.55); }
+@media (max-width: 1150px) { .career-stats { grid-template-columns: repeat(4, minmax(0, 1fr)); } }
+@media (max-width: 560px) {
+  .career-stats { grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 8px; }
+  .career-stats .stat-card { padding: 7px 6px; }
+  .career-stats .num { font-size: 24px; }
+  .career-tabs-row { padding: 10px 12px 0; }
+}
+.career-scroll { overflow-x: auto; }
+.career-scroll table { min-width: 640px; }
+/* achievements */
+.ach-top { display: flex; align-items: center; gap: 14px; margin: 4px 0 2px; }
+.ach-count { font-weight: 800; font-size: 16px; white-space: nowrap; }
+.ach-total { flex: 1; height: 8px; border-radius: 4px; background: rgba(255,255,255,0.1); overflow: hidden; }
+.ach-total i { display: block; height: 100%; background: var(--yellow); border-radius: 4px; }
+.ach-head { margin: 16px 0 8px; font-size: 12.5px; letter-spacing: 1.5px; text-transform: uppercase; color: var(--muted); font-weight: 800; }
+.ach-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(230px, 1fr)); gap: 10px; }
+.ach { display: grid; grid-template-columns: 22px minmax(0, 1fr) auto; gap: 0 9px; align-items: start; padding: 10px 12px; border-radius: 9px;
+  background: rgba(255,255,255,0.04); border: 1px solid var(--line); color: var(--muted); }
+.ach.on { border-color: rgba(255,214,0,0.55); background: rgba(255,214,0,0.08); }
+.ach .ach-ico { color: #5f6570; padding-top: 1px; display: flex; justify-content: center; }
+.ach.on .ach-ico { color: var(--yellow); }
+.ach-txt { grid-column: 2 / 4; min-width: 0; }
+.ach-txt b { display: block; font-size: 15px; color: #cfd3d8; line-height: 1.25; }
+.ach.on .ach-txt b { color: #fff; }
+.ach-txt span { display: block; font-size: 13px; line-height: 1.3; }
+.ach.on .ach-txt span { color: #d9dce1; }
+.ach-bar { grid-column: 2 / 3; align-self: center; height: 5px; border-radius: 3px; background: rgba(255,255,255,0.1); margin-top: 8px; overflow: hidden; }
+.ach-bar i { display: block; height: 100%; background: var(--yellow); border-radius: 3px; }
+.ach-prog { grid-column: 3 / 4; align-self: center; margin-top: 8px; font-size: 12px; font-weight: 700; color: var(--muted); white-space: nowrap; }
+@media (max-width: 560px) { .ach-grid { grid-template-columns: minmax(0, 1fr); gap: 8px; } }
+/* an achievement unlocked (in the menus) */
+#achpop { position: fixed; top: 16px; left: 50%; transform: translate(-50%, -14px); opacity: 0; z-index: 30; display: flex; align-items: center; gap: 12px;
+  background: rgba(16,16,20,0.97); border: 1px solid rgba(255,214,0,0.6); border-radius: 12px; padding: 10px 18px 10px 12px; box-shadow: 0 12px 40px rgba(0,0,0,0.55);
+  transition: opacity .3s, transform .3s; pointer-events: none; width: max-content; max-width: min(460px, 92vw); }
+#achpop.show { opacity: 1; transform: translate(-50%, 0); }
+#achpop.hidden { display: none; }
+#achpop .ach-ico { width: 40px; height: 40px; border-radius: 50%; background: rgba(255,214,0,0.16); color: var(--yellow); display: flex; align-items: center; justify-content: center; flex: none; }
+#achpop .ach-ico svg { width: 23px; height: 23px; }
+.achpop-text { display: flex; flex-direction: column; min-width: 0; }
+.achpop-text small { font-size: 11px; letter-spacing: 1.2px; text-transform: uppercase; color: var(--yellow); font-weight: 800; }
+.achpop-text b { font-size: 17px; color: #fff; }
+.achpop-text span { font-size: 13px; color: #cfd3d8; }
