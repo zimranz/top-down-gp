@@ -1366,6 +1366,7 @@
     this.laps = opts.laps || 0;
     this.aiLevel = F1.isAILevel(opts.aiLevel) ? opts.aiLevel : 'medium';
     this.collisions = opts.type === 'quali' ? false : opts.collisions !== false;
+    this.contactEvents = opts.contactEvents === true;              // (daily challenge: a player's hits on other cars count)
     this.drafting = opts.drafting !== false;                       // slipstream on straights (a switch before the session)
     // practice: AI cars do runs of a few laps and go back to their garages in between
     this.runs = opts.type === 'practice' && opts.runs === true && !!T.pit;
@@ -1383,7 +1384,9 @@
     this.wx = { soon: -1, rain: 0, stop: true };                   // (for the rain messages)
     if (this.weatherOn) {
       const horizon = opts.type === 'race' ? 20 + this.laps * ref * 1.1 : this.laps > 0 ? (this.laps + 2.5) * ref * 1.3 : 3600;
-      this.wplan = F1.weatherPlan(T, (opts.seed || 1234567) + 17, horizon);
+      // (a daily challenge brings its own weather: rain all session long, the same for everyone)
+      this.wplan = Array.isArray(opts.wplan) ? opts.wplan.map(function (sp) { return { t0: sp.t0, t1: sp.t1, peak: sp.peak }; })
+        : F1.weatherPlan(T, (opts.seed || 1234567) + 17, horizon);
       // already raining (or it has just rained): how wet the track is when the session starts
       for (let t = -300; t < 0; t += 1) this.weatherStep(1, t);
       this.wx.rain = this.rain > 0.08 ? (this.rain > 0.55 ? 2 : 1) : 0; this.wx.stop = this.rain <= 0.08;
@@ -1915,6 +1918,12 @@
         if (T.bridge && F1.levelAt(T, A.s) * F1.levelAt(T, B.s) < 0) continue;   // one on the bridge, one underneath
         const imp = F1.collideCars(A, B, true);
         if (imp > 1500) this.fx.push([Math.round(F1.lastContact.x * 10) / 10, Math.round(F1.lastContact.y * 10) / 10, Math.round(imp)]);
+        if (imp > 1500 && this.contactEvents && (!A.isAI || !B.isAI)) {
+          // which car was behind (along the track): a player who runs into a car ahead or alongside hit it
+          const H = !A.isAI ? A : B, O = H === A ? B : A, L = T.length;
+          let ahead = O.s - H.s; ahead -= L * Math.round(ahead / L);
+          this.events.push({ k: 'contact', id: H.id, by: O.id, imp: Math.round(imp), hit: ahead > -1.5 });
+        }
       }
     }
   };

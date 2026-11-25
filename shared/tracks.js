@@ -857,6 +857,12 @@
 
   /* The tracks of the 2026 calendar, in order (not the classic ones): a full season. */
   F1.calendarTracks = function () { return Object.keys(F1.TRACK_DEFS).filter(function (id) { return !F1.TRACK_DEFS[id].classic; }); };
+  /* The 2027 calendar (version 17; as announced in September 2026): Portimao and Istanbul back, Barcelona and Zandvoort
+     gone, in race order. */
+  F1.CALENDAR_2027 = ['bahrain', 'jeddah', 'australia', 'suzuka', 'china', 'miami', 'montreal', 'monaco', 'portimao', 'silverstone',
+    'redbullring', 'spa', 'hungaroring', 'monza', 'madring', 'baku', 'istanbul', 'singapore', 'austin', 'mexico', 'interlagos',
+    'lasvegas', 'lusail', 'abudhabi'];
+  F1.calendar2027 = function () { return F1.CALENDAR_2027.filter(function (id) { return !!F1.TRACK_DEFS[id]; }); };
 
   function wrapS(s, L) { s %= L; return s < 0 ? s + L : s; }
   function wrapAngle(a) { while (a > Math.PI) a -= 2 * Math.PI; while (a < -Math.PI) a += 2 * Math.PI; return a; }

@@ -12,6 +12,8 @@ const { Server } = require('socket.io');
 require('./shared/data');
 require('./shared/tracks');
 require('./shared/sim');
+require('./shared/dailyref');
+require('./shared/daily');
 const F1 = globalThis.F1;
 
 const PORT = process.env.PORT || 3000;
@@ -26,6 +28,7 @@ const MAX_ROUNDS = Object.keys(F1.TRACK_DEFS).length;
 const MAX_RACE_LAPS = 20;
 
 const app = express();
+app.set('trust proxy', 1);       // (behind Render's proxy: each player's own address, for the accounts' request limits)
 app.use(express.static(path.join(__dirname, 'public')));
 app.use('/shared', express.static(path.join(__dirname, 'shared')));
 app.get('/healthz', function (req, res) { res.send('ok'); });
@@ -42,6 +45,13 @@ Object.keys(F1.TRACK_DEFS).forEach(function (id) {
 
 const rooms = new Map();
 const CODE_CHARS = 'ABCDEFGHJKLMNPQRSTUVWXYZ23456789';
+
+// Accounts (version 17): Google sign-in, the daily challenge board and friends. On when the server has the
+// DATABASE_URL and GOOGLE_CLIENT_ID settings; without them the game works as before (accounts.js).
+const accounts = require('./accounts')(app, express, F1, function (socket) {
+  const room = rooms.get(socket.data.room);
+  return room ? { code: room.code, open: !!room.open, full: room.players.size >= MAX_HUMANS, racing: !!room.session } : null;
+});
 
 function newCode() {
   let c;
@@ -708,6 +718,7 @@ io.on('connection', function (socket) {
   socket.data.room = null;
   socket.data.inputCount = 0;
   socket.data.inputWindow = Date.now();
+  accounts.socket(socket);
 
   socket.on('createRoom', function (msg, ack) {
     if (typeof ack !== 'function') return;

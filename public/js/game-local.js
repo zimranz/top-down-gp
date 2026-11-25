@@ -5,7 +5,8 @@
   const F1 = window.F1;
   const PH = { countdown: 0, running: 1, finishing: 2, done: 3 };
 
-  /* opts: { attract, type: 'practice'|'quali'|'race', track, driverId, aiCount, aiDrivers, grid, aiLevel, collisions, laps, onEnd } */
+  /* opts: { attract, type: 'practice'|'quali'|'race', track, driverId, aiCount, aiDrivers, grid, aiLevel, collisions, laps, onEnd,
+     daily (a daily challenge), session (the session's own options, for a daily challenge) } */
   function LocalGame(opts) {
     this.kind = opts.attract ? 'attract' : 'local';
     this.type = opts.type || 'practice';
@@ -35,13 +36,15 @@
       if (human) self.myId = k;
       return { id: k, driverId: driverId, isAI: !human, name: human ? 'You' : null };
     });
-    this.S = new F1.Session({
+    const so = {
       type: this.type, track: this.T, entries: entries, laps: opts.laps || 0,
       aiLevel: opts.aiLevel || 'medium', collisions: this.type === 'practice' ? opts.collisions !== false : true,
       drafting: opts.drafting !== false, runs: this.type === 'practice' && !opts.attract && !this.tt,
       tyres: !opts.attract && !this.tt && opts.tyres === true, weather: !opts.attract && !this.tt && opts.weather === true,
       seed: (rng() * 1e9) | 0, startMode: this.tt ? 'flying' : this.type === 'practice' && !opts.attract ? 'pit' : 'grid'
-    });
+    };
+    if (opts.session) Object.assign(so, opts.session);       // (a daily challenge sets the session up its own way)
+    this.S = new F1.Session(so);
     this.me = this.myId !== null ? this.S.byId[this.myId] : null;
     this.entries = {};
     entries.forEach(function (e) { self.entries[e.id] = e; });
@@ -59,18 +62,20 @@
     this.rec = this.me ? new window.GhostRecorder() : null;
     this.ghost = undefined;            // loaded when first needed
     this.ghostView = null;
+    // a daily challenge: where the clock starts and stops, and the result (daily.js)
+    this.run = opts.daily && window.DailyRun ? new window.DailyRun(this, opts.daily) : null;
   }
 
   /* The saved ghost lap to show in this session (practice only, if switched on in Settings). */
   LocalGame.prototype.ghostLap = function () {
-    if (this.type !== 'practice' || !this.me || (!this.tt && !window.Settings.data.ghost)) return null;
+    if (this.type !== 'practice' || !this.me || this.run || (!this.tt && !window.Settings.data.ghost)) return null;
     if (this.ghost === undefined) this.ghost = window.Ghost.load(this.T.id);
     return this.ghost;
   };
 
   /* A lap of lapT seconds just finished: keep it as the ghost if it beats the saved one. */
   LocalGame.prototype.saveGhost = function (lapT) {
-    if (!this.rec) return;
+    if (!this.rec || this.run) return;
     const saved = window.Ghost.load(this.T.id);
     if (saved && saved.t <= lapT) return;
     const t1 = this.me.lapStart !== null ? this.me.lapStart : this.S.time;
@@ -147,6 +152,7 @@
       window.GameAudio.event(e, this.myId);
       if (window.Haptics && this.kind !== 'attract') window.Haptics.event(e);
     }
+    if (this.run) this.run.step(evs);
     const fx = this.S.drainFx();
     for (let i = 0; i < fx.length; i++) this.fx.push(fx[i]);
     if (this.me) {
@@ -341,7 +347,7 @@
   /* Your car parked in your garage (practice and qualifying): what the garage panel shows. null = not parked. */
   LocalGame.prototype.garageState = function () {
     const me = this.me;
-    if (!me || me.out || !me.gar || me.gar.k !== 'park' || this.kind !== 'local') return null;
+    if (!me || me.out || !me.gar || me.gar.k !== 'park' || this.kind !== 'local' || this.run) return null;
     return { best: me.bestLap, pos: me.pos, laps: me.lapsDone, n: this.S.cars.length, first: !me.gMoved,
       tyres: this.tyresShown() ? { cur: me.tyreNext || this.S.defaultTyre(me), opts: this.tyreOpts() } : null };
   };

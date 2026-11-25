@@ -847,8 +847,8 @@ body.touch .tp-title { font-size: 13px; }
 
 /* career statistics: two tabs (My statistics, Achievements); time played among the totals */
 .career-tabs-row { display: flex; justify-content: center; padding: 12px 20px 0; }
-.career-tabs { width: min(440px, 100%); }
-.career-tabs button { font-size: 15px; padding: 9px 8px; }
+.career-tabs { width: min(560px, 100%); }
+.career-tabs button { font-size: 15px; padding: 9px 8px; white-space: nowrap; }
 .career-tabs .tab-n { font-size: 12px; font-weight: 700; opacity: 0.8; margin-left: 3px; }
 .career-wrap.hidden { display: none; }
 .career-stats { grid-template-columns: repeat(8, minmax(0, 1fr)); }
@@ -920,3 +920,113 @@ body.touch .tp-title { font-size: 13px; }
   border-radius: 4px; padding: 1px 6px; }
 .ach.is-new .ach-txt { padding-right: 44px; }
 .ach-recent { margin-top: 14px; }
+
+/* ---- daily challenge (version 17) */
+#home .menu .btn.daily small { display: block; font-size: 13px; font-weight: 600; color: #e9dca0; margin-top: 1px; }
+#daily { width: min(1240px, 100%); max-height: 100%; }
+.daily-grid { display: grid; grid-template-columns: minmax(240px, 300px) minmax(0, 1fr) minmax(250px, 320px); gap: 14px; padding: 14px 18px 18px; min-height: 0; overflow-y: auto; }
+.dbox { background: rgba(255,255,255,0.05); border: 1px solid rgba(255,255,255,0.08); border-radius: 12px; padding: 14px 16px; min-width: 0; }
+.dbox h3 { margin: 0 0 8px; font-size: 12.5px; letter-spacing: 1.5px; text-transform: uppercase; color: var(--muted); font-weight: 800; display: flex; align-items: center; gap: 8px; }
+.dbox p { margin: 6px 0; font-size: 15px; line-height: 1.4; }
+.dbox p.mu { color: var(--muted); font-size: 13.5px; }
+.dbox p.small { font-size: 12.5px; }
+.daily-map { display: block; width: 100%; height: 170px; border-radius: 10px; background: rgba(0,0,0,0.25); }
+.daily-where { margin-top: 10px !important; }
+.daily-streak { font-size: 14px !important; }
+.daily-title { font-size: 30px; font-weight: 900; font-style: italic; text-transform: uppercase; margin: 2px 0 6px; line-height: 1.1; }
+.daily-tags span { display: inline-block; background: rgba(255,255,255,0.09); border-radius: 6px; padding: 3px 8px; margin: 0 6px 6px 0; font-size: 13px; font-weight: 700; }
+.daily-tags span.rain { background: rgba(80,150,255,0.22); }
+.dbox .medals { display: flex; gap: 8px; margin: 10px 0; }
+.dbox .medals .m { flex: 1; text-align: center; border-radius: 10px; padding: 8px 4px; font-weight: 800; font-size: 13px; min-width: 0; }
+.dbox .medals .m span { display: block; letter-spacing: 1px; }
+.dbox .medals .m b { display: block; font-size: 19px; font-style: italic; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.m.m1 { background: rgba(205,127,50,0.16); border: 1px solid rgba(205,127,50,0.55); }
+.m.m2 { background: rgba(200,200,210,0.12); border: 1px solid rgba(200,200,210,0.5); }
+.m.m3 { background: rgba(255,214,0,0.12); border: 1px solid rgba(255,214,0,0.55); }
+.m.got { box-shadow: 0 0 0 2px currentColor inset; }
+.m.m1.got { color: #f0b27a; } .m.m2.got { color: #e6e8ee; } .m.m3.got { color: #ffe46b; }
+.daily-best { color: #dfe3e8; }
+.daily-other { margin-top: 14px !important; }
+.dbox .chips span { display: inline-block; border: 1px solid rgba(255,255,255,0.15); border-radius: 999px; padding: 3px 10px; margin: 0 6px 6px 0; font-size: 12.5px; color: #cfd3d8; }
+@media (max-width: 1100px) { .daily-grid { grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); } #daily-mid { grid-column: 1 / -1; grid-row: 1; } }
+@media (max-width: 700px) { .daily-grid { grid-template-columns: minmax(0, 1fr); } #daily-mid { grid-row: auto; } }
+@media (max-width: 520px) { .dbox .medals .m { padding: 8px 2px; } .dbox .medals .m b { font-size: 15px; } }
+@media (max-height: 520px) { .daily-grid { overflow: visible; padding: 10px 12px 12px; } .daily-title { font-size: 24px; } .daily-map { height: 130px; } }
+
+/* while driving: the challenge, the clock and the medal targets */
+#dhud { position: fixed; left: 50%; top: 8px; transform: translateX(-50%); z-index: 4; pointer-events: none; text-align: center; min-width: 210px;
+  background: rgba(10,10,14,0.82); border: 1px solid rgba(255,214,0,0.45); border-radius: 12px; padding: 5px 14px 7px; }
+#dhud.hidden { display: none; }
+.dh-name { font-size: 11px; letter-spacing: 1.5px; text-transform: uppercase; color: #ffe46b; font-weight: 800; }
+.dh-big { font-size: 22px; font-weight: 900; font-style: italic; line-height: 1.15; font-variant-numeric: tabular-nums; }
+.dh-small { font-size: 12px; color: #cfd3d8; font-weight: 600; }
+.dh-medals { display: flex; gap: 5px; justify-content: center; margin-top: 4px; }
+.dh-m { font-size: 11px; font-weight: 800; border-radius: 6px; padding: 1px 6px; opacity: 0.85; white-space: nowrap; }
+.dh-m.m1 { border: 1px solid rgba(205,127,50,0.7); color: #e8a76b; }
+.dh-m.m2 { border: 1px solid rgba(200,200,210,0.65); color: #dfe2e8; }
+.dh-m.m3 { border: 1px solid rgba(255,214,0,0.7); color: #ffe46b; }
+.dh-m.got { opacity: 1; color: #111; } .dh-m.m1.got { background: #cd7f32; } .dh-m.m2.got { background: #d9dbe2; } .dh-m.m3.got { background: #ffd600; }
+@media (max-height: 520px) { #dhud { top: 4px; padding: 3px 10px 5px; min-width: 170px; } .dh-big { font-size: 18px; } }
+
+/* after an attempt */
+.dres-box { text-align: center; align-items: center; }
+.dres-medal { font-size: 64px; line-height: 1; margin-top: 4px; }
+.dres-medal.m0 { color: #666; font-size: 48px; }
+.dres-score { font-size: 28px; font-weight: 900; font-style: italic; font-variant-numeric: tabular-nums; }
+.dres-lines p { color: var(--muted); font-size: 14.5px; margin: 2px 0 !important; }
+.dres-box .btn { width: 100%; }
+
+/* the board (daily challenge screen) */
+.board-seg { margin: 0 0 8px; } .board-seg button { padding: 6px; font-size: 13px; }
+table.board { width: 100%; border-collapse: collapse; font-size: 14px; }
+table.board td { padding: 6px 4px; border-bottom: 1px solid rgba(255,255,255,0.06); }
+table.board td.rk { width: 28px; color: #aab0b8; }
+table.board td.nm { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; max-width: 150px; }
+table.board td.r { text-align: right; font-weight: 800; white-space: nowrap; font-variant-numeric: tabular-nums; }
+table.board tr.me td { color: var(--yellow); }
+table.board tr.gap td { color: var(--muted); padding: 2px 4px; border: 0; }
+table.board tr.hd td { color: var(--muted); font-weight: 700; font-size: 12.5px; }
+table.board td.faster { color: #19c94a; } table.board td.slower { color: #ff5a52; }
+.board-foot { margin-top: 8px !important; }
+.gsi-slot { margin: 10px 0 8px; min-height: 44px; }
+
+/* friends (career statistics) */
+.friends-grid { display: grid; grid-template-columns: minmax(260px, 350px) minmax(0, 1fr); gap: 14px; padding: 2px 0 4px; }
+.friends-grid .dbox h3.sp { margin-top: 16px; }
+.codebig { font-size: 30px; font-weight: 900; font-style: italic; letter-spacing: 3px; color: var(--yellow); display: flex; align-items: center; gap: 10px; margin: 2px 0 4px; flex-wrap: wrap; }
+.codebig .btn { font-style: normal; letter-spacing: 0; }
+.addrow { display: flex; gap: 8px; }
+.addrow input { flex: 1; min-width: 0; padding: 10px; border-radius: 8px; background: rgba(0,0,0,0.3); border: 1px solid rgba(255,255,255,0.15); color: #fff;
+  font-weight: 800; letter-spacing: 2px; font-family: var(--font); font-size: 15px; text-transform: uppercase; }
+.form-err { color: #ff6b63; font-size: 13.5px; font-weight: 700; margin: 6px 0 0 !important; min-height: 0; }
+.form-err:empty { display: none; }
+.flist { display: flex; flex-direction: column; gap: 6px; }
+.frow { display: flex; align-items: center; gap: 10px; padding: 9px 10px; border-radius: 9px; background: rgba(255,255,255,0.04); cursor: pointer; border: 1px solid transparent; }
+.frow:hover { background: rgba(255,255,255,0.07); }
+.frow.sel { border-color: var(--yellow); }
+.frow .nm { flex: 1; min-width: 0; } .frow .nm b { display: block; font-size: 15px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.frow .nm span { font-size: 12.5px; color: var(--muted); }
+i.dot { display: inline-block; width: 9px; height: 9px; border-radius: 50%; background: #19c94a; flex: none; } i.dot.off { background: #555; }
+.linkbtn { margin-left: auto; background: none; border: 0; color: #aab0b8; text-decoration: underline; font-family: var(--font); font-size: 12.5px; font-weight: 600;
+  cursor: pointer; text-transform: none; letter-spacing: 0; padding: 0; }
+.vs { display: grid; grid-template-columns: repeat(5, minmax(0, 1fr)); gap: 8px; margin-bottom: 12px; }
+.vs > div { background: rgba(255,255,255,0.05); border: 1px solid rgba(255,255,255,0.08); border-radius: 8px; padding: 8px 6px; text-align: center; min-width: 0; }
+.vs .l { font-size: 10px; letter-spacing: 0.4px; text-transform: uppercase; color: var(--muted); font-weight: 800; }
+.vs .y { font-size: 20px; font-weight: 900; font-style: italic; margin-top: 2px; }
+.vs .f { font-size: 12px; color: #aab0b8; font-weight: 700; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.vs .lead .y { color: var(--yellow); }
+.vs-scroll { max-height: 260px; overflow-y: auto; }
+ul.can { padding-left: 20px; margin: 6px 0 0; } ul.can li { margin: 0 0 8px; font-size: 15px; }
+@media (max-width: 1000px) { .vs { grid-template-columns: repeat(3, minmax(0, 1fr)); } }
+@media (max-width: 760px) { .friends-grid { grid-template-columns: minmax(0, 1fr); } }
+
+/* the Account tab (settings) */
+.acct-who { display: flex; align-items: center; gap: 8px; font-size: 16px; margin-bottom: 4px; }
+.modal-box label.acct-name { gap: 6px; }
+.acct-name input { padding: 9px 10px; border-radius: 8px; background: rgba(0,0,0,0.3); border: 1px solid rgba(255,255,255,0.15); color: #fff; font-family: var(--font); font-weight: 700; font-size: 15px; }
+.acct-row { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; }
+.acct-lbl { font-weight: 700; color: #cfd3d8; }
+.acct-code { font-size: 20px; font-weight: 900; font-style: italic; letter-spacing: 2px; color: var(--yellow); }
+.acct-btns { margin-top: 8px; }
+.btn.danger { border-color: rgba(255,75,75,0.6); color: #ff8a8a; background: transparent; }
+#confirm { z-index: 25; }          /* (above Settings: "Delete my online data" asks first) */

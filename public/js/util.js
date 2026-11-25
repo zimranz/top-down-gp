@@ -134,7 +134,7 @@
   }
 
   // ------------------------------------------------------------- achievements (this browser)
-  /* 40 achievements. Counted ones (goal) unlock when their number is reached and show a progress bar until then; the
+  /* 42 achievements. Counted ones (goal) unlock when their number is reached and show a progress bar until then; the
      others unlock at a moment in a race. The race feats need at least 5 opponents in the race. Unlocked achievements
      are kept with the time they were unlocked: { id: time }. */
   const nTracks = function () { return Object.keys(F1.TRACK_DEFS).length; };
@@ -178,7 +178,10 @@
     { id: 'online1', group: 'Online and time', name: 'Online racer', desc: 'Race online', goal: 1, v: function (s) { return s.c.online.races; } },
     { id: 'onlinewin', group: 'Online and time', name: 'Online winner', desc: 'Win an online race', goal: 1, v: function (s) { return s.c.online.wins; } },
     { id: 'hour1', group: 'Online and time', name: 'Warming up', desc: 'Play for 1 hour', goal: 60, unit: 'min', v: function (s) { return s.c.time / 60; } },
-    { id: 'hours10', group: 'Online and time', name: 'Night owl', desc: 'Play for 10 hours', goal: 600, unit: 'min', v: function (s) { return s.c.time / 60; } }
+    { id: 'hours10', group: 'Online and time', name: 'Night owl', desc: 'Play for 10 hours', goal: 600, unit: 'min', v: function (s) { return s.c.time / 60; } },
+    // version 17: the daily challenge
+    { id: 'golds10', group: 'Daily challenge', name: 'Gold rush', desc: 'Win 10 gold medals in the daily challenge', goal: 10, v: function (s) { return s.daily.golds; } },
+    { id: 'streak7', group: 'Daily challenge', name: 'On fire', desc: 'Win a daily challenge medal 7 days in a row', goal: 7, v: function (s) { return s.daily.streak; } }
   ];
   const ACH_BY = {};
   ACH.forEach(function (a) { ACH_BY[a.id] = a; });
@@ -203,7 +206,9 @@
     stats: function () {
       const c = Career.load(), tr = c.tracks;
       const tt = window.TTBoard ? window.TTBoard.load() : {};
+      const D = window.Daily;
       return { c: c,
+        daily: D ? { golds: D.counts().golds, streak: D.bestStreak() } : { golds: 0, streak: 0 },
         raced: Object.keys(tr).filter(function (id) { return tr[id].races > 0; }).length,
         won: Object.keys(tr).filter(function (id) { return tr[id].wins > 0; }).length,
         pbs: Object.keys(F1.TRACK_DEFS).filter(function (id) { return !!PB.get(id); }).length,

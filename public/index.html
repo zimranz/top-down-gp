@@ -26,6 +26,7 @@
         <div class="tag">2026 grid · 11 teams · 22 drivers · 38 circuits</div>
       </div>
       <div class="menu">
+        <button class="btn big season daily" data-go="daily" id="home-daily">Daily challenge<small id="home-daily-sub"></small></button>
         <button class="btn big" data-go="practice">Practice</button>
         <button class="btn big" data-go="tt">Time Trial</button>
         <button class="btn big" data-go="gp">Grand Prix</button>
@@ -104,6 +105,20 @@
       </div>
     </section>
 
+    <!-- DAILY CHALLENGE (version 17): the same for everyone, a new one every day at midnight UK time -->
+    <section id="daily" class="screen panel">
+      <div class="panel-head">
+        <button class="btn ghost" data-go="home">← Back</button>
+        <h2>Daily challenge</h2>
+        <button class="btn red" id="daily-start">Start attempt</button>
+      </div>
+      <div class="daily-grid">
+        <div class="dbox" id="daily-left"></div>
+        <div class="dbox" id="daily-mid"></div>
+        <div class="dbox" id="daily-board"></div>
+      </div>
+    </section>
+
     <!-- CAREER -->
     <section id="career" class="screen panel">
       <div class="panel-head">
@@ -113,7 +128,7 @@
       </div>
       <div class="career-tabs-row">
         <div class="seg career-tabs" id="career-tabs" role="tablist" aria-label="Career statistics">
-          <button type="button" role="tab" data-v="stats" id="career-tab-stats" aria-controls="career-page-stats">My statistics</button><button type="button" role="tab" data-v="ach" id="career-tab-ach" aria-controls="career-page-ach">Achievements <span class="tab-n" id="career-ach-n"></span><span class="tab-dot hidden" id="career-ach-dot" aria-label="new"></span></button>
+          <button type="button" role="tab" data-v="stats" id="career-tab-stats" aria-controls="career-page-stats">My statistics</button><button type="button" role="tab" data-v="ach" id="career-tab-ach" aria-controls="career-page-ach">Achievements <span class="tab-n" id="career-ach-n"></span><span class="tab-dot hidden" id="career-ach-dot" aria-label="new"></span></button><button type="button" role="tab" data-v="friends" id="career-tab-friends" aria-controls="career-page-friends">Friends</button>
         </div>
       </div>
       <div class="results-wrap career-wrap" id="career-page-stats" role="tabpanel" aria-labelledby="career-tab-stats">
@@ -130,6 +145,9 @@
         <div class="ach-top"><span class="ach-count" id="ach-count"></span><div class="ach-total"><i id="ach-total-bar"></i></div></div>
         <div id="ach-groups"></div>
         <p class="tt-note">Race feats count in races with at least 5 opponents.</p>
+      </div>
+      <div class="results-wrap career-wrap hidden" id="career-page-friends" role="tabpanel" aria-labelledby="career-tab-friends">
+        <div class="friends-grid"><div class="dbox" id="friends-left"></div><div class="dbox" id="friends-right"></div></div>
       </div>
     </section>
 
@@ -306,7 +324,7 @@
           <div class="settings-grid" id="lobby-settings">
             <label class="span2">Mode<select id="set-mode"><option value="single">Single race weekend</option><option value="champ">Championship (a season of races)</option></select></label>
             <div class="lobby-cal span2" id="lobby-cal">
-              <div class="cal-head">Calendar <span id="lobby-cal-n"></span><span class="cal-btns mini" id="lobby-cal-btns"><button type="button" class="btn small" id="lobby-cal-all" title="Every track of the 2026 calendar, in order">2026 calendar</button><button type="button" class="btn small ghost" id="lobby-cal-none">Clear all</button></span></div>
+              <div class="cal-head">Calendar <span id="lobby-cal-n"></span><span class="cal-btns mini" id="lobby-cal-btns"><button type="button" class="btn small" id="lobby-cal-all" title="Every track of the 2026 calendar, in order">2026 calendar</button><button type="button" class="btn small" id="lobby-cal-2027" title="The 24 races of the 2027 calendar, in order">2027 calendar</button><button type="button" class="btn small ghost" id="lobby-cal-none">Clear all</button></span></div>
               <div class="cal-chips" id="lobby-cal-chips"></div>
             </div>
             <label id="set-track-wrap">Track<select id="set-track"></select></label>
@@ -446,7 +464,7 @@
       <div class="modal-head"><h2>Settings</h2><button type="button" class="x-btn" id="settings-x" aria-label="Close settings" title="Close">
         <svg viewBox="0 0 24 24" width="20" height="20" aria-hidden="true"><path d="M6 6l12 12M18 6L6 18" fill="none" stroke="currentColor" stroke-width="2.6" stroke-linecap="round"/></svg></button></div>
       <div class="seg set-tabs" id="set-tabs" role="tablist" aria-label="Settings">
-        <button type="button" role="tab" data-v="driving" id="set-tab-driving" aria-controls="set-page-driving">Driving</button><button type="button" role="tab" data-v="view" id="set-tab-view" aria-controls="set-page-view">View</button><button type="button" role="tab" data-v="sound" id="set-tab-sound" aria-controls="set-page-sound">Sound</button>
+        <button type="button" role="tab" data-v="driving" id="set-tab-driving" aria-controls="set-page-driving">Driving</button><button type="button" role="tab" data-v="view" id="set-tab-view" aria-controls="set-page-view">View</button><button type="button" role="tab" data-v="sound" id="set-tab-sound" aria-controls="set-page-sound">Sound</button><button type="button" role="tab" data-v="account" id="set-tab-account" aria-controls="set-page-account">Account</button>
       </div>
       <!-- (every tab is as tall as the tallest one, so the window keeps its size when you switch: see main.js) -->
       <div class="set-pages" id="set-pages">
@@ -516,6 +534,7 @@
           <p class="note">Onboard is the most realistic: your engine as heard in the car.</p>
           <p class="note" id="set-engine-note"></p>
         </div>
+        <div class="set-page" id="set-page-account" data-tab="account" role="tabpanel" aria-labelledby="set-tab-account"></div>
       </div>
       <button class="btn red" id="settings-close">Save</button>
     </div>
@@ -554,6 +573,21 @@
   </div>
 
   <div id="toast"></div>
+
+  <!-- a daily challenge attempt: the challenge, the clock (or places, or speed) and the medal targets -->
+  <div id="dhud" class="hidden" aria-live="off"></div>
+
+  <!-- after a daily challenge attempt -->
+  <div id="dres" class="modal hidden">
+    <div class="modal-box dres-box">
+      <div class="dres-medal" id="dres-medal" aria-hidden="true"></div>
+      <h2 id="dres-title"></h2>
+      <div class="dres-score" id="dres-score"></div>
+      <div class="dres-lines" id="dres-lines"></div>
+      <button class="btn red big" id="dres-again">Try again</button>
+      <button class="btn" id="dres-back">Back to the challenge</button>
+    </div>
+  </div>
 
   <!-- an achievement unlocked (in the menus; while driving it shows as a message at the top of the screen) -->
   <div id="achpop" class="hidden" role="status" aria-live="polite">
@@ -625,7 +659,11 @@
   <script src="/shared/data.js"></script>
   <script src="/shared/tracks.js"></script>
   <script src="/shared/sim.js"></script>
+  <script src="/shared/dailyref.js"></script>
+  <script src="/shared/daily.js"></script>
   <script src="js/util.js"></script>
+  <script src="js/daily.js"></script>
+  <script src="js/account.js"></script>
   <script src="js/audio.js"></script>
   <script src="js/ghost.js"></script>
   <script src="js/render.js"></script>

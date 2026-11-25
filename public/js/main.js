@@ -24,7 +24,7 @@
   const R = new Renderer($('game'), { cpu: /[?&]cpu=1(&|$)/.test(location.search), tiles: 'auto' });
 
   let game = null;
-  let mode = 'menu';          // 'menu' | 'practice' | 'tt' | 'gp' | 'online'
+  let mode = 'menu';          // 'menu' | 'practice' | 'tt' | 'gp' | 'online' | 'daily'
   let net = null;
   let room = null;
   let resultsTimer = null;
@@ -111,7 +111,7 @@
     updatePauseBtn();
   }
   function updatePauseBtn() {
-    const inGame = mode !== 'menu' && $('overlay').classList.contains('hidden') && $('pause').classList.contains('hidden') && game && game.kind !== 'attract';
+    const inGame = mode !== 'menu' && $('overlay').classList.contains('hidden') && $('pause').classList.contains('hidden') && $('dres').classList.contains('hidden') && game && game.kind !== 'attract';
     $('pausebtn').classList.toggle('hidden', !inGame);
     // the sound button: on the home screen and while driving (next to the pause button)
     const home = $('home').classList.contains('active') && !$('overlay').classList.contains('hidden');
@@ -309,8 +309,10 @@
     $('msgmenu').classList.add('hidden');
     $('msgpop').innerHTML = '';
     confirmAction = null;
+    stopDaily();
     season = null;
     updateSeasonButtons();
+    updateDailyButton();
     mode = 'menu';
     gp = null;
     clearInterval(resultsTimer);
@@ -466,12 +468,14 @@
       foot.classList.remove('hidden');
       const n = el('span', 'pk-n'); n.id = 'picker-n';
       const all = el('button', 'btn small', '2026 calendar'); all.type = 'button'; all.title = 'Every track of the 2026 calendar, in order';
+      const y27 = el('button', 'btn small', '2027 calendar'); y27.type = 'button'; y27.id = 'picker-2027'; y27.title = 'The 24 races of the 2027 calendar, in order';
       const none = el('button', 'btn small ghost', 'Clear'); none.type = 'button';
       const done = el('button', 'btn red', 'Done'); done.type = 'button'; done.id = 'picker-done';
       all.addEventListener('click', function () { o.calendar.length = 0; Array.prototype.push.apply(o.calendar, F1.calendarTracks()); mark(); o.onChange(); });
+      y27.addEventListener('click', function () { o.calendar.length = 0; Array.prototype.push.apply(o.calendar, F1.calendar2027()); mark(); o.onChange(); });
       none.addEventListener('click', function () { o.calendar.length = 0; mark(); o.onChange(); });
       done.addEventListener('click', function () { Picker.close(); });
-      foot.append(n, all, none, done);
+      foot.append(n, all, y27, none, done);
     }
     draw();
   }
@@ -708,6 +712,65 @@
     fsGate(startTT);
   });
 
+  // ------------------------------------------------------------- daily challenge (version 17)
+  const Daily = window.Daily, DailyUI = window.DailyUI;
+  let dailyCh = null, dailyTick = null;
+  function updateDailyButton() { $('home-daily-sub').textContent = DailyUI.homeLine(); }
+  /* The challenge screen: today's challenge (a new day while it is open: the new one), and the board. */
+  function openDaily() {
+    dailyCh = Daily.today();
+    if (!dailyCh) { toast('The daily challenge is not available'); return; }
+    DailyUI.render(dailyCh);
+    if (window.Account) window.Account.board(dailyCh);
+    show('daily');
+    clearInterval(dailyTick);
+    dailyTick = setInterval(function () {
+      if (!$('daily').classList.contains('active')) { clearInterval(dailyTick); return; }
+      if (F1.dailyKey() !== dailyCh.key) openDaily(); else DailyUI.tick();
+    }, 20000);
+  }
+  function startDaily() {
+    const ch = dailyCh && dailyCh.key === F1.dailyKey() ? dailyCh : (dailyCh = Daily.today());
+    if (!ch) return;
+    withTrack(ch.track, function () {
+      if (game && game.run) game.run.stop();
+      mode = 'daily';
+      Daily.attempt(ch);
+      const driverId = ttOpts.driverId || 'NOR';
+      game = new window.LocalGame(Object.assign(window.DailyRun.gameOpts(ch, driverId), { onEnd: dailyEnded }));
+      keepTracks(ch.track);
+      R.resetEffects();
+      GameAudio.newSession();
+      show(null);
+    });
+  }
+  function dailyEnded(results, g) {
+    if (g !== game || mode !== 'daily') return;
+    const run = g.run;
+    run.stop();
+    const r = run.result || { score: null, why: 'No result', medal: 0 }, ch = run.ch;
+    const rec = r.score !== null ? Daily.record(ch, r.score) : null;
+    if (window.Account) window.Account.dailyDone(ch);
+    g.paused = true; g.frozen = true;
+    $('pause').classList.add('hidden');
+    DailyUI.showResult({ ch: ch, result: r, rec: rec });
+    Input.active = false;
+    updatePauseBtn();
+  }
+  function stopDaily() { if (game && game.run) game.run.stop(); $('dres').classList.add('hidden'); updatePauseBtn(); }
+  // sign-in, the board and friends (account.js): what it needs from here
+  Object.assign(window.Account.hooks, {
+    toast: function (t) { toast(t); },
+    confirm: function (o) { askConfirm({ title: o.title, text: o.text, yes: o.yes, no: 'Cancel', onYes: o.go }); },
+    join: function (code) { goHome(); openOnline(code); joinCode(); },        // (a friend's open room: straight in)
+    net: function () { return ensureNet(); },
+    nameChanged: function (n) { $('online-name').value = n; },
+    changed: function () { fitSetPages(); }
+  });
+  $('daily-start').addEventListener('click', function () { fsGate(startDaily); });
+  $('dres-again').addEventListener('click', function () { $('dres').classList.add('hidden'); fsGate(startDaily); });
+  $('dres-back').addEventListener('click', function () { stopDaily(); goHome(); openDaily(); });
+
   // ------------------------------------------------------------- grand prix
   const MAX_RACE_LAPS = 20;
   /* The Reverse grid switch of a weekend bar (needs qualifying: greyed out with a random grid). */
@@ -838,7 +901,7 @@
     save: function (c) { try { window.localStorage.setItem('topdowngp.champ', JSON.stringify(c)); } catch (e) { /* ignore */ } }
   };
 
-  /* The calendar: picked in the track picker, several tracks in race order (the 2026 calendar in one click). */
+  /* The calendar: picked in the track picker, several tracks in race order (the 2026 or 2027 calendar in one click). */
   function champCalendarShown() {
     const o = { calendar: champOpts.calendar, onChange: champCalendarShown };
     showCalendarPick(champOpts.calendar, o);
@@ -1126,7 +1189,8 @@
   document.querySelectorAll('[data-go]').forEach(function (b) {
     b.addEventListener('click', function () {
       const go = b.dataset.go;
-      if (go === 'practice') openPractice();
+      if (go === 'daily') openDaily();
+      else if (go === 'practice') openPractice();
       else if (go === 'gp') openGp();
       else if (go === 'champ') openChamp();
       else if (go === 'tt') openTT();
@@ -1136,7 +1200,7 @@
     });
   });
   document.querySelectorAll('[data-act="settings"]').forEach(function (b) { b.addEventListener('click', openSettings); });
-  const BACK_HOME = ['practice', 'tt', 'gp', 'champ', 'career', 'online'];
+  const BACK_HOME = ['practice', 'tt', 'gp', 'champ', 'career', 'online', 'daily'];
   clickOutside($('overlay'), function (t) {
     const a = document.querySelector('.screen.active');
     return t === $('overlay') && !!a && BACK_HOME.indexOf(a.id) >= 0;
@@ -1177,13 +1241,16 @@
     });
     $('career-page-stats').classList.toggle('hidden', t !== 'stats');
     $('career-page-ach').classList.toggle('hidden', t !== 'ach');
+    $('career-page-friends').classList.toggle('hidden', t !== 'friends');
+    if (t === 'friends') window.Account.openFriends();
     const sc = $('career').querySelector('.career-wrap:not(.hidden)');
     if (sc) sc.scrollTop = 0;
   }
   document.querySelectorAll('#career-tabs button').forEach(function (b) {
     b.addEventListener('click', function () { showCareerTab(b.dataset.v); });
     b.addEventListener('keydown', function (e) {
-      if (e.key === 'ArrowRight' || e.key === 'ArrowLeft') { e.preventDefault(); e.stopPropagation(); showCareerTab(careerTab === 'stats' ? 'ach' : 'stats', true); }
+      const order = ['stats', 'ach', 'friends'], k = order.indexOf(careerTab);
+      if (e.key === 'ArrowRight' || e.key === 'ArrowLeft') { e.preventDefault(); e.stopPropagation(); showCareerTab(order[(k + (e.key === 'ArrowRight' ? 1 : order.length - 1)) % order.length], true); }
     });
   });
   function openCareer(tab) {
@@ -1342,7 +1409,7 @@
   })();
 
   // ------------------------------------------------------------- settings
-  /* Three tabs: Driving, View, Sound (the last one used stays open next time, until the page is reloaded). */
+  /* Four tabs: Driving, View, Sound, Account (the last one used stays open next time, until the page is reloaded). */
   let setTab = 'driving';
   function showSetTab(t, focus) {
     setTab = t;
@@ -1359,10 +1426,10 @@
   document.querySelectorAll('#set-tabs button').forEach(function (b) {
     b.addEventListener('click', function () { closeDropdowns(); showSetTab(b.dataset.v); });
     b.addEventListener('keydown', function (e) {
-      const order = ['driving', 'view', 'sound'], k = order.indexOf(setTab);
+      const order = ['driving', 'view', 'sound', 'account'], k = order.indexOf(setTab);
       if (e.key === 'ArrowRight' || e.key === 'ArrowLeft') {
         e.preventDefault(); e.stopPropagation();
-        showSetTab(order[(k + (e.key === 'ArrowRight' ? 1 : 2)) % 3], true);
+        showSetTab(order[(k + (e.key === 'ArrowRight' ? 1 : order.length - 1)) % order.length], true);
       }
     });
   });
@@ -1387,6 +1454,7 @@
   new MutationObserver(fitSetPages).observe(document.body, { attributes: true, attributeFilter: ['class'] });   // (touch controls switched on)
   function openSettings() {
     const d = Settings.data;
+    window.Account.renderSettings();
     $('set-steer').value = d.steering;
     $('set-steer-val').textContent = d.steering;
     $('set-steer').oninput = function () { d.steering = Number(this.value); $('set-steer-val').textContent = this.value; Settings.save(); };
@@ -1517,11 +1585,11 @@
   // ------------------------------------------------------------- pause
   function pauseOpen() { return !$('pause').classList.contains('hidden'); }
   function openPause() {
-    if (mode === 'menu' || !$('overlay').classList.contains('hidden')) return;
+    if (mode === 'menu' || !$('overlay').classList.contains('hidden') || !$('dres').classList.contains('hidden')) return;
     $('pause').classList.remove('hidden');
     if (game && game.kind === 'local') { game.paused = true; game.cancelResume(); }
-    $('pause-restart').style.display = mode === 'practice' || mode === 'gp' || mode === 'tt' ? '' : 'none';
-    $('pause-restart').textContent = mode === 'gp' ? 'Restart this session' : mode === 'tt' ? 'Restart time trial' : 'Restart practice';
+    $('pause-restart').style.display = mode === 'practice' || mode === 'gp' || mode === 'tt' || mode === 'daily' ? '' : 'none';
+    $('pause-restart').textContent = mode === 'gp' ? 'Restart this session' : mode === 'tt' ? 'Restart time trial' : mode === 'daily' ? 'Start a new attempt' : 'Restart practice';
     // end practice or qualifying early (online: the host ends it for everyone)
     const live = game && (game.kind === 'online' ? !game.ended && game.phase !== 3 : game.S && game.S.phase !== 'done');
     const canEnd = live && (game.type === 'practice' || game.type === 'quali') &&
@@ -1530,7 +1598,7 @@
     $('pause-end').textContent = game && game.type === 'quali' ? 'End qualifying now' : 'End session now';
     updatePauseBtn();
     $('pause-note').textContent = mode === 'online' ? 'The session keeps running while this menu is open.' : '';
-    $('pause-quit').textContent = mode === 'online' ? 'Leave the room' : mode === 'tt' ? 'Quit time trial' : 'Quit to menu';
+    $('pause-quit').textContent = mode === 'online' ? 'Leave the room' : mode === 'tt' ? 'Quit time trial' : mode === 'daily' ? 'Quit this attempt' : 'Quit to menu';
     Input.active = false;
   }
   /* Back to the game. Offline sessions count down 3-2-1 first (still frozen) so you can see where you are;
@@ -1588,7 +1656,7 @@
   })();
   $('pause-restart').addEventListener('click', function () {
     resume(true);
-    if (mode === 'gp' && gp) startGpStage(gp.idx); else if (mode === 'tt') startTT(true); else startPractice(true);
+    if (mode === 'gp' && gp) startGpStage(gp.idx); else if (mode === 'tt') startTT(true); else if (mode === 'daily') startDaily(); else startPractice(true);
   });
   function sessionLive() { return game && (game.kind === 'online' ? !game.ended && game.phase !== 3 : game.S && game.S.phase !== 'done'); }
   $('pause-end').addEventListener('click', function () {
@@ -1643,7 +1711,7 @@
     } else game.endEarly();
   }
   $('pause-quit').addEventListener('click', function () {
-    if (mode === 'online') askLeaveRoom(true); else if (mode === 'tt') { goHome(); openTT(true); } else goHome();
+    if (mode === 'online') askLeaveRoom(true); else if (mode === 'tt') { goHome(); openTT(true); } else if (mode === 'daily') { goHome(); openDaily(); } else goHome();
   });
   $('soundbtn').querySelector('button').addEventListener('click', function (e) { e.currentTarget.blur(); toggleSound(); });
   $('fsbtn').querySelector('button').addEventListener('click', function (e) { e.currentTarget.blur(); toggleFullscreen(); });
@@ -1678,12 +1746,13 @@
     if (!$('fsnotice').classList.contains('hidden')) { fsNoticeClose(null); return; }
     if (!$('settings').classList.contains('hidden')) { closeSettings(false); return; }
     if (!$('confirm').classList.contains('hidden')) { closeConfirm(true); return; }
+    if (!$('dres').classList.contains('hidden')) { $('dres-back').click(); return; }
     if (pauseOpen()) resume(); else openPause();
   });
   document.addEventListener('visibilitychange', function () {
     if (!document.hidden) { GameAudio.reload(); syncSoundUI(); }
     GameAudio.suspend(document.hidden);
-    if (document.hidden && (mode === 'practice' || mode === 'gp' || mode === 'tt') && !pauseOpen()) openPause();
+    if (document.hidden && (mode === 'practice' || mode === 'gp' || mode === 'tt' || (mode === 'daily' && $('dres').classList.contains('hidden'))) && !pauseOpen()) openPause();
     if (document.hidden) {
       Input.keys = {};
       if (game && game.kind === 'online') game.sendNeutral();
@@ -1744,6 +1813,8 @@
     const n = $('online-name').value.trim() || 'Player';
     Settings.data.name = n;
     Settings.save();
+    const A = window.Account;
+    if (A.signedIn() && A.me && A.me.name !== n) A.rename(n);      // (signed in: one name everywhere)
     return n;
   }
   $('online-create').addEventListener('click', function () {
@@ -2081,6 +2152,7 @@
     }
   }
   $('lobby-cal-all').addEventListener('click', function () { if (net) net.socket.emit('settings', { calendar: F1.calendarTracks() }); });
+  $('lobby-cal-2027').addEventListener('click', function () { if (net) net.socket.emit('settings', { calendar: F1.calendar2027() }); });
   $('lobby-cal-none').addEventListener('click', function () { if (net) net.socket.emit('settings', { calendar: [] }); });
   ['set-mode', 'set-track', 'set-p1', 'set-p2', 'set-p3', 'set-quali', 'set-reverse', 'set-race', 'set-ai', 'set-level', 'set-draft', 'set-tyres', 'set-weather'].forEach(function (id) {
     $(id).addEventListener('change', function () {
@@ -2695,6 +2767,7 @@
   }
   graphicsChip();
   goHome();
+  window.Account.start();
   if (params.get('room')) openOnline(params.get('room').toUpperCase().slice(0, 4));
   requestAnimationFrame(frame);
 })();
