@@ -896,3 +896,27 @@ body.touch .tp-title { font-size: 13px; }
 .achpop-text small { font-size: 11px; letter-spacing: 1.2px; text-transform: uppercase; color: var(--yellow); font-weight: 800; }
 .achpop-text b { font-size: 17px; color: #fff; }
 .achpop-text span { font-size: 13px; color: #cfd3d8; }
+
+/* the small Surprise me button in the Track box of the setup pages (version 16) */
+.set-box h3.pick-head { display: flex; align-items: center; gap: 8px; }
+.surprise-btn { margin-left: auto; display: inline-flex; align-items: center; gap: 6px; font-family: var(--font); font-weight: 700; font-size: 13px;
+  letter-spacing: 0; text-transform: none; color: #ffe46b; background: rgba(255,214,0,0.1); border: 1px solid rgba(255,214,0,0.45);
+  border-radius: 999px; padding: 3px 11px 3px 8px; cursor: pointer; line-height: 1.4; }
+.surprise-btn b { font-style: italic; font-weight: 900; font-size: 15px; color: #ffd600; line-height: 1; }
+.surprise-btn:hover { background: rgba(255,214,0,0.2); }
+.surprise-btn.on { background: #ffd600; border-color: #ffd600; color: #15151a; }
+.surprise-btn.on b { color: #15151a; }
+.surprise-btn:focus-visible { outline: 2px solid #fff; outline-offset: 2px; }
+/* new achievements (version 16): a badge on Career statistics and a dot on the Achievements tab until you have looked;
+   the ones earned in the last week at the top, with NEW the first time; when each was earned */
+.career-btn { position: relative; overflow: visible; }
+.ach-badge { position: absolute; top: -9px; right: -7px; background: #ffd600; color: #15151a; font-weight: 900; font-size: 12px; line-height: 1.35;
+  border-radius: 999px; padding: 2px 8px; box-shadow: 0 0 0 3px #16161b; pointer-events: none; }
+.ach-badge.hidden, .tab-dot.hidden { display: none; }
+.tab-dot { display: inline-block; width: 8px; height: 8px; border-radius: 50%; background: #ffd600; margin-left: 6px; vertical-align: 2px; }
+.ach { position: relative; }
+.ach .ach-when { grid-column: 2 / 4; margin-top: 6px; font-size: 12px; font-weight: 700; color: #ffd600; opacity: 0.85; }
+.ach .ach-new { position: absolute; top: 8px; right: 8px; background: #ffd600; color: #15151a; font-size: 10px; font-weight: 900; letter-spacing: 1px;
+  border-radius: 4px; padding: 1px 6px; }
+.ach.is-new .ach-txt { padding-right: 44px; }
+.ach-recent { margin-top: 14px; }

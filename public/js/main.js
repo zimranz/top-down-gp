@@ -510,7 +510,17 @@
     box.append(art, info, btn);
     box.onclick = function () { openTrackPicker(o); };
     box.onkeydown = function (e) { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); openTrackPicker(o); } };
+    // the small Surprise me button next to the box's title: lit while a surprise track is chosen
+    const sb = document.querySelector('[data-surprise="' + pre + '"]');
+    if (sb) { sb.classList.toggle('on', id === 'random'); sb.setAttribute('aria-pressed', id === 'random' ? 'true' : 'false'); }
   }
+  /* Surprise me without opening the track list: the small button in the Track box (Practice, Time trial, Grand Prix). */
+  document.querySelectorAll('[data-surprise]').forEach(function (b) {
+    b.addEventListener('click', function () {
+      const o = { practice: practicePickTrack, tt: ttPickTrack, gp: gpPickTrack }[b.dataset.surprise]();
+      o.onPick('random');
+    });
+  });
   /* A championship's calendar on its setup page: how many races and the tracks in order. */
   function showCalendarPick(cal, o) {
     const box = $('champ-trackpick');
@@ -926,7 +936,8 @@
     baku: 'AZE', singapore: 'SGP', interlagos: 'BRA', lasvegas: 'LVG', abudhabi: 'UAE',
     australia: 'AUS', china: 'CHN', bahrain: 'BHR', miami: 'MIA', barcelona: 'ESP',
     hungaroring: 'HUN', madring: 'MAD', sepang: 'MAS', austin: 'USA', mexico: 'MEX', lusail: 'QAT', portimao: 'POR', istanbul: 'TUR',
-    imola: 'EMI', paulricard: 'FRA', sochi: 'RUS', mugello: 'TUS', nurburgring: 'EIF', hockenheim: 'GER', bahrainouter: 'SKH' };
+    imola: 'EMI', paulricard: 'FRA', sochi: 'RUS', mugello: 'TUS', nurburgring: 'EIF', hockenheim: 'GER', bahrainouter: 'SKH',
+    magnycours: 'MAG', kyalami: 'RSA', jacarepagua: 'RIO', watkinsglen: 'WGL' };
   function renderStandings(o) {
     $('st-title').textContent = o.title;
     const banner = $('st-banner');
@@ -1135,7 +1146,27 @@
   /* Your records across every mode: totals (with your time played), and for each track your best lap, races, wins,
      best finish and time played; and your achievements, in a second tab. */
   let careerTab = 'stats';
+  /* New achievements: earned since you last opened the Achievements tab. A badge on Career statistics (home screen) and
+     a dot on the tab until then; the new ones carry a NEW tag while you look at them that time. */
+  let achSeenShown = 0;               // (when they were last seen before this look: for the NEW tags)
+  function achNewCount() {
+    const got = window.Ach.got(), seen = window.Ach.seen();
+    return Object.keys(got).filter(function (k) { return got[k] > seen; }).length;
+  }
+  function updateAchBadge() {
+    const n = achNewCount(), b = $('career-badge');
+    b.textContent = n + ' new';
+    b.classList.toggle('hidden', !n);
+    $('career-ach-dot').classList.toggle('hidden', !n);
+  }
   function showCareerTab(t, focus) {
+    if (t === 'ach' && (careerTab !== 'ach' || !$('career').classList.contains('active'))) {
+      // looking at them now: the NEW tags stay for this look, the badge and the dot go
+      achSeenShown = window.Ach.seen();
+      window.Ach.markSeen();
+      renderAchievements();
+      updateAchBadge();
+    }
     careerTab = t;
     document.querySelectorAll('#career-tabs button').forEach(function (b) {
       const on = b.dataset.v === t;
@@ -1213,22 +1244,23 @@
     '<path d="M7 5.5H4.5v1.2A3.3 3.3 0 0 0 7.6 10M17 5.5h2.5v1.2A3.3 3.3 0 0 1 16.4 10" fill="none" stroke="currentColor" stroke-width="1.8"/><path d="M10.6 12.3h2.8l.5 3.7h-3.8z" fill="currentColor"/><rect x="7.5" y="16.6" width="9" height="3" rx="1" fill="currentColor"/></svg>';
   const ICON_LOCK = '<svg viewBox="0 0 24 24" width="16" height="16" aria-hidden="true"><rect x="5" y="10.5" width="14" height="10" rx="2" fill="currentColor"/>' +
     '<path d="M8 10.5V8a4 4 0 0 1 8 0v2.5" fill="none" stroke="currentColor" stroke-width="2.2"/></svg>';
+  /* "today", "yesterday", "3 days ago" (by the calendar), or the date */
+  function earnedWhen(t) {
+    const day = function (x) { const d = new Date(x); d.setHours(0, 0, 0, 0); return d.getTime(); };
+    const n = Math.round((day(Date.now()) - day(t)) / 86400000);
+    return n <= 0 ? 'today' : n === 1 ? 'yesterday' : n < 7 ? n + ' days ago' : new Date(t).toLocaleDateString(undefined, { day: 'numeric', month: 'short', year: 'numeric' });
+  }
+  /* The Achievements tab: the ones earned in the last week first (newest first, NEW until you have seen them), then
+     the rest in their groups; every earned one says when; the counted ones still to come show how far you are. */
   function renderAchievements(got) {
     const Ach = window.Ach, st = Ach.stats(), wrap = $('ach-groups');
     got = got || Ach.got();
-    const n = Ach.LIST.filter(function (a) { return got[a.id]; }).length;
+    const n = Ach.LIST.filter(function (a) { return got[a.id]; }).length, now = Date.now();
     $('ach-count').textContent = n + ' of ' + Ach.LIST.length + ' unlocked';
     $('ach-total-bar').style.width = (100 * n / Ach.LIST.length).toFixed(1) + '%';
     $('career-ach-n').textContent = n + '/' + Ach.LIST.length;
     wrap.innerHTML = '';
-    let grid = null, group = null;
-    Ach.LIST.forEach(function (a) {
-      if (a.group !== group) {
-        group = a.group;
-        wrap.appendChild(el('h3', 'ach-head', group));
-        grid = el('div', 'ach-grid');
-        wrap.appendChild(grid);
-      }
+    const card = function (a) {
       const on = !!got[a.id], c = el('div', 'ach' + (on ? ' on' : ''));
       const ico = el('span', 'ach-ico');
       ico.innerHTML = on ? ICON_TROPHY : ICON_LOCK;
@@ -1236,14 +1268,36 @@
       txt.append(el('b', null, a.name), el('span', null, Ach.desc(a)));
       c.append(ico, txt);
       const goal = Ach.goal(a);
-      if (on) c.title = 'Unlocked ' + new Date(got[a.id]).toLocaleDateString(undefined, { day: 'numeric', month: 'short', year: 'numeric' });
-      else if (a.v && goal > 1) {
+      if (on) {
+        c.appendChild(el('span', 'ach-when', 'Earned ' + earnedWhen(got[a.id])));
+        if (got[a.id] > achSeenShown) { c.classList.add('is-new'); c.appendChild(el('span', 'ach-new', 'NEW')); }
+      } else if (a.v && goal > 1) {
         const v = Math.min(goal, Math.floor(a.v(st))), bar = el('div', 'ach-bar'), fill = el('i');
         fill.style.width = (100 * v / goal).toFixed(1) + '%';
         bar.appendChild(fill);
         c.append(bar, el('span', 'ach-prog', v.toLocaleString() + ' / ' + goal.toLocaleString() + (a.unit ? ' ' + a.unit : '')));
       }
-      grid.appendChild(c);
+      return c;
+    };
+    // earned in the last 7 days: at the top, newest first (not in their groups then)
+    const recent = Ach.LIST.filter(function (a) { return got[a.id] && now - got[a.id] < 7 * 86400000; })
+      .sort(function (x, y) { return got[y.id] - got[x.id]; });
+    const top = {};
+    if (recent.length) {
+      const grid = el('div', 'ach-grid ach-recent');
+      recent.forEach(function (a) { top[a.id] = true; grid.appendChild(card(a)); });
+      wrap.appendChild(grid);
+    }
+    let grid = null, group = null;
+    Ach.LIST.forEach(function (a) {
+      if (top[a.id]) return;
+      if (a.group !== group) {
+        group = a.group;
+        wrap.appendChild(el('h3', 'ach-head', group));
+        grid = el('div', 'ach-grid');
+        wrap.appendChild(grid);
+      }
+      grid.appendChild(card(a));
     });
   }
 
@@ -1272,6 +1326,7 @@
       else achQueue.push({ name: a.name, text: window.Ach.desc(a) });
     });
     achNext();
+    updateAchBadge();
     if ($('career').classList.contains('active')) openCareer(careerTab);
   }
   // achievements earned before there were achievements (version 15): unlocked quietly, with one card saying so
@@ -1282,6 +1337,8 @@
       achQueue.push({ name: before.length === 1 ? '1 achievement' : before.length + ' achievements', text: 'Unlocked from your racing so far: see Career statistics', ms: 5200 });
       setTimeout(achNext, 1800);
     }
+    window.Ach.seen();                 // (the first time version 16 opens: what was earned so far counts as seen)
+    updateAchBadge();
   })();
 
   // ------------------------------------------------------------- settings

@@ -23,7 +23,7 @@
     <section id="home" class="screen active">
       <div class="brand">
         <div class="logo">TOP-DOWN <span>GP</span></div>
-        <div class="tag">2026 grid · 11 teams · 22 drivers · 27 circuits</div>
+        <div class="tag">2026 grid · 11 teams · 22 drivers · 38 circuits</div>
       </div>
       <div class="menu">
         <button class="btn big" data-go="practice">Practice</button>
@@ -33,7 +33,7 @@
         <button class="btn big red" data-go="online">Online with friends</button>
         <button class="btn big season hidden" id="home-rejoin">Rejoin season<small id="home-rejoin-sub"></small></button>
         <div class="menu-row">
-          <button class="btn" data-go="career">Career statistics</button>
+          <button class="btn career-btn" data-go="career">Career statistics<span class="ach-badge hidden" id="career-badge"></span></button>
           <button class="btn" data-act="settings">Settings</button>
         </div>
       </div>
@@ -53,7 +53,7 @@
       </div>
       <div class="setup">
         <div class="setup-picks">
-          <div class="set-box"><h3>Track</h3><div class="pick" id="practice-trackpick" role="button" tabindex="0"></div></div>
+          <div class="set-box"><h3 class="pick-head">Track <button type="button" class="surprise-btn" data-surprise="practice" aria-pressed="false" title="A random track, revealed when you start"><b aria-hidden="true">?</b>Surprise me</button></h3><div class="pick" id="practice-trackpick" role="button" tabindex="0"></div></div>
           <div class="set-box"><h3>Your driver</h3><div class="pick drv" id="practice-driverpick" role="button" tabindex="0"></div></div>
         </div>
         <div class="setup-opts">
@@ -87,7 +87,7 @@
       </div>
       <div class="setup">
         <div class="setup-picks">
-          <div class="set-box"><h3>Track</h3><div class="pick" id="tt-trackpick" role="button" tabindex="0"></div></div>
+          <div class="set-box"><h3 class="pick-head">Track <button type="button" class="surprise-btn" data-surprise="tt" aria-pressed="false" title="A random track, revealed when you start"><b aria-hidden="true">?</b>Surprise me</button></h3><div class="pick" id="tt-trackpick" role="button" tabindex="0"></div></div>
           <div class="set-box"><h3>Your car</h3><div class="pick drv" id="tt-driverpick" role="button" tabindex="0"></div></div>
         </div>
         <div class="setup-opts">
@@ -113,7 +113,7 @@
       </div>
       <div class="career-tabs-row">
         <div class="seg career-tabs" id="career-tabs" role="tablist" aria-label="Career statistics">
-          <button type="button" role="tab" data-v="stats" id="career-tab-stats" aria-controls="career-page-stats">My statistics</button><button type="button" role="tab" data-v="ach" id="career-tab-ach" aria-controls="career-page-ach">Achievements <span class="tab-n" id="career-ach-n"></span></button>
+          <button type="button" role="tab" data-v="stats" id="career-tab-stats" aria-controls="career-page-stats">My statistics</button><button type="button" role="tab" data-v="ach" id="career-tab-ach" aria-controls="career-page-ach">Achievements <span class="tab-n" id="career-ach-n"></span><span class="tab-dot hidden" id="career-ach-dot" aria-label="new"></span></button>
         </div>
       </div>
       <div class="results-wrap career-wrap" id="career-page-stats" role="tabpanel" aria-labelledby="career-tab-stats">
@@ -142,7 +142,7 @@
       </div>
       <div class="setup">
         <div class="setup-picks">
-          <div class="set-box"><h3>Track</h3><div class="pick" id="gp-trackpick" role="button" tabindex="0"></div></div>
+          <div class="set-box"><h3 class="pick-head">Track <button type="button" class="surprise-btn" data-surprise="gp" aria-pressed="false" title="A random track, revealed when you start"><b aria-hidden="true">?</b>Surprise me</button></h3><div class="pick" id="gp-trackpick" role="button" tabindex="0"></div></div>
           <div class="set-box"><h3>Your driver</h3><div class="pick drv" id="gp-driverpick" role="button" tabindex="0"></div></div>
         </div>
         <div class="setup-opts">

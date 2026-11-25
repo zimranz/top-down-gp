@@ -487,7 +487,36 @@
     }
     const standSide = T.pit ? -T.pit.side : -T.poleSide;
     const wall0 = (standSide > 0 ? T.wallP : T.wallN)[0];
-    for (let s = -300; s < 200; s += 64) block(s, s + 56, standSide * (wall0 + 5), standSide * (wall0 + 19), '#2d4f8c', '#e8e8e8');
+    /* Each stand as deep as there is room for (14 m, else 10 or 7), or left out: not where a bend would squeeze it
+       into a wedge or a triangle (the inside of a corner), nor where another part of the track's grass would cover
+       most of it (stands are painted first, the grass and the gravel over them). */
+    const standFits = function (s0, d0, d1) {
+      const q = [F1.trackPoint(T, s0, d0), F1.trackPoint(T, s0 + 56, d0), F1.trackPoint(T, s0 + 56, d1), F1.trackPoint(T, s0, d1)];
+      let area = 0, sg = 0;
+      for (let i = 0; i < 4; i++) {
+        const a = q[i], b = q[(i + 1) % 4], c = q[(i + 2) % 4];
+        area += a.x * b.y - b.x * a.y;
+        const cr = Math.sign((b.x - a.x) * (c.y - b.y) - (b.y - a.y) * (c.x - b.x));
+        if (sg === 0) sg = cr; else if (cr !== sg) return false;
+      }
+      if (Math.abs(area) / 2 < 0.6 * 56 * Math.abs(d1 - d0)) return false;
+      const sm = ((s0 + 28) % T.length + T.length) % T.length;
+      for (let k = 0; k < 4; k++) {
+        const p = q[k];
+        for (let i = 0; i < N; i += 2) {
+          let ds = Math.abs(i * T.ds - sm); if (ds > T.length / 2) ds = T.length - ds;
+          if (ds < 150) continue;
+          if (Math.hypot(X[i] - p.x, Y[i] - p.y) < T.wall[i] - 2) return false;
+        }
+      }
+      return true;
+    };
+    for (let s = -300; s < 200; s += 64) {
+      for (const depth of [14, 10, 7]) {
+        const d0 = standSide * (wall0 + 5), d1 = standSide * (wall0 + 5 + depth);
+        if (standFits(s, d0, d1)) { block(s, s + 56, d0, d1, '#2d4f8c', '#e8e8e8'); break; }
+      }
+    }
 
     // pit lane, garages, paddock; start-light gantry over the grid
     if (T.pit) G.pit = buildPit(T);
@@ -1043,6 +1072,7 @@
     const ctx = this.ctx, cam = this.cam, dpr = this.dpr, night = !!T.night;
     // cars (at a bridge: the cars underneath first, then the bridge, then everyone else)
     const cars = frame.cars, self = this;
+    if (cars && cars.length) this.prepCars(cars);
     const drawOne = function (c) {
       if (Math.abs(c.x - vc[0]) > vr + 6 || Math.abs(c.y - vc[1]) > vr + 6) return;
       if (c.me) self.drawMeGlow(ctx, c);
@@ -1161,6 +1191,7 @@
     g.setTransform(K, 0, 0, K, TILE_PAD - x0 * K, TILE_PAD - y0 * K);
     this.R.paintTile(g, this.G, this.T, x0 - m, y0 - m, x0 + TS + m, y0 + TS + m, v === 1);
     g.restore();
+    this.warm(cv);
     t.c[v * 3] = cv; t.u[v * 3] = this.n;
     this.bytes += cv.width * cv.height * 4;
     this.stat.painted++; this.stat.paintMs += performance.now() - t0;
@@ -1175,11 +1206,17 @@
     // the same ground: the sharp picture's corner lands TILE_PAD * (1 - f) pixels in
     const o = TILE_PAD * (1 - f);
     g.drawImage(src, o, o, src.width * f, src.height * f);
+    this.warm(cv);
     t.c[v * 3 + l] = cv; t.u[v * 3 + l] = this.n;
     this.bytes += cv.width * cv.height * 4;
     this.stat.made++;
     return true;
   };
+  /* Have a tile's picture turned into pixels now, while it is being painted ahead: one pixel of it copied into a small
+     canvas of our own. (The browser otherwise keeps only the drawing commands and turns them into pixels the first
+     time the tile is put on the screen: then several new tiles coming into view at once, as the camera turns in a
+     corner, made that picture late, a jolt.) */
+  Tiles.prototype.warm = function (cv) { warmPicture(cv); };
   /* Make sure tile t has its picture (level l, dry or wet). quick: only if it can be made from a sharp one. */
   Tiles.prototype.ready = function (t, l, v, quick) {
     if (t.c[v * 3 + l]) return true;
@@ -1276,14 +1313,32 @@
     ctx.save();
     ctx.imageSmoothingEnabled = true; ctx.imageSmoothingQuality = 'low';
     const P = TILE_PX[l], K = P / TS, e = 1.5 / s, sx = TILE_PAD - e * K, sw = P + 2 * e * K;
-    for (let v = needDry ? 0 : 1; v <= (needWet ? 1 : 0); v++) {
-      ctx.globalAlpha = v ? wa : 1;
+    const layDown = function (g, v) {
       for (let i = 0; i < vis.length; i++) {
         const t = vis[i];
-        ctx.drawImage(t.c[v * 3 + l], sx, sx, sw, sw, t.ix * TS - e, t.iy * TS - e, TS + 2 * e, TS + 2 * e);
+        g.drawImage(t.c[v * 3 + l], sx, sx, sw, sw, t.ix * TS - e, t.iy * TS - e, TS + 2 * e, TS + 2 * e);
         t.u[v * 3 + l] = n;
       }
-    }
+    };
+    if (needDry) layDown(ctx, 0);
+    if (needWet && needDry) {
+      /* A partly wet track: the wet pictures go into a layer of their own first, fully, and that layer then over the
+         dry ones as much as the track is wet. (Laid straight over them, see-through, the overlaps between neighbouring
+         tiles would get the wet tint twice: a grid of darker lines, the squares showing.) */
+      const cv = ctx.canvas, W = cv.width, H = cv.height;
+      let lc = R.wetLayer;
+      if (!lc) lc = R.wetLayer = document.createElement('canvas');
+      if (lc.width !== W || lc.height !== H) { lc.width = W; lc.height = H; }
+      const lg = lc.getContext('2d');
+      lg.setTransform(1, 0, 0, 1, 0, 0);
+      lg.clearRect(0, 0, W, H);
+      lg.setTransform(ctx.getTransform());
+      lg.imageSmoothingEnabled = true; lg.imageSmoothingQuality = 'low';
+      layDown(lg, 1);
+      ctx.setTransform(1, 0, 0, 1, 0, 0);
+      ctx.globalAlpha = wa;
+      ctx.drawImage(lc, 0, 0);
+    } else if (needWet) layDown(ctx, 1);             // (soaked: the wet pictures alone, not see-through)
     ctx.restore();
     this.stat.tiled++;
     // paint ahead
@@ -1293,12 +1348,13 @@
   };
   /* Paint the tiles the camera will need soon: around where it will be in half a second, as far as the screen reaches
      in any direction (it may turn) with the camera zoomed right out (it zooms out as the car speeds up, out of a
-     corner), nearest first: one each picture (two while the wet ones are being made too). A tile takes the page very
-     little time to paint but gives the graphics chip a little work: one at a time keeps that even. */
+     corner), nearest first: one picture each time the screen is drawn (in the rain too: a tile's wet picture the next
+     time; that keeps well ahead of the car). Each is turned into pixels as it is painted (see warm): one at a time keeps
+     that work even. */
   Tiles.prototype.ahead = function (l) {
     const R = this.R, TS = this.TS, v = R.camV || [0, 0], t0 = performance.now(), wetToo = this.wetMode;
     // (behind the loading card: as many as fit in 30 ms each picture, so the race starts with them all ready)
-    const rush = !!R.tileRush, budget = rush ? 30 : F1.clamp((R.frameMs || 16) * 0.15, 3, 8), most = rush ? Infinity : wetToo ? 2 : 1;
+    const rush = !!R.tileRush, budget = rush ? 30 : F1.clamp((R.frameMs || 16) * 0.15, 3, 8), most = rush ? Infinity : 1;
     const vc = R.toWorld(R.w / 2, R.h / 2), vr = this.reach();
     const px = vc[0] + v[0] * 0.5, py = vc[1] + v[1] * 0.5, rr = (vr + TS * 0.75) * (vr + TS * 0.75);
     const want = [];
@@ -1329,6 +1385,7 @@
   };
   /* Dry for a while: the wet pictures are let go. */
   Tiles.prototype.dropWet = function () {
+    if (this.R.wetLayer) { this.R.wetLayer.width = this.R.wetLayer.height = 0; this.R.wetLayer = null; }
     const self = this, list = [];
     this.map.forEach(function (t) { for (let q = 3; q < 6; q++) if (t.c[q]) list.push([t, q]); });
     for (let i = 0; i < list.length; i++) self.free(list[i][0], list[i][1]);
@@ -1930,9 +1987,20 @@
       const g = cv.getContext('2d');
       g.imageSmoothingEnabled = true; g.imageSmoothingQuality = 'high';
       g.drawImage(src, 0, 0, cv.width, cv.height);
+      warmPicture(cv);
       set[L] = cv;
     }
     return set[L];
+  }
+  /* A picture made in a canvas of its own (a tile, a car), turned into pixels now: one pixel of it copied into a small
+     canvas. (The browser otherwise keeps only the drawing commands and turns them into pixels the first time the
+     picture is put on the screen: in the middle of a race, a jolt.) */
+  let warmCv = null;
+  function warmPicture(cv) {
+    if (!warmCv) { warmCv = document.createElement('canvas'); warmCv.width = warmCv.height = 256; }   // (big enough for the graphics chip)
+    const g = warmCv.getContext('2d');
+    g.drawImage(cv, 0, 0, 1, 1, 0, 0, 1, 1);
+    g.clearRect(0, 0, 256, 256);                    // (keeps nothing: the picture can be let go later)
   }
   const sprites = {};
   function carSprite(team, tc, drsOpen, L) {
@@ -1944,10 +2012,37 @@
       const g = cv.getContext('2d');
       g.scale(SPR_K, SPR_K); g.translate(CAR_X0, CAR_HW);
       drawCarLocal(g, team, 0, drsOpen, null, tc, true);
+      warmPicture(cv);
       set = sprites[key] = [cv];
     }
     return sprAt(set, L || 0);
   }
+  /* Every car's pictures it may need next, made in quiet moments, two at most each picture: with the DRS wing open and
+     shut, at the size in use and the next one up and down (the camera zooms). The wing opening used to make its
+     picture on the spot, the first time: a jolt. (A new set of tyres in the pits makes its pictures there.) */
+  Renderer.prototype.prepCars = function (cars) {
+    const L = sprLevel(this.cam.z * this.dpr), t0 = performance.now(), memo = this.carPrep || (this.carPrep = new Map());
+    let made = 0;
+    for (let i = 0; i < cars.length; i++) {
+      const c = cars[i];
+      if (c.ghost || c.replay || !c.team) continue;
+      const tc = c.tyreC && F1.TYRES[c.tyreC] ? F1.TYRES[c.tyreC].col : null, m = memo.get(c.id);
+      if (m && m.tc === tc && m.L === L && m.team === c.team) continue;          // (this car's are ready)
+      let all = true;
+      for (let d = 0; d < 2; d++) {
+        const key = c.team.primary + c.team.secondary + c.team.accent + (c.team.split ? 's' : '') + (tc || '-') + (d ? 'd' : '');
+        for (let k = Math.max(0, L - 1); k <= Math.min(SPR_KS.length - 1, L + 1); k++) {
+          const set = sprites[key];
+          if (set && set[k]) continue;
+          if (made >= 2 || performance.now() - t0 > 4) { all = false; continue; }
+          carSprite(c.team, tc, !!d, k);
+          made++;
+        }
+      }
+      if (all) memo.set(c.id, { tc: tc, L: L, team: c.team });
+      if (made >= 2) return;
+    }
+  };
   // a front tyre as a picture (40 px a metre, like the car), drawn turned with the steering
   const tyreSprites = {};
   function tyreSprite(tc, L) {

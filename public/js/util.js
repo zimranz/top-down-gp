@@ -188,6 +188,15 @@
     got: function () {
       try { return JSON.parse(window.localStorage.getItem('topdowngp.ach') || '{}') || {}; } catch (e) { return {}; }
     },
+    /* When the Achievements tab was last opened (version 16): the ones earned since are new. Not set yet (the first
+       time version 16 opens): everything earned so far counts as seen. */
+    seen: function () {
+      let v = null;
+      try { v = window.localStorage.getItem('topdowngp.achSeen'); } catch (e) { /* ignore */ }
+      if (v === null) { this.markSeen(); return Date.now(); }
+      return Number(v) || 0;
+    },
+    markSeen: function () { try { window.localStorage.setItem('topdowngp.achSeen', String(Date.now())); } catch (e) { /* ignore */ } },
     goal: function (a) { return typeof a.goal === 'function' ? a.goal() : a.goal; },
     desc: function (a) { return typeof a.desc === 'function' ? a.desc() : a.desc; },
     /* The numbers the counted achievements go by. */
